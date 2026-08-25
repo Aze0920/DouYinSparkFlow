@@ -193,7 +193,14 @@
     async function api(path, options = {}) {
       const resp = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) throw new Error(data.detail || data.message || "请求失败");
+      if (!resp.ok) {
+        const detail = data.detail || data.message;
+        let text = "请求失败";
+        if (typeof detail === "string") text = detail;
+        else if (Array.isArray(detail)) text = detail.map((x) => x.msg || x.detail || JSON.stringify(x)).join("; ");
+        else if (detail && typeof detail === "object") text = detail.msg || JSON.stringify(detail);
+        throw new Error(text);
+      }
       return data;
     }
     function isAdmin() {
@@ -477,14 +484,26 @@
       }
     }
     async function doUpdate() {
-      const ok = await ask("从 GitHub 更新", "将覆盖服务器源码，配置和用户数据会保留。");
+      const ok = await ask("从 GitHub 更新", "会从 GitHub 拉取最新代码。如果电脑还没运行「一键推送更新」，服务器上不会有新版本。");
       if (!ok) return;
+      const btn = $("updateBtn");
+      const oldText = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = "正在更新...";
+      toast("正在连接 GitHub 拉取代码…");
       try {
         const data = await api("/api/update", { method: "POST", body: "{}" });
-        toast(data.message);
-        setTimeout(() => location.reload(), 1500);
+        toast(data.message, data.changed ? "ok" : "err");
+        if (data.changed) {
+          setTimeout(() => location.reload(), 2000);
+        } else {
+          btn.disabled = false;
+          btn.textContent = oldText;
+        }
       } catch (err) {
         toast(err.message, "err");
+        btn.disabled = false;
+        btn.textContent = oldText;
       }
     }
     async function loadLogs() {

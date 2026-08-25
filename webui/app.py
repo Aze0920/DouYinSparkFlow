@@ -39,7 +39,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 _run_lock = threading.Lock()
 _run_state = {"running": False, "message": "空闲", "started_at": 0}
-_remote_cache = {"version": "", "ts": 0, "busy": False}
+_remote_cache = {"version": "", "sha": "", "ts": 0, "busy": False}
 
 
 def read_version() -> str:
@@ -84,16 +84,57 @@ def fetch_remote_version() -> str:
     repo = repo_name()
     urls = [
         f"https://raw.githubusercontent.com/{repo}/main/VERSION",
+        f"https://cdn.jsdelivr.net/gh/{repo}@main/VERSION",
         f"https://ghproxy.net/https://raw.githubusercontent.com/{repo}/main/VERSION",
+        f"https://mirror.ghproxy.com/https://raw.githubusercontent.com/{repo}/main/VERSION",
     ]
     for url in urls:
         try:
-            with httpx.Client(timeout=2.5, follow_redirects=True) as client:
+            with httpx.Client(timeout=4.0, follow_redirects=True) as client:
                 resp = client.get(url)
                 if resp.status_code == 200 and resp.text.strip():
-                    return resp.text.strip().splitlines()[0].strip()
+                    first = resp.text.strip().splitlines()[0].strip()
+                    if first and first[0].isdigit():
+                        return first
         except Exception:
             continue
+    return ""
+
+
+def run_git(*args: str, timeout: int = 20) -> subprocess.CompletedProcess:
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(ROOT),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        env=env,
+    )
+
+
+def local_git_sha() -> str:
+    if not (ROOT / ".git").exists():
+        return ""
+    try:
+        result = run_git("rev-parse", "HEAD", timeout=5)
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def fetch_remote_sha() -> str:
+    if not (ROOT / ".git").exists():
+        return ""
+    try:
+        result = run_git("ls-remote", "origin", "refs/heads/main", timeout=12)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.split()[0]
+    except Exception:
+        pass
     return ""
 
 
@@ -103,9 +144,12 @@ def _refresh_remote_version():
     _remote_cache["busy"] = True
     try:
         version = fetch_remote_version()
+        sha = fetch_remote_sha()
         if version:
             _remote_cache["version"] = version
-            _remote_cache["ts"] = time.time()
+        if sha:
+            _remote_cache["sha"] = sha
+        _remote_cache["ts"] = time.time()
     finally:
         _remote_cache["busy"] = False
 
@@ -232,11 +276,15 @@ def status(request: Request):
     env = load_env()
     local = read_version()
     remote = remote_version_fast()
+    local_sha = local_git_sha()
+    remote_sha = _remote_cache.get("sha") or ""
     return {
         "ok": True,
         "local_version": local,
         "remote_version": remote,
-        "update_available": bool(remote and remote != local),
+        "update_available": bool(
+            (remote and remote != local) or (remote_sha and local_sha and remote_sha != local_sha)
+        ),
         "github_repo": repo_name(),
         "env_file": str(env_path()),
         "is_git_repo": (ROOT / ".git").exists(),
@@ -430,38 +478,46 @@ def update_from_github(request: Request):
         )
     if _run_state["running"]:
         raise HTTPException(status_code=409, detail="任务正在跑，先不要更新")
-    fetch = subprocess.run(
-        ["git", "fetch", "origin"],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    old_version = read_version()
+    old_sha = local_git_sha()
+    try:
+        fetch = run_git("fetch", "origin", timeout=45)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=500, detail="连接 GitHub 超时，请稍后重试") from exc
     if fetch.returncode != 0:
         raise HTTPException(status_code=500, detail=fetch.stderr or fetch.stdout or "git fetch 失败")
-    reset = subprocess.run(
-        ["git", "reset", "--hard", "origin/main"],
-        cwd=str(ROOT),
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-    )
+    try:
+        reset = run_git("reset", "--hard", "origin/main", timeout=20)
+    except subprocess.TimeoutExpired as exc:
+        raise HTTPException(status_code=500, detail="git reset 超时") from exc
     if reset.returncode != 0:
         raise HTTPException(status_code=500, detail=reset.stderr or reset.stdout or "git reset 失败")
     new_version = read_version()
+    new_sha = local_git_sha()
+    changed = bool(new_sha and new_sha != old_sha)
+    _remote_cache["version"] = new_version
+    _remote_cache["sha"] = new_sha
+    _remote_cache["ts"] = time.time()
 
-    def _restart():
-        time.sleep(1.2)
-        os.execv(sys.executable, [sys.executable, "-m", "webui.app"])
+    if changed:
+        def _restart():
+            time.sleep(1.2)
+            os.execv(sys.executable, [sys.executable, "-m", "webui.app"])
 
-    threading.Thread(target=_restart, daemon=True).start()
+        threading.Thread(target=_restart, daemon=True).start()
+        message = f"已更新到 v{new_version}，控制台即将自动重启，请几秒后刷新页面。"
+    else:
+        message = (
+            f"GitHub 上还是 v{new_version}，没有拉到新代码。"
+            "请先在电脑运行「一键推送更新.bat」，看到推送成功后再点更新。"
+        )
     return {
         "ok": True,
+        "changed": changed,
         "version": new_version,
+        "old_version": old_version,
         "log": (reset.stdout or "").strip(),
-        "message": f"已更新到 {new_version}，控制台即将自动重启，请几秒后刷新页面。",
+        "message": message,
     }
 
 

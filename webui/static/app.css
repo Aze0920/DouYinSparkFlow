@@ -173,10 +173,10 @@ button { cursor: pointer; }
 .status-dot i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
 .status-dot.busy i { background: var(--ember); }
 .pill { border: 1px solid var(--line); border-radius: 999px; padding: 6px 10px; color: var(--gold); }
-.toast-wrap { position: fixed; right: 16px; top: 16px; z-index: 50; display: grid; gap: 8px; }
+.toast-wrap { position: fixed; right: 16px; top: 16px; z-index: 90; display: grid; gap: 8px; }
 .toast { background: #171b26; border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; min-width: 220px; }
 .toast.err { border-color: var(--rose); }
-.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 40; }
+.modal-mask { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: grid; place-items: center; z-index: 80; }
 .modal-card { width: min(420px, calc(100% - 24px)); background: var(--card); border: 1px solid var(--line); border-radius: 18px; padding: 22px; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .error { color: var(--rose); min-height: 18px; }
