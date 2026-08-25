@@ -1,9 +1,11 @@
 import logging
 import os
 from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(filename)s:%(lineno)d - %(message)s"
-LOG_FILE = "logs/app.log"
+ROOT_DIR = Path(__file__).resolve().parent.parent
+LOG_FILE = str(ROOT_DIR / "logs" / "app.log")
 
 
 def resolve_log_level(level):

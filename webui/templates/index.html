@@ -406,8 +406,11 @@
           await applyQrSuccess(data);
         } else if (data.status === "expired" || data.status === "error") {
           stopQrPoll();
+          $("qrHint").textContent = data.status === "error"
+            ? "扫码失败，详细原因请看左侧「运行日志」"
+            : (data.message || "二维码已失效");
           $("qrLoading").textContent = data.message || "二维码已失效";
-          if (!data.qr_base64 && !data.qr_url) showQrImage("");
+          showQrImage("");
         }
       } catch (err) {
         stopQrPoll();

@@ -10,6 +10,9 @@ import time
 from typing import Any
 
 from core.browser import get_browser
+from utils.logger import setup_logger
+
+logger = setup_logger("app", "DEBUG")
 
 SSO = "https://sso.douyin.com"
 HOME = "https://www.douyin.com"
@@ -37,6 +40,9 @@ _state: dict[str, Any] = {
 def _set(**kwargs):
     with _lock:
         _state.update(kwargs)
+    note = {k: v for k, v in kwargs.items() if k not in {"qr_base64", "qr_url", "cookies"}}
+    if note:
+        logger.info("扫码状态 %s", note)
 
 
 def snapshot(include_cookies: bool = False) -> dict[str, Any]:
@@ -146,6 +152,24 @@ def _walk_user(obj: Any, found: dict[str, str] | None = None) -> dict[str, str]:
     return found
 
 
+def _brief_payload(payload: Any, limit: int = 700) -> str:
+    try:
+        data = payload
+        if isinstance(payload, dict):
+            data = dict(payload)
+            inner = data.get("data")
+            if isinstance(inner, dict):
+                inner = dict(inner)
+                qrcode = inner.get("qrcode")
+                if qrcode:
+                    inner["qrcode"] = f"<omitted {len(str(qrcode))} chars>"
+                data["data"] = inner
+        text = json.dumps(data, ensure_ascii=False) if not isinstance(data, str) else data
+    except Exception:
+        text = str(payload)
+    return text[:limit]
+
+
 def _http_get(context, url: str, params: dict | None = None):
     kwargs = {
         "params": params or {},
@@ -160,13 +184,16 @@ def _http_get(context, url: str, params: dict | None = None):
 def _try_json(context, url: str, params: dict | None = None) -> dict[str, str]:
     try:
         resp = _http_get(context, url, params)
+        logger.debug("资料接口 %s -> HTTP %s", url, getattr(resp, "status", "?"))
         if resp.status != 200:
+            logger.warning("资料接口失败 %s HTTP %s body=%s", url, resp.status, (resp.text() or "")[:300])
             return {}
         payload = resp.json()
         if isinstance(payload, dict) and "data" in payload:
             return _walk_user(payload.get("data"))
         return _walk_user(payload)
     except Exception:
+        logger.exception("资料接口异常 %s", url)
         return {}
 
 
@@ -190,6 +217,7 @@ def _try_page_user(page) -> dict[str, str]:
             }"""
         ) or {}
     except Exception:
+        logger.exception("页面解析用户信息失败")
         return {}
 
 
@@ -211,6 +239,7 @@ def extract_profile(page, context) -> dict[str, str]:
         if got.get("unique_id") and not found["unique_id"]:
             found["unique_id"] = got["unique_id"]
         if found["username"] and found["unique_id"]:
+            logger.info("已抓到账号资料 username=%s unique_id=%s", found["username"], found["unique_id"])
             break
 
     if not (found["username"] and found["unique_id"]):
@@ -219,8 +248,10 @@ def extract_profile(page, context) -> dict[str, str]:
                 break
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                logger.debug("打开资料页 %s", page.url)
                 time.sleep(1.2)
             except Exception:
+                logger.exception("打开资料页失败 %s", url)
                 continue
             got = _try_page_user(page)
             if got.get("username") and not found["username"]:
@@ -239,6 +270,7 @@ def extract_profile(page, context) -> dict[str, str]:
         )
     if not found["username"]:
         found["username"] = found["unique_id"] or "抖音账号"
+    logger.info("最终账号资料 username=%s unique_id=%s", found["username"], found["unique_id"])
     return found
 
 
@@ -259,9 +291,12 @@ def _capture_qr_image(page) -> str:
             loc.wait_for(state="visible", timeout=2500)
             png = loc.screenshot()
             if png:
+                logger.info("页面截到二维码 selector=%s size=%s", selector, len(png))
                 return base64.b64encode(png).decode("ascii")
         except Exception:
+            logger.debug("截二维码失败 selector=%s", selector, exc_info=True)
             continue
+    logger.warning("页面上没有截到二维码")
     return ""
 
 
@@ -277,17 +312,32 @@ def _open_login_panel(page):
             if loc.count() == 0:
                 continue
             loc.click(timeout=2500)
+            logger.info("已点击登录入口 selector=%s", selector)
             time.sleep(0.8)
             return
         except Exception:
+            logger.debug("点击登录入口失败 selector=%s", selector, exc_info=True)
             continue
+    logger.warning("没有找到可点击的登录入口")
 
 
 def _request_qr(context, fp: str) -> tuple[str, str, str]:
     try:
         resp = _http_get(context, SSO + "/get_qrcode/", _sso_params(fp))
-        payload = resp.json()
+        status = getattr(resp, "status", "?")
+        body = ""
+        try:
+            body = resp.text()
+        except Exception:
+            body = ""
+        logger.info("get_qrcode HTTP %s body_len=%s", status, len(body or ""))
+        try:
+            payload = resp.json()
+        except Exception:
+            logger.warning("get_qrcode 返回非 JSON: %s", (body or "")[:500])
+            return "", "", ""
     except Exception:
+        logger.exception("请求 get_qrcode 失败")
         return "", "", ""
     data = (payload or {}).get("data") or {}
     token = str(data.get("token") or "")
@@ -295,6 +345,13 @@ def _request_qr(context, fp: str) -> tuple[str, str, str]:
     if qrcode.startswith("data:image"):
         qrcode = qrcode.split(",", 1)[-1]
     qr_url = str(data.get("qrcode_index_url") or data.get("url") or "")
+    logger.info(
+        "get_qrcode token=%s qr_png=%s qr_url=%s payload=%s",
+        "yes" if token else "no",
+        len(qrcode),
+        "yes" if qr_url else "no",
+        _brief_payload(payload),
+    )
     return token, qrcode, qr_url
 
 
@@ -303,8 +360,12 @@ def _check_qr(context, fp: str, token: str) -> dict[str, Any]:
     params["token"] = token
     try:
         resp = _http_get(context, SSO + "/check_qrconnect/", params)
-        return (resp.json() or {}).get("data") or {}
+        payload = resp.json() or {}
+        data = payload.get("data") or {}
+        logger.debug("check_qrconnect HTTP %s status=%s", getattr(resp, "status", "?"), data.get("status"))
+        return data
     except Exception:
+        logger.exception("check_qrconnect 失败")
         return {}
 
 
@@ -312,15 +373,18 @@ def _finish_login(page, context, redirect_url: str | None):
     if redirect_url:
         try:
             _http_get(context, redirect_url)
+            logger.info("已跟随登录跳转")
         except Exception:
+            logger.warning("跟随 redirect_url 失败，改用页面打开", exc_info=True)
             try:
                 page.goto(redirect_url, wait_until="domcontentloaded", timeout=45000)
             except Exception:
-                pass
+                logger.exception("页面打开 redirect_url 失败")
     try:
         page.goto(HOME + "/", wait_until="domcontentloaded", timeout=45000)
+        logger.info("登录后回到首页 url=%s", page.url)
     except Exception:
-        pass
+        logger.exception("登录后打开首页失败")
     deadline = time.time() + 45
     while time.time() < deadline and not _stop.is_set():
         if _has_session(context):
@@ -344,7 +408,10 @@ def _worker(replace_index: int):
             replace_index=replace_index,
             started_at=time.time(),
         )
+        logger.info("扫码线程启动 replace_index=%s", replace_index)
+        logger.info("正在启动浏览器")
         playwright, browser = get_browser()
+        logger.info("浏览器已启动")
         context = browser.new_context(
             user_agent=UA,
             locale="zh-CN",
@@ -364,19 +431,23 @@ def _worker(replace_index: int):
                 ]
             )
         except Exception:
-            pass
+            logger.warning("写入 s_v_web_id cookie 失败", exc_info=True)
         try:
+            logger.info("打开抖音首页 %s", HOME)
             page.goto(HOME + "/", wait_until="domcontentloaded", timeout=60000)
+            logger.info("首页已打开 url=%s title=%s", page.url, page.title())
         except Exception:
-            pass
+            logger.exception("打开抖音首页失败")
 
         token, qr_png, qr_url = _request_qr(context, fp)
         if not qr_png:
+            logger.info("接口未返回二维码图片，尝试从页面截取")
             _open_login_panel(page)
             time.sleep(1.2)
             qr_png = _capture_qr_image(page)
 
         if not qr_png and not qr_url and not token:
+            logger.error("获取二维码失败：token、图片、链接都为空")
             _set(status="error", message="获取二维码失败，请稍后点「刷新二维码」再试")
             return
 
@@ -431,7 +502,10 @@ def _worker(replace_index: int):
 
         profile = extract_profile(page, context)
         cookies = _cookies_for_save(context)
+        cookie_names = [c.get("name") for c in cookies]
+        logger.info("抓到 Cookie %s 个 names=%s", len(cookies), cookie_names)
         if not cookies or not _has_session(context):
+            logger.error("没有有效登录 Cookie names=%s", cookie_names)
             _set(status="error", message="没有拿到有效登录 Cookie，请重新扫码")
             return
         _set(
@@ -444,6 +518,7 @@ def _worker(replace_index: int):
             qr_url="",
         )
     except Exception as exc:
+        logger.exception("扫码登录线程异常")
         _set(status="error", message=f"扫码登录失败：{exc}")
     finally:
         try:
@@ -460,8 +535,10 @@ def _worker(replace_index: int):
 
 def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
     global _thread
+    logger.info("准备启动扫码会话 replace_index=%s", replace_index)
     _stop.set()
     if _thread and _thread.is_alive():
+        logger.info("等待上一次扫码浏览器退出")
         _thread.join(timeout=8)
     _stop.clear()
     _set(
@@ -481,6 +558,7 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
 
 
 def cancel_qr_login() -> dict[str, Any]:
+    logger.info("收到取消扫码登录")
     _stop.set()
     _set(status="idle", message="", qr_base64="", qr_url="", cookies=[])
     return snapshot()

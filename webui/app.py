@@ -13,6 +13,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui.envfile import cookie_key, env_path, load_env, parse_accounts, write_env
 from webui.qr_login import cancel_qr_login, snapshot as qr_snapshot, start_qr_login
 from webui.users import (
@@ -29,9 +30,10 @@ from webui.users import (
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
-LOG_FILE = ROOT / "logs" / "app.log"
+LOG_FILE = Path(APP_LOG_PATH)
 LOCK_FILE = ROOT / "logs" / "task.lock"
 DEFAULT_REPO = "Aze0920/DouYinSparkFlow"
+logger = setup_logger("app", os.getenv("LOG_LEVEL", "DEBUG"))
 
 app = FastAPI(title="DouYinSparkFlow")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
@@ -40,6 +42,35 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 _run_lock = threading.Lock()
 _run_state = {"running": False, "message": "空闲", "started_at": 0}
 _remote_cache = {"version": "", "sha": "", "ts": 0, "busy": False}
+
+
+@app.middleware("http")
+async def log_api_calls(request: Request, call_next):
+    path = request.url.path
+    quiet = path in {
+        "/api/status",
+        "/api/logs",
+        "/api/me",
+        "/api/douyin/login/status",
+        "/favicon.ico",
+        "/",
+    } or path.startswith("/static/")
+    if not quiet:
+        logger.info("请求 %s %s", request.method, path)
+    try:
+        response = await call_next(request)
+    except Exception:
+        logger.exception("请求异常 %s %s", request.method, path)
+        raise
+    if not quiet and response.status_code >= 400:
+        logger.warning("请求失败 %s %s -> %s", request.method, path, response.status_code)
+    return response
+
+
+@app.on_event("startup")
+def on_startup():
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    logger.info("控制台启动 version=%s cwd=%s log=%s", read_version(), os.getcwd(), LOG_FILE)
 
 
 def read_version() -> str:
@@ -119,9 +150,14 @@ def git_remote_version() -> tuple[str, str]:
     try:
         fetch = run_git("fetch", "--prune", "origin", "main", timeout=25)
         if fetch.returncode != 0:
-            run_git("fetch", "--prune", "origin", timeout=25)
+            logger.warning("git fetch origin main 失败: %s", (fetch.stderr or fetch.stdout or "").strip()[:500])
+            fetch = run_git("fetch", "--prune", "origin", timeout=25)
+            if fetch.returncode != 0:
+                logger.warning("git fetch origin 失败: %s", (fetch.stderr or fetch.stdout or "").strip()[:500])
+        else:
+            logger.debug("git fetch origin main 成功")
     except Exception:
-        pass
+        logger.exception("git fetch 异常")
     version = ""
     sha = ""
     try:
@@ -198,8 +234,14 @@ def _refresh_remote_version():
     _remote_cache["busy"] = True
     try:
         version, sha = git_remote_version()
-        if not version:
+        if version and version != _remote_cache.get("version"):
+            logger.info("远程版本(git)=%s sha=%s", version, sha[:10] if sha else "")
+        elif not version:
             version = fetch_remote_version()
+            if version and version != _remote_cache.get("version"):
+                logger.info("远程版本(HTTP)=%s", version)
+            elif not version:
+                logger.warning("未能获取远程版本号")
         if not sha:
             sha = fetch_remote_sha()
         if version:
@@ -207,6 +249,8 @@ def _refresh_remote_version():
         if sha:
             _remote_cache["sha"] = sha
         _remote_cache["ts"] = time.time()
+    except Exception:
+        logger.exception("刷新远程版本失败")
     finally:
         _remote_cache["busy"] = False
 
@@ -243,7 +287,9 @@ def login(payload: dict):
     password = str(payload.get("password") or "")
     user = verify_user(username, password)
     if not user:
+        logger.warning("登录失败：用户名或密码错误 user=%s", username)
         raise HTTPException(status_code=403, detail="用户名或密码错误")
+    logger.info("控制台登录成功 user=%s role=%s", user.get("username"), user.get("role"))
     resp = JSONResponse({"ok": True, "user": public_user(user)})
     resp.set_cookie("dsf_auth", make_token(user["username"]), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 14)
     return resp
@@ -439,6 +485,7 @@ def save_config(request: Request, payload: dict):
         "TASKS": tasks,
     }
     path = write_env(data, extra)
+    logger.info("已保存配置 path=%s accounts=%s", path, len(tasks))
     return {"ok": True, "path": str(path), "account_count": len(tasks)}
 
 
@@ -446,7 +493,7 @@ def save_config(request: Request, payload: dict):
 def logs(request: Request, lines: int = 200):
     require_auth(request)
     if not LOG_FILE.is_file():
-        return {"ok": True, "text": "还没有日志。先保存配置，再点「立即续火花」。"}
+        return {"ok": True, "text": "还没有日志。扫码登录、从 GitHub 更新、续火花都会写到这里。"}
     content = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
     return {"ok": True, "text": "\n".join(content[-max(20, min(lines, 2000)):])}
 
@@ -462,6 +509,7 @@ def _run_task():
         _run_state["running"] = True
         _run_state["message"] = "正在执行续火花任务"
         _run_state["started_at"] = time.time()
+        logger.info("开始执行续火花任务")
         proc = subprocess.run(
             [sys.executable, str(ROOT / "main.py")],
             cwd=str(ROOT),
@@ -476,8 +524,13 @@ def _run_task():
             fh.write(f"\n----- 手动执行 exit={proc.returncode} -----\n")
             fh.write(extra[-8000:])
         _run_state["message"] = "执行完成" if proc.returncode == 0 else f"执行失败，退出码 {proc.returncode}"
+        if proc.returncode == 0:
+            logger.info("续火花任务执行完成")
+        else:
+            logger.error("续火花任务失败 exit=%s", proc.returncode)
     except Exception as exc:
         _run_state["message"] = f"执行异常：{exc}"
+        logger.exception("续火花任务异常")
     finally:
         _run_state["running"] = False
         try:
@@ -490,12 +543,15 @@ def _run_task():
 def douyin_login_start(request: Request, payload: dict | None = None):
     require_admin(request)
     if _run_state["running"]:
+        logger.warning("扫码登录被拒绝：任务正在运行")
         raise HTTPException(status_code=409, detail="续火花任务正在跑，请等它结束后再扫码")
     payload = payload or {}
     try:
         replace_index = int(payload.get("replace_index", -1))
     except (TypeError, ValueError):
         replace_index = -1
+    user = current_user(request) or {}
+    logger.info("开始抖音扫码登录 user=%s replace_index=%s", user.get("username"), replace_index)
     return {"ok": True, **start_qr_login(replace_index)}
 
 
@@ -508,6 +564,7 @@ def douyin_login_status(request: Request):
 @app.post("/api/douyin/login/cancel")
 def douyin_login_cancel(request: Request):
     require_admin(request)
+    logger.info("取消抖音扫码登录")
     return {"ok": True, **cancel_qr_login()}
 
 
@@ -537,21 +594,29 @@ def update_from_github(request: Request):
         raise HTTPException(status_code=409, detail="任务正在跑，先不要更新")
     old_version = read_version()
     old_sha = local_git_sha()
+    logger.info("开始从 GitHub 更新 local=%s sha=%s origin=%s", old_version, (old_sha or "")[:10], origin_url())
     try:
         fetch = run_git("fetch", "origin", timeout=45)
     except subprocess.TimeoutExpired as exc:
+        logger.exception("git fetch 超时")
         raise HTTPException(status_code=500, detail="连接 GitHub 超时，请稍后重试") from exc
     if fetch.returncode != 0:
-        raise HTTPException(status_code=500, detail=fetch.stderr or fetch.stdout or "git fetch 失败")
+        detail = fetch.stderr or fetch.stdout or "git fetch 失败"
+        logger.error("git fetch 失败: %s", detail.strip()[:800])
+        raise HTTPException(status_code=500, detail=detail)
     try:
         reset = run_git("reset", "--hard", "origin/main", timeout=20)
     except subprocess.TimeoutExpired as exc:
+        logger.exception("git reset 超时")
         raise HTTPException(status_code=500, detail="git reset 超时") from exc
     if reset.returncode != 0:
-        raise HTTPException(status_code=500, detail=reset.stderr or reset.stdout or "git reset 失败")
+        detail = reset.stderr or reset.stdout or "git reset 失败"
+        logger.error("git reset 失败: %s", detail.strip()[:800])
+        raise HTTPException(status_code=500, detail=detail)
     new_version = read_version()
     new_sha = local_git_sha()
     changed = bool(new_sha and new_sha != old_sha)
+    logger.info("更新结果 changed=%s %s -> %s", changed, old_version, new_version)
     _remote_cache["version"] = new_version
     _remote_cache["sha"] = new_sha
     _remote_cache["ts"] = time.time()
