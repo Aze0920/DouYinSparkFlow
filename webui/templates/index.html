@@ -26,6 +26,16 @@
         <div id="qrLoading">正在生成二维码…</div>
         <img id="qrImage" class="qr-image hidden" alt="登录二维码" />
       </div>
+      <div id="qrVerify" class="qr-verify hidden">
+        <div id="qrVerifyAccount" class="qr-verify-account"></div>
+        <img id="qrVerifyImage" class="qr-verify-image hidden" alt="身份验证" />
+        <div id="qrVerifyMethods" class="qr-verify-methods"></div>
+        <div id="qrVerifyCodeWrap" class="qr-verify-form hidden">
+          <input id="qrVerifyCode" placeholder="短信 / 邮箱验证码" autocomplete="one-time-code" />
+          <input id="qrVerifyPass" class="hidden" type="password" placeholder="账号密码" autocomplete="current-password" />
+          <button class="btn-primary" type="button" onclick="submitQrVerifyCode()">提交验证</button>
+        </div>
+      </div>
       <div class="modal-actions">
         <button class="btn-ghost" type="button" onclick="refreshQrLogin()">刷新二维码</button>
         <button class="btn-ghost" type="button" onclick="closeQrLogin()">取消</button>
@@ -165,6 +175,7 @@
     let qrTimer = null;
     let qrReplaceIndex = -1;
     let qrApplying = false;
+    let lastVerifyKey = "";
     let githubCheckBusy = false;
     window.__accountCookies = {};
 
@@ -393,6 +404,75 @@
         loading.classList.remove("hidden");
       }
     }
+    function renderVerifyPanel(data) {
+      const panel = $("qrVerify");
+      const box = $("qrBox");
+      const isVerify = data.status === "verify";
+      panel.classList.toggle("hidden", !isVerify);
+      box.classList.toggle("hidden", isVerify);
+      if (!isVerify) {
+        lastVerifyKey = "";
+        return;
+      }
+      const methods = Array.isArray(data.verify_methods) ? data.verify_methods : [];
+      const key = JSON.stringify({
+        methods,
+        account: data.verify_account || "",
+        needCode: !!data.verify_need_code,
+        needPass: !!data.verify_need_password,
+        image: data.verify_image ? "1" : "",
+      });
+      $("qrVerifyAccount").textContent = data.verify_account ? ("账号：" + data.verify_account) : "";
+      $("qrVerifyCodeWrap").classList.toggle("hidden", !(data.verify_need_code || data.verify_need_password));
+      $("qrVerifyPass").classList.toggle("hidden", !data.verify_need_password);
+      const shot = $("qrVerifyImage");
+      if (data.verify_image) {
+        shot.src = data.verify_image.startsWith("data:") ? data.verify_image : ("data:image/png;base64," + data.verify_image);
+        shot.classList.remove("hidden");
+      } else {
+        shot.classList.add("hidden");
+      }
+      if (key === lastVerifyKey) return;
+      lastVerifyKey = key;
+      const wrap = $("qrVerifyMethods");
+      wrap.innerHTML = methods.map((item) => {
+        const id = escapeAttr(item.id || item.label || "");
+        const label = escapeHtml(item.label || item.id || "验证方式");
+        return `<button class="verify-btn" type="button" data-id="${id}">${label}</button>`;
+      }).join("") || `<p class="sub">正在识别验证方式，请稍等几秒。若一直没有按钮，可对照上方截图或运行日志。</p>`;
+      wrap.onclick = (ev) => {
+        const btn = ev.target.closest("button[data-id]");
+        if (btn) chooseQrVerify(btn.getAttribute("data-id"));
+      };
+    }
+    async function chooseQrVerify(methodId) {
+      try {
+        await api("/api/douyin/login/verify", {
+          method: "POST",
+          body: JSON.stringify({ action: "choose", id: methodId }),
+        });
+        toast("已选择验证方式");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function submitQrVerifyCode() {
+      const code = ($("qrVerifyCode").value || "").trim();
+      const password = ($("qrVerifyPass").value || "").trim();
+      if (!code && !password) {
+        toast("请填写验证码", "err");
+        return;
+      }
+      try {
+        await api("/api/douyin/login/verify", {
+          method: "POST",
+          body: JSON.stringify({ action: "code", code, password }),
+        });
+        toast("已提交验证");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
     async function applyQrSuccess(data) {
       if (qrApplying) return;
       qrApplying = true;
@@ -439,9 +519,12 @@
       try {
         const data = await api("/api/douyin/login/status");
         $("qrHint").textContent = data.message || "请用抖音扫码";
+        renderVerifyPanel(data);
         if (data.status === "loading") {
           $("qrLoading").textContent = data.message || "正在生成二维码…";
           showQrImage("");
+        } else if (data.status === "verify") {
+          $("qrLoading").textContent = data.message || "请完成身份验证";
         } else if (data.status === "scanned") {
           $("qrLoading").textContent = data.message || "已扫码，正在确认登录…";
           if (!(data.qr_base64 || data.qr_url)) showQrImage("");
@@ -466,10 +549,13 @@
     async function startQrLogin(index) {
       if (!isAdmin()) return;
       qrApplying = false;
+      lastVerifyKey = "";
       qrReplaceIndex = index;
       stopQrPoll();
       $("qrHint").textContent = "打开抖音 App，扫一扫确认登录";
       $("qrLoading").textContent = "正在生成二维码…";
+      $("qrVerify").classList.add("hidden");
+      $("qrBox").classList.remove("hidden");
       showQrImage("");
       $("qrModal").classList.remove("hidden");
       try {

@@ -15,7 +15,13 @@ from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui.envfile import cookie_key, env_path, load_env, parse_accounts, write_env
-from webui.qr_login import cancel_qr_login, snapshot as qr_snapshot, start_qr_login
+from webui.qr_login import (
+    cancel_qr_login,
+    choose_verify_method,
+    snapshot as qr_snapshot,
+    start_qr_login,
+    submit_verify_code,
+)
 from webui.users import (
     admin_count,
     find_user,
@@ -616,6 +622,20 @@ def douyin_login_cancel(request: Request):
     require_admin(request)
     logger.info("取消抖音扫码登录")
     return {"ok": True, **cancel_qr_login()}
+
+
+@app.post("/api/douyin/login/verify")
+def douyin_login_verify(request: Request, payload: dict | None = None):
+    require_admin(request)
+    payload = payload or {}
+    action = str(payload.get("action") or payload.get("type") or "").strip()
+    if action == "choose":
+        method_id = str(payload.get("id") or payload.get("method") or payload.get("label") or "")
+        logger.info("面板选择身份验证方式 %s", method_id)
+        return {"ok": True, **choose_verify_method(method_id)}
+    if action in {"code", "submit"}:
+        return {"ok": True, **submit_verify_code(str(payload.get("code") or ""), str(payload.get("password") or ""))}
+    raise HTTPException(status_code=400, detail="未知验证动作")
 
 
 @app.post("/api/run")

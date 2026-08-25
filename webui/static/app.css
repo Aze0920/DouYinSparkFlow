@@ -157,6 +157,29 @@ button { cursor: pointer; }
   padding: 10px;
   border-radius: 16px;
 }
+.qr-verify { margin: 8px 0 4px; display: grid; gap: 10px; }
+.qr-verify-account { color: var(--gold); font-weight: 700; }
+.qr-verify-image {
+  width: 100%;
+  max-height: 280px;
+  object-fit: contain;
+  border-radius: 14px;
+  background: #fff;
+}
+.qr-verify-methods { display: grid; gap: 8px; }
+.qr-verify-methods .verify-btn {
+  width: 100%;
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #171b26;
+  color: var(--text);
+  cursor: pointer;
+}
+.qr-verify-methods .verify-btn:hover { border-color: var(--gold); }
+.qr-verify-form { display: grid; gap: 8px; }
+.qr-verify-form input { width: 100%; }
 .log-box {
   height: min(52vh, 520px);
   min-height: 240px;
