@@ -21,6 +21,7 @@ from webui.qr_login import (
     snapshot as qr_snapshot,
     start_qr_login,
     submit_verify_code,
+    verify_page_action,
 )
 from webui.users import (
     admin_count,
@@ -636,6 +637,8 @@ def douyin_login_verify(request: Request, payload: dict | None = None):
         return {"ok": True, **choose_verify_method(method_id, label)}
     if action in {"code", "submit"}:
         return {"ok": True, **submit_verify_code(str(payload.get("code") or ""), str(payload.get("password") or ""))}
+    if action in {"resend", "sent", "back"}:
+        return {"ok": True, **verify_page_action(action)}
     raise HTTPException(status_code=400, detail="未知验证动作")
 
 

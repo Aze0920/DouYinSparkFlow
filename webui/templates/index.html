@@ -20,30 +20,51 @@
   </div>
   <div id="qrModal" class="modal-mask hidden">
     <div class="modal-card qr-card">
-      <h3>抖音扫码登录</h3>
+      <h3 id="qrTitle">抖音扫码登录</h3>
       <p id="qrHint" class="sub">打开抖音 App，扫一扫确认登录</p>
       <div id="qrBox" class="qr-box">
         <div id="qrLoading">正在生成二维码…</div>
         <img id="qrImage" class="qr-image hidden" alt="登录二维码" referrerpolicy="no-referrer" />
         <div id="qrUrlText" class="qr-url hidden"></div>
       </div>
-      <div id="qrVerify" class="qr-verify hidden">
-        <div id="qrVerifyAccount" class="qr-verify-account"></div>
-        <div id="qrVerifyInfo" class="sub"></div>
-        <div id="qrVerifyMethods" class="qr-verify-methods"></div>
-        <div id="qrVerifyUplink" class="qr-verify-uplink hidden">
-          <p>请用手机 <b id="qrUplinkFrom">本机号码</b> 发送短信：</p>
-          <p>发送到：<b id="qrUplinkTo">-</b></p>
-          <p>短信内容：<b id="qrUplinkContent">-</b></p>
-          <p class="sub">发完后等几秒，页面会自动继续。号码和内容以这里显示的为准。</p>
-        </div>
-        <div id="qrVerifyCodeWrap" class="qr-verify-form hidden">
-          <input id="qrVerifyCode" placeholder="短信验证码" autocomplete="one-time-code" />
-          <input id="qrVerifyPass" class="hidden" type="password" placeholder="账号密码" autocomplete="current-password" />
-          <button class="btn-primary" type="button" onclick="submitQrVerifyCode()">提交验证码</button>
-        </div>
+      <div id="qrVerify" class="dy-verify hidden">
+        <section id="dyStepChoose">
+          <div class="dy-title">身份验证</div>
+          <p class="dy-sub">为保障账号安全，请先完成身份验证，以确保为本人操作</p>
+          <div id="dyAccount" class="dy-account"></div>
+          <div id="qrVerifyMethods" class="dy-methods"></div>
+        </section>
+        <section id="dyStepSms" class="hidden">
+          <div class="dy-title">接收短信验证码</div>
+          <p class="dy-sub">短信已发送至 <b id="dySmsMobile"></b></p>
+          <div class="dy-code-row">
+            <input id="qrVerifyCode" placeholder="请输入验证码" autocomplete="one-time-code" />
+            <button class="dy-resend" type="button" onclick="resendQrVerify()">重新发送</button>
+          </div>
+          <div id="dySmsError" class="dy-error"></div>
+          <div class="dy-btn-row">
+            <button class="dy-cancel" type="button" onclick="closeQrLogin()">取消</button>
+            <button class="dy-primary" type="button" onclick="submitQrVerifyCode()">验证</button>
+          </div>
+          <button class="dy-link" type="button" onclick="backQrVerify()">无法验证通过？选择其他验证方式</button>
+        </section>
+        <section id="dyStepUplink" class="hidden">
+          <div class="dy-title">发送短信验证</div>
+          <p class="dy-sub">请使用手机号 <b id="qrUplinkFrom"></b> 发送短信验证</p>
+          <p class="dy-fee">发送可能按运营商标准收取 0.1 元/条</p>
+          <ol class="dy-steps">
+            <li>编辑短信内容：<b id="qrUplinkContent">-</b></li>
+            <li>发送至：<b id="qrUplinkTo">-</b></li>
+            <li>发送后回到本页面点击「我已发送」</li>
+          </ol>
+          <div class="dy-btn-row">
+            <button class="dy-cancel" type="button" onclick="closeQrLogin()">取消</button>
+            <button class="dy-primary" type="button" onclick="confirmQrSent()">我已发送</button>
+          </div>
+          <button class="dy-link" type="button" onclick="backQrVerify()">无法验证通过？选择其他验证方式</button>
+        </section>
       </div>
-      <div class="modal-actions">
+      <div class="modal-actions" id="qrLoginActions">
         <button class="btn-ghost" type="button" onclick="refreshQrLogin()">刷新二维码</button>
         <button class="btn-ghost" type="button" onclick="closeQrLogin()">取消</button>
       </div>
@@ -425,46 +446,33 @@
       const isVerify = data.status === "verify";
       panel.classList.toggle("hidden", !isVerify);
       box.classList.toggle("hidden", isVerify);
+      $("qrHint").classList.toggle("hidden", isVerify);
+      $("qrLoginActions").classList.toggle("hidden", isVerify);
       if (!isVerify) {
         lastVerifyKey = "";
+        $("qrTitle").textContent = "抖音扫码登录";
         return;
       }
-      const methods = Array.isArray(data.verify_methods) ? data.verify_methods : [];
-      const info = data.verify_info || "";
       const kind = data.verify_kind || "";
-      const uplinkTo = data.verify_uplink_to || "";
-      const uplinkContent = data.verify_uplink_content || "";
-      const needCode = !!data.verify_need_code || kind === "sms";
-      const needUplink = kind === "uplink" || !!(uplinkTo || uplinkContent);
-      const key = JSON.stringify({
-        methods,
-        account: data.verify_account || "",
-        needCode,
-        needPass: !!data.verify_need_password,
-        kind,
-        uplinkTo,
-        uplinkContent,
-        info,
-        message: data.message || "",
-      });
-      $("qrVerifyAccount").textContent = data.verify_account ? ("账号：" + data.verify_account) : "";
-      $("qrVerifyInfo").textContent = (info && info !== data.message) ? info : "";
-      $("qrVerifyCodeWrap").classList.toggle("hidden", !needCode);
-      $("qrVerifyPass").classList.toggle("hidden", !data.verify_need_password);
-      $("qrVerifyUplink").classList.toggle("hidden", !needUplink);
-      if (needUplink) {
-        $("qrUplinkFrom").textContent = data.verify_uplink_from || "绑定的手机号";
-        $("qrUplinkTo").textContent = uplinkTo || "等待抖音返回发送号码…";
-        $("qrUplinkContent").textContent = uplinkContent || "等待抖音返回短信内容…";
-      }
+      const methods = Array.isArray(data.verify_methods) ? data.verify_methods : [];
+      $("qrTitle").textContent = kind === "sms" ? "接收短信验证码" : (kind === "uplink" ? "发送短信验证" : "身份验证");
+      $("dyStepChoose").classList.toggle("hidden", !!kind);
+      $("dyStepSms").classList.toggle("hidden", kind !== "sms");
+      $("dyStepUplink").classList.toggle("hidden", kind !== "uplink");
+      $("dyAccount").textContent = data.verify_account || "";
+      $("dySmsMobile").textContent = data.verify_uplink_from || "";
+      $("dySmsError").textContent = data.verify_error || "";
+      $("qrUplinkFrom").textContent = data.verify_uplink_from || "绑定手机号";
+      $("qrUplinkTo").textContent = data.verify_uplink_to || "正在读取发送号码…";
+      $("qrUplinkContent").textContent = data.verify_uplink_content || "正在读取短信内容…";
+      const key = JSON.stringify({ methods, kind, account: data.verify_account || "" });
       if (key === lastVerifyKey) return;
       lastVerifyKey = key;
       const wrap = $("qrVerifyMethods");
       wrap.innerHTML = methods.map((item) => {
-        const id = escapeAttr(item.id || item.label || "");
-        const label = escapeHtml(item.label || item.id || "验证方式");
-        return `<button class="verify-btn" type="button" data-id="${id}" data-label="${label}">${label}</button>`;
-      }).join("") || "";
+        const raw = item.label || item.id || "验证方式";
+        return `<button class="dy-method" type="button" data-id="${escapeAttr(item.id || raw)}" data-label="${escapeAttr(raw)}">${escapeHtml(raw)}</button>`;
+      }).join("");
       wrap.onclick = (ev) => {
         const btn = ev.target.closest("button[data-id]");
         if (btn) chooseQrVerify(btn.getAttribute("data-id"), btn.getAttribute("data-label") || btn.textContent);
@@ -482,17 +490,37 @@
     }
     async function submitQrVerifyCode() {
       const code = ($("qrVerifyCode").value || "").trim();
-      const password = ($("qrVerifyPass").value || "").trim();
-      if (!code && !password) {
-        toast("请填写验证码", "err");
+      if (!code) {
+        toast("请输入验证码", "err");
         return;
       }
       try {
         await api("/api/douyin/login/verify", {
           method: "POST",
-          body: JSON.stringify({ action: "code", code, password }),
+          body: JSON.stringify({ action: "code", code }),
         });
-        toast("已提交验证");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function resendQrVerify() {
+      try {
+        await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "resend" }) });
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function confirmQrSent() {
+      try {
+        await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "sent" }) });
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function backQrVerify() {
+      lastVerifyKey = "";
+      try {
+        await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "back" }) });
       } catch (err) {
         toast(err.message, "err");
       }
@@ -576,6 +604,9 @@
       lastVerifyKey = "";
       qrReplaceIndex = index;
       stopQrPoll();
+      $("qrTitle").textContent = "抖音扫码登录";
+      $("qrHint").classList.remove("hidden");
+      $("qrLoginActions").classList.remove("hidden");
       $("qrHint").textContent = "打开抖音 App，扫一扫确认登录";
       $("qrLoading").textContent = "正在生成二维码…";
       $("qrVerify").classList.add("hidden");
