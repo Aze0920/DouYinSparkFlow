@@ -215,15 +215,6 @@ def verify_user(username: str, password: str):
     return user
 
 
-def _mask_pushplus(token) -> str:
-    raw = str(token or "").strip()
-    if not raw:
-        return ""
-    if len(raw) <= 4:
-        return "已绑定"
-    return "••••" + raw[-4:]
-
-
 def public_user(user: dict) -> dict:
     created = parse_iso(user.get("created_at"))
     exp = parse_iso(user.get("expires_at"))
@@ -241,9 +232,6 @@ def public_user(user: dict) -> dict:
         "max_accounts": account_limit(user),
         "account_limit_label": account_limit_label(user),
         "card_code": user.get("card_code") or "",
-        "pushplus_bound": bool(str(user.get("pushplus_token") or "").strip()),
-        "pushplus_mask": _mask_pushplus(user.get("pushplus_token")),
-        "pushplus_bound_at": user.get("pushplus_bound_at") or "",
     }
 
 

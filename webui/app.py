@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -52,20 +52,12 @@ from webui.cards import (
     public_card,
 )
 from webui.notify import (
-    cancel_pushplus_qr,
     load_notify,
-    migrate_legacy_pushplus,
     notify_event,
-    poll_pushplus_qr,
     public_notify,
-    public_pushplus,
-    pushplus_qr_image,
     save_notify,
-    send_pushplus,
     send_wechat,
-    set_user_pushplus,
-    start_pushplus_qr,
-    user_pushplus_token,
+    send_wxpusher,
     verify_wechat_signature,
 )
 
@@ -117,8 +109,6 @@ async def log_api_calls(request: Request, call_next):
         "/cards",
         "/settings",
         "/api/wechat/callback",
-        "/api/notify/pushplus/poll",
-        "/api/notify/pushplus/qr-image",
     } or path.startswith("/static/")
     if not quiet:
         logger.info("请求 %s %s", request.method, path)
@@ -136,10 +126,6 @@ async def log_api_calls(request: Request, call_next):
 def on_startup():
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     logger.info("控制台启动 version=%s cwd=%s log=%s", read_version(), os.getcwd(), LOG_FILE)
-    try:
-        migrate_legacy_pushplus()
-    except Exception:
-        logger.exception("迁移旧 PushPlus 配置失败")
     threading.Thread(target=_scheduler_loop, daemon=True, name="spark-cron").start()
     logger.info("已启动按账号定时调度")
 
@@ -644,114 +630,47 @@ def save_notify_settings(request: Request, payload: dict | None = None):
     admin = require_admin(request)
     data = save_notify(payload or {})
     logger.info(
-        "已保存推送设置 admin=%s wechat=%s",
+        "已保存推送设置 admin=%s wechat=%s wxpusher=%s",
         admin.get("username"),
         (data.get("wechat") or {}).get("enabled"),
+        (data.get("wxpusher") or {}).get("enabled"),
     )
     return {"ok": True, **public_notify(data)}
 
 
 @app.post("/api/settings/notify/test")
-def test_notify_settings(request: Request):
+def test_notify_settings(request: Request, payload: dict | None = None):
     require_admin(request)
+    payload = payload or {}
+    channel = str(payload.get("channel") or "").strip()
     cfg = load_notify()
+    wxpusher = cfg.get("wxpusher") or {}
     wechat = cfg.get("wechat") or {}
-    if not wechat.get("enabled"):
+    notes = []
+    failed = []
+    want_wp = channel in ("", "wxpusher", "all")
+    want_wx = channel in ("", "wechat", "all")
+    if want_wp and wxpusher.get("enabled"):
+        try:
+            send_wxpusher("SparkFlow 测试推送", "WxPusher 通道正常")
+            notes.append("WxPusher 已发送")
+        except Exception as exc:
+            failed.append("WxPusher：" + str(exc))
+    if want_wx and wechat.get("enabled"):
+        try:
+            send_wechat("test", "SparkFlow 测试推送", "公众号消息通道正常")
+            notes.append("公众号已发送")
+        except Exception as exc:
+            failed.append("公众号：" + str(exc))
+    if channel == "wechat" and not wechat.get("enabled"):
         raise HTTPException(status_code=400, detail="公众号推送还没打开")
-    try:
-        send_wechat("test", "SparkFlow 测试推送", "公众号消息通道正常")
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"ok": True, "message": "公众号已发送"}
-
-
-@app.get("/api/notify/pushplus")
-def get_pushplus_bind(request: Request):
-    user = require_auth(request)
-    return {"ok": True, **public_pushplus(user)}
-
-
-@app.post("/api/notify/pushplus/qr")
-def create_pushplus_qr(request: Request, payload: dict | None = None):
-    user = require_auth(request)
-    payload = payload or {}
-    try:
-        data = start_pushplus_qr(user.get("username") or "", force=bool(payload.get("force")))
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {**public_pushplus(find_user(user.get("username") or "")), **data}
-
-
-@app.get("/api/notify/pushplus/qr-image")
-def get_pushplus_qr_image(request: Request):
-    user = require_auth(request)
-    raw = pushplus_qr_image(user.get("username") or "")
-    if not raw:
-        raise HTTPException(status_code=404, detail="二维码还没生成或已过期")
-    return Response(content=raw, media_type="image/png", headers={"Cache-Control": "no-store"})
-
-
-@app.get("/api/notify/pushplus/poll")
-def poll_pushplus_bind(request: Request):
-    user = require_auth(request)
-    try:
-        data = poll_pushplus_qr(user.get("username") or "")
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return data
-
-
-@app.post("/api/notify/pushplus/unbind")
-def unbind_pushplus(request: Request):
-    user = require_auth(request)
-    name = user.get("username") or ""
-    cancel_pushplus_qr(name)
-    saved = set_user_pushplus(name, "")
-    logger.info("已解绑 PushPlus user=%s", name)
-    return {"ok": True, **public_pushplus(saved)}
-
-
-@app.post("/api/notify/pushplus/token")
-def save_pushplus_token(request: Request, payload: dict | None = None):
-    user = require_auth(request)
-    payload = payload or {}
-    token = str(payload.get("token") or "").strip()
-    if not token:
-        raise HTTPException(status_code=400, detail="请粘贴 PushPlus 个人中心的用户token")
-    try:
-        send_pushplus("SparkFlow 测试推送", "token 已保存，以后续火花消息会发到这里", token=token)
-    except Exception as exc:
-        text = str(exc)
-        if "令牌" in text or "token" in text.lower():
-            raise HTTPException(
-                status_code=400,
-                detail="用户令牌不正确。请打开 pushplus.plus 登录后，在个人中心复制「用户token」再保存，不要填微信公众号 Token",
-            ) from exc
-        raise HTTPException(status_code=400, detail=text) from exc
-    name = user.get("username") or ""
-    cancel_pushplus_qr(name)
-    saved = set_user_pushplus(name, token)
-    logger.info("已保存 PushPlus token user=%s", name)
-    return {"ok": True, "message": "已保存，测试消息已发送", **public_pushplus(saved)}
-
-
-@app.post("/api/notify/pushplus/test")
-def test_pushplus_bind(request: Request):
-    user = require_auth(request)
-    token = user_pushplus_token(user.get("username") or "")
-    if not token:
-        raise HTTPException(status_code=400, detail="请先保存 PushPlus 用户token")
-    try:
-        send_pushplus("SparkFlow 测试推送", "绑定成功，以后续火花消息会发到这里", token=token)
-    except Exception as exc:
-        text = str(exc)
-        if "令牌" in text or "token" in text.lower():
-            raise HTTPException(
-                status_code=400,
-                detail="用户令牌不正确。到 pushplus.plus 个人中心复制「用户token」粘贴保存，不要填公众号 Token",
-            ) from exc
-        raise HTTPException(status_code=400, detail=text) from exc
-    return {"ok": True, "message": "测试消息已发送"}
+    if channel == "wxpusher" and not wxpusher.get("enabled"):
+        raise HTTPException(status_code=400, detail="WxPusher 还没打开")
+    if not notes and not failed:
+        raise HTTPException(status_code=400, detail="请先启用 WxPusher 或公众号推送")
+    if not notes:
+        raise HTTPException(status_code=400, detail="；".join(failed))
+    return {"ok": True, "message": "；".join(notes + failed)}
 
 
 @app.api_route("/api/wechat/callback", methods=["GET", "POST"])
@@ -905,13 +824,11 @@ def get_config(request: Request):
     for item in parse_accounts(env):
         cookie_raw = env.get(cookie_key(item["unique_id"]), "")
         owner = _account_owner(item)
-        pp = public_pushplus(find_user(owner) if owner else None)
         accounts.append(
             {
                 **item,
                 "cookies": cookie_raw if isinstance(cookie_raw, str) else json.dumps(cookie_raw, ensure_ascii=False),
                 "owner": owner,
-                "pushplus_bound": bool(pp.get("bound")),
             }
         )
     return {
