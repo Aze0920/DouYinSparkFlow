@@ -126,7 +126,10 @@
         <section class="panel">
           <div class="panel-head">
             <h2>运行日志</h2>
-            <button class="btn-ghost" onclick="loadLogs(true)">刷新日志</button>
+            <div class="row">
+              <button class="btn-ghost" onclick="loadLogs(true)">刷新日志</button>
+              <button class="btn-ghost" onclick="clearLogs()">清空日志</button>
+            </div>
           </div>
           <pre class="log-box" id="logs">还没有日志。</pre>
         </section>
@@ -439,6 +442,9 @@
         if (data.status === "loading") {
           $("qrLoading").textContent = data.message || "正在生成二维码…";
           showQrImage("");
+        } else if (data.status === "scanned") {
+          $("qrLoading").textContent = data.message || "已扫码，正在确认登录…";
+          if (!(data.qr_base64 || data.qr_url)) showQrImage("");
         } else if (data.qr_base64 || data.qr_url) {
           showQrImage(data.qr_base64, data.qr_url);
         }
@@ -573,6 +579,18 @@
       }
       lastLogText = text;
       if (force || nearBottom) el.scrollTop = el.scrollHeight;
+    }
+    async function clearLogs() {
+      const ok = await ask("清空日志", "会清空服务器上的运行日志，确定吗？");
+      if (!ok) return;
+      try {
+        const data = await api("/api/logs/clear", { method: "POST", body: "{}" });
+        lastLogText = data.text || "日志已清空。";
+        $("logs").textContent = lastLogText;
+        toast("日志已清空");
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
     async function loadUsers() {
       const data = await api("/api/users");

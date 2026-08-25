@@ -89,18 +89,84 @@ def _sso_params(fp: str) -> dict[str, str]:
     }
 
 
+def _all_cookie_list(context) -> list:
+    rows = []
+    seen = set()
+    urls = [None, HOME, CHAT, "https://sso.douyin.com/", "https://www.douyin.com/passport/"]
+    for url in urls:
+        try:
+            chunk = context.cookies([url]) if url else context.cookies()
+        except TypeError:
+            chunk = context.cookies(url) if url else context.cookies()
+        except Exception:
+            continue
+        for item in chunk or []:
+            key = (item.get("name"), item.get("domain"), item.get("path"))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(item)
+    return rows
+
+
 def _cookie_map(context) -> dict[str, str]:
-    return {c.get("name"): c.get("value") or "" for c in context.cookies()}
+    return {c.get("name"): c.get("value") or "" for c in _all_cookie_list(context)}
 
 
 def _has_session(context) -> bool:
-    names = set(_cookie_map(context))
-    return bool(names & {"sessionid", "sessionid_ss", "sid_guard"})
+    cookies = _cookie_map(context)
+    names = set(cookies)
+    if names & {"sessionid", "sessionid_ss", "sid_guard", "sid_tt", "sid_ucp_v1"}:
+        return True
+    if cookies.get("LOGIN_STATUS") in ("1", "true", "True"):
+        return True
+    return False
+
+
+def _page_signals(page) -> dict[str, Any]:
+    try:
+        return page.evaluate(
+            """() => {
+              const text = (document.body && document.body.innerText) || "";
+              return {
+                href: location.href,
+                hasUser: localStorage.getItem("HasUserLogin") || "",
+                loginStatus: localStorage.getItem("LOGIN_STATUS") || "",
+                hasScan: text.includes("扫码登录"),
+                hasEnjoy: text.includes("登录后免费畅享") || text.includes("打开「抖音APP」"),
+                hasChat: !!(document.querySelector("[class*='conversation']") || document.querySelector("[class*='Conversation']")),
+              };
+            }"""
+        ) or {}
+    except Exception:
+        logger.debug("读取页面登录信号失败", exc_info=True)
+        return {}
+
+
+def _page_logged_in(page) -> bool:
+    flags = _page_signals(page)
+    if not flags:
+        return False
+    if str(flags.get("hasUser") or "") in ("1", "true", "True"):
+        logger.info("页面登录信号 HasUserLogin=%s", flags)
+        return True
+    if str(flags.get("loginStatus") or "") in ("1", "true", "True"):
+        logger.info("页面登录信号 LOGIN_STATUS=%s", flags)
+        return True
+    if flags.get("hasChat") and not flags.get("hasScan") and not flags.get("hasEnjoy"):
+        logger.info("页面登录信号 私信列表已出现 %s", flags)
+        return True
+    return False
+
+
+def _login_modal_visible(page) -> bool:
+    flags = _page_signals(page)
+    return bool(flags.get("hasScan") or flags.get("hasEnjoy"))
 
 
 def _cookies_for_save(context) -> list[dict[str, Any]]:
     out = []
-    for item in context.cookies():
+    for item in _all_cookie_list(context):
         row = {
             "name": item.get("name"),
             "value": item.get("value"),
@@ -507,7 +573,10 @@ def _worker(replace_index: int):
         )
 
         deadline = time.time() + 180
-        last_shot = time.time()
+        last_shot = 0
+        last_cookie_log = 0
+        missing_qr = 0
+        had_qr = bool(qr_png)
         while time.time() < deadline and not _stop.is_set():
             if token:
                 data = _check_qr(context, fp, token)
@@ -527,16 +596,33 @@ def _worker(replace_index: int):
                         _set(status="error", message="登录确认了，但没有拿到 Cookie，请刷新二维码重试")
                         return
                     break
-            elif _has_session(context):
+            if _has_session(context):
+                logger.info("已检测到登录 Cookie names=%s", list(_cookie_map(context)))
                 _set(status="scanned", message="已登录，正在抓取账号信息…")
                 break
-            else:
-                if time.time() - last_shot > 12:
-                    shot = _capture_qr_image(page)
-                    if shot:
-                        _set(qr_base64=shot)
-                    last_shot = time.time()
-            time.sleep(1.4)
+            if _page_logged_in(page):
+                logger.info("页面已进入登录后状态")
+                _set(status="scanned", message="已确认登录，正在抓取账号信息…")
+                break
+            now = time.time()
+            if now - last_cookie_log > 5:
+                logger.info("等待扫码中 url=%s cookies=%s", page.url, list(_cookie_map(context)))
+                last_cookie_log = now
+            if now - last_shot > 2:
+                shot = _capture_qr_image(page)
+                modal_on = _login_modal_visible(page)
+                if shot:
+                    had_qr = True
+                    missing_qr = 0
+                    _set(qr_base64=shot)
+                elif had_qr and not modal_on:
+                    missing_qr += 1
+                    logger.info("登录弹窗/二维码已消失 %s 次，当作已确认", missing_qr)
+                    if missing_qr >= 2:
+                        _set(status="scanned", message="已确认登录，正在抓取账号信息…")
+                        break
+                last_shot = now
+            time.sleep(1)
         else:
             if _stop.is_set():
                 _set(status="idle", message="", qr_base64="")
@@ -548,13 +634,30 @@ def _worker(replace_index: int):
             _set(status="idle", message="", qr_base64="")
             return
 
+        for i in range(12):
+            if _has_session(context):
+                break
+            logger.info("登录后等待 Cookie %s/12 names=%s", i + 1, list(_cookie_map(context)))
+            try:
+                page.goto(CHAT, wait_until="domcontentloaded", timeout=30000)
+            except Exception:
+                logger.debug("刷新私信页失败", exc_info=True)
+            time.sleep(1)
+
         profile = extract_profile(page, context)
         cookies = _cookies_for_save(context)
         cookie_names = [c.get("name") for c in cookies]
         logger.info("抓到 Cookie %s 个 names=%s", len(cookies), cookie_names)
-        if not cookies or not _has_session(context):
-            logger.error("没有有效登录 Cookie names=%s", cookie_names)
+        if not cookies:
+            logger.error("没有拿到任何 Cookie")
             _set(status="error", message="没有拿到有效登录 Cookie，请重新扫码")
+            return
+        if not _has_session(context):
+            logger.warning("没有 sessionid，仍继续保存当前 Cookie")
+        if not profile.get("unique_id"):
+            profile["unique_id"] = _cookie_map(context).get("uid_tt") or _cookie_map(context).get("uid_tt_ss") or ""
+        if not profile.get("unique_id"):
+            _set(status="error", message="登录成功，但没有读到抖音号，请再扫一次")
             return
         _set(
             status="success",

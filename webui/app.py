@@ -539,6 +539,15 @@ def logs(request: Request, lines: int = 200):
     return {"ok": True, "text": "\n".join(content[-max(20, min(lines, 2000)):])}
 
 
+@app.post("/api/logs/clear")
+def clear_logs(request: Request):
+    require_admin(request)
+    LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+    LOG_FILE.write_text("", encoding="utf-8")
+    logger.info("运行日志已清空")
+    return {"ok": True, "text": "日志已清空。"}
+
+
 def _run_task():
     env = os.environ.copy()
     env["HEADLESS"] = "true"
