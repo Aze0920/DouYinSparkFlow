@@ -30,7 +30,7 @@
       </div>
       <div id="qrVerify" class="dy-verify hidden">
         <div class="dy-title">短信验证</div>
-        <p class="dy-sub">正在向 <b id="dySmsMobile">绑定手机</b> 发送验证码，收到后填写并点确定</p>
+        <p class="dy-sub">验证码已发送至 <b id="dySmsMobile">绑定手机</b>，请查收并输入验证码</p>
         <div class="dy-code-row">
           <input id="qrVerifyCode" placeholder="请输入短信验证码" autocomplete="one-time-code" onkeydown="if(event.key==='Enter'){event.preventDefault();submitQrVerifyCode();}" />
           <button class="dy-resend" type="button" onclick="resendQrVerify()">重新发送</button>

@@ -269,22 +269,23 @@ VERIFY_SCAN_JS = """() => {
   let best = 1e12;
   for (const el of document.querySelectorAll("div, section, article, [role=dialog]")) {
     const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
-    if (t.length < 18 || t.length > 900) continue;
-    const mfa = t.includes("身份验证") && (
-      t.includes("为保障账号安全") || t.includes("确保为本人操作")
-      || t.includes("请输入验证码") || t.includes("接收短信验证码") || t.includes("我已发送")
-    );
+    if (t.length < 12 || t.length > 900) continue;
+    if (t.includes("扫码登录") || t.includes("验证码登录") || t.includes("打开「抖音APP」")) continue;
+    const mfa = t.includes("身份验证")
+      || t.includes("短信已发送至")
+      || (t.includes("接收短信验证码") && /验证|重新发送|请输入/.test(t));
     if (!mfa) continue;
     let score = t.length;
-    if (t.includes("扫码登录") || t.includes("打开「抖音APP」") || t.includes("验证码登录")) score += 8000;
-    if (t.includes("接收短信验证码") || t.includes("请输入验证码") || t.includes("发送短信验证")) score -= 120;
+    if (t.includes("短信已发送至") || /\\d+\\s*s后重新发送/.test(t)) score -= 200;
+    if (t.includes("接收短信验证码") || t.includes("请输入验证码")) score -= 80;
     if (score < best) { best = score; dialog = el; }
   }
   const root = dialog || document.body;
   const text = (root.innerText || "");
   const compact = text.replace(/\\s+/g, " ").trim();
+  const smsSent = /短信已发送至|\\d+\\s*s后重新发送/.test(compact);
   const isUplink = /我已发送|编辑短信内容/.test(compact);
-  const isCode = /请输入验证码|短信已发送至|验证码发送太频繁/.test(compact);
+  const isCode = smsSent || /请输入验证码|验证码发送太频繁/.test(compact);
   const step = isUplink ? "uplink" : (isCode ? "sms" : "choose");
   const methods = [];
   const seen = new Set();
@@ -293,7 +294,8 @@ VERIFY_SCAN_JS = """() => {
   if (step === "choose") {
     for (const el of root.querySelectorAll("button, [role=button], li, a, div, p, span")) {
       const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
-      if (!t || t.length > 22 || seen.has(t)) continue;
+      if (!t || t.length > 10 || seen.has(t)) continue;
+      if (t.includes("接收短信验证码") && t.includes("发送短信验证")) continue;
       if (deny.test(t) && !allow.test(t)) continue;
       if (!allow.test(t)) continue;
       seen.add(t);
@@ -316,13 +318,14 @@ VERIFY_SCAN_JS = """() => {
   const smsContent = (compact.match(/编辑短信内容[:：]?\\s*(\\S+)/) || compact.match(/短信内容[:：]?\\s*(\\S+)/) || [])[1] || "";
   const fromMobile = (compact.match(/(1[3-9][0-9\\*]{9})/) || [])[1] || "";
   const err = (compact.match(/验证码发送太频繁[^ ]*|验证码错误[^ ]*|验证失败[^ ]*|验证码不正确[^ ]*|请稍后再试|发送失败[^ ]*/) || [])[0] || "";
-  const needGetCode = [...root.querySelectorAll("button, [role=button], span, div, a")].some((el) => {
+  const needGetCode = !smsSent && [...root.querySelectorAll("button, [role=button], span, div, a")].some((el) => {
     const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
     if (t !== "获取验证码") return false;
     let n = el;
-    for (let i = 0; i < 6 && n; i++) {
+    for (let i = 0; i < 6 && n && n !== document.body; i++) {
       const ctx = (n.innerText || "").replace(/\\s+/g, " ");
-      if (/验证码登录|密码登录/.test(ctx) && !/身份验证|请输入验证码/.test(ctx)) return false;
+      if (ctx.length > 400) break;
+      if (/验证码登录|密码登录/.test(ctx)) return false;
       n = n.parentElement;
     }
     return true;
@@ -413,6 +416,8 @@ def _uniq_methods(rows: list[dict[str, str]]) -> list[dict[str, str]]:
             continue
         junk = ("用户协议", "隐私政策", "登录即代表", "获取验证码", "选择其他", "无法验证", "刷新二维码")
         if any(j in label for j in junk) and "接收短信验证码" not in label and "发送短信验证" not in label:
+            continue
+        if "接收短信验证码" in label and "发送短信验证" in label:
             continue
         if not way and not any(k in label for k in ("接收短信验证码", "发送短信验证", "邮箱验证", "密码验证", "人脸验证")):
             continue
@@ -520,9 +525,15 @@ def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
     if isinstance(flow, str) and flow.strip():
         bag["account_flow"] = flow.strip()
     echo = data.get("description") or data.get("message") or data.get("msg") or data.get("toast") or data.get("error_message")
-    if isinstance(echo, str) and echo.strip():
+    if isinstance(echo, str) and echo.strip() and echo.strip().lower() not in {"success", "ok", "check pass"}:
         bag["echo"] = echo.strip()
         logger.info("抓包回传信息 %s", echo.strip()[:200])
+    if "send_code" in (url or "").lower():
+        if str(payload.get("message") or "").lower() == "success" or data.get("retry_time") or data.get("mobile"):
+            bag["sms_sent"] = True
+            if data.get("mobile"):
+                bag["uplink_from"] = bag.get("uplink_from") or str(data.get("mobile"))
+            logger.info("抓包短信已发送 mobile=%s retry=%s", data.get("mobile"), data.get("retry_time"))
     methods: list[dict[str, str]] = []
     _collect_methods_from_obj(payload, methods)
     if methods:
@@ -810,23 +821,40 @@ def _fill_verify_code(page, code: str, password: str = "") -> bool:
         el.dispatchEvent(new Event("change", { bubbles: true }));
         el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
       };
-      const inputs = [...document.querySelectorAll("input")];
+      const walk = (el, pred) => {
+        let n = el;
+        for (let i = 0; i < 10 && n && n !== document.body; i++) {
+          const ctx = (n.innerText || "").replace(/\\s+/g, " ").trim();
+          if (ctx.length > 900) break;
+          if (pred(ctx)) return true;
+          n = n.parentElement;
+        }
+        return false;
+      };
+      const inLogin = (el) => walk(el, (ctx) => /验证码登录|密码登录/.test(ctx));
+      const inMfa = (el) => walk(el, (ctx) => /短信已发送至|身份验证/.test(ctx) && !/验证码登录/.test(ctx));
+      const allInputs = [...document.querySelectorAll("input")];
+      const mfaInputs = allInputs.filter((el) => inMfa(el) && !inLogin(el));
+      const pool = mfaInputs.length ? mfaInputs : allInputs.filter((el) => !inLogin(el));
       let filled = false;
       if (password) {
-        const pwd = inputs.find((el) => (el.type || "") === "password");
+        const pwd = pool.find((el) => (el.type || "") === "password");
         if (pwd) { setValue(pwd, password); filled = true; }
       }
       if (code) {
-        const box = inputs.find((el) => /验证码|校验码|code/i.test((el.placeholder || "") + (el.name || "")))
-          || inputs.find((el) => Number(el.maxLength) === 4 || Number(el.maxLength) === 6)
-          || inputs.find((el) => (el.type || "") === "tel" || (el.type || "") === "number");
+        const box = pool.find((el) => /验证码|校验码|code/i.test((el.placeholder || "") + (el.name || "")))
+          || pool.find((el) => Number(el.maxLength) === 4 || Number(el.maxLength) === 6)
+          || pool.find((el) => (el.type || "") === "tel" || (el.type || "") === "number" || (el.type || "") === "text");
         if (box) { setValue(box, code); filled = true; }
       }
       const btn = [...document.querySelectorAll("button, [role=button], div, span")].find((el) => {
+        const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
+        return t === "验证" && inMfa(el) && !inLogin(el);
+      }) || [...document.querySelectorAll("button, [role=button], div, span")].find((el) => {
         return (el.innerText || "").replace(/\\s+/g, " ").trim() === "验证";
       });
       if (btn) btn.click();
-      return { filled, clicked: !!btn, inputCount: inputs.length };
+      return { filled, clicked: !!btn, inputCount: pool.length, mfaInputs: mfaInputs.length };
     }"""
     last = {}
     for scope in _iter_scopes(page):
@@ -1053,11 +1081,20 @@ def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
     uplink_from = str(ui.get("fromMobile") or sniff.get("uplink_from") or _state.get("verify_uplink_from") or "")
     error = str(ui.get("error") or "")
     echo = str(sniff.get("echo") or "")
-    if any(k in echo for k in ("频繁", "失败", "稍后再试")):
+    if any(k in echo for k in ("频繁", "失败", "稍后再试", "不正确", "无匹配")):
         error = echo
+    keep = str(_state.get("message") or "")
+    info = str(ui.get("info") or "")
+    sms_sent = bool(sniff.get("sms_sent")) or "短信已发送" in info or bool(re.search(r"\d+\s*s后重新发送", info))
+    if any(k in keep for k in ("已提交", "已把验证码", "正在确认")):
+        message = keep
+    elif sms_sent:
+        message = "验证码已发送，请填写后点确定"
+    else:
+        message = "请输入短信验证码"
     payload = {
         "status": "verify",
-        "message": "请输入短信验证码",
+        "message": message,
         "qr_base64": "",
         "qr_url": "",
         "verify_need_code": True,
@@ -1621,10 +1658,21 @@ def _worker(replace_index: int):
                 info = str(ui.get("info") or "")
                 need_get = bool(ui.get("needGetCode"))
                 now_sms = time.time()
-                still_choose = step not in ("sms", "uplink") and (
+                sms_sent = bool(sniff.get("sms_sent")) or "短信已发送" in info or bool(re.search(r"\d+\s*s后重新发送", info))
+                still_choose = (not sms_sent) and step not in ("sms", "uplink") and (
                     step in ("", "choose")
                     or ("接收短信验证码" in info and "请输入验证码" not in info and "短信已发送" not in info)
                 )
+                if sms_sent and not sms_code_clicked:
+                    sms_code_clicked = True
+                    sms_method_clicked = True
+                    logger.info("短信已发出，等待填写验证码")
+                    _set(
+                        verify_kind="sms",
+                        verify_need_code=True,
+                        verify_resend_at=time.time() + 60,
+                        message="验证码已发送，请填写后点确定",
+                    )
                 if sms_code_clicked:
                     pass
                 elif still_choose:
@@ -1680,7 +1728,7 @@ def _worker(replace_index: int):
                     _set(status="scanned", message=str(sniff.get("echo") or "已确认，正在进入下一步…"))
                     _follow_login_redirect(page, context, redirect or None)
 
-            if token and not in_verify:
+            if token and not in_verify and not sniff.get("qr_status") and str(sniff.get("account_flow") or "") != "verify":
                 data = _check_qr(context, fp, token)
                 code = str(data.get("status") or "")
                 nick = str(data.get("nickname") or "")
