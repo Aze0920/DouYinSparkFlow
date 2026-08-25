@@ -15,7 +15,8 @@
 * { box-sizing: border-box; }
 html, body {
   margin: 0;
-  min-height: 100%;
+  height: 100%;
+  overflow: hidden;
   color: var(--text);
   font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   background: radial-gradient(900px 500px at 0% 0%, rgba(255,122,58,.16), transparent 50%), var(--bg);
@@ -56,17 +57,22 @@ html, body {
 .login-card input, .login-card button { width: 100%; margin-top: 10px; }
 
 .app {
-  min-height: 100vh;
-  display: grid;
-  grid-template-columns: 240px 1fr;
+  height: 100vh;
+  display: block;
 }
 .sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 240px;
   background: var(--sidebar);
   border-right: 1px solid var(--line);
   padding: 22px 14px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  z-index: 20;
 }
 .brand {
   display: flex;
@@ -95,7 +101,12 @@ html, body {
 }
 .nav-btn.active, .nav-btn:hover { background: rgba(255,122,58,.14); }
 .sidebar-foot { margin-top: auto; padding: 10px; color: var(--muted); font-size: 13px; }
-.main { padding: 24px; }
+.main {
+  margin-left: 240px;
+  height: 100vh;
+  overflow-y: auto;
+  padding: 24px 28px 40px;
+}
 
 .topbar, .panel-head, .row, .account-head {
   display: flex;
@@ -136,16 +147,16 @@ button { cursor: pointer; }
 .mini { padding: 6px 10px; font-size: 12px; }
 .account, .user-card { padding: 16px; margin-top: 12px; }
 .log-box {
-  min-height: calc(100vh - 220px);
-  max-height: calc(100vh - 180px);
+  height: min(52vh, 520px);
+  min-height: 240px;
   overflow: auto;
   white-space: pre-wrap;
   background: #070b12;
   border: 1px solid var(--line);
   border-radius: 16px;
-  padding: 16px;
-  font-size: 13px;
-  line-height: 1.55;
+  padding: 14px;
+  font-size: 12px;
+  line-height: 1.5;
 }
 .status-dot { display: inline-flex; align-items: center; gap: 8px; }
 .status-dot i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
@@ -160,6 +171,17 @@ button { cursor: pointer; }
 .error { color: var(--rose); min-height: 18px; }
 
 @media (max-width: 980px) {
-  .login-page, .app, .cards, .grid.two { grid-template-columns: 1fr; }
-  .sidebar { flex-direction: row; overflow: auto; }
+  html, body { overflow: auto; height: auto; }
+  .login-page, .cards, .grid.two { grid-template-columns: 1fr; }
+  .sidebar {
+    position: sticky;
+    top: 0;
+    width: 100%;
+    height: auto;
+    flex-direction: row;
+    flex-wrap: wrap;
+    overflow: auto;
+  }
+  .main { margin-left: 0; height: auto; overflow: visible; }
+  .log-box { height: 42vh; min-height: 200px; }
 }
