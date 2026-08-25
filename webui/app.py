@@ -80,27 +80,6 @@ def require_admin(request: Request):
     return user
 
 
-def fetch_remote_version() -> str:
-    repo = repo_name()
-    urls = [
-        f"https://raw.githubusercontent.com/{repo}/main/VERSION",
-        f"https://cdn.jsdelivr.net/gh/{repo}@main/VERSION",
-        f"https://ghproxy.net/https://raw.githubusercontent.com/{repo}/main/VERSION",
-        f"https://mirror.ghproxy.com/https://raw.githubusercontent.com/{repo}/main/VERSION",
-    ]
-    for url in urls:
-        try:
-            with httpx.Client(timeout=4.0, follow_redirects=True) as client:
-                resp = client.get(url)
-                if resp.status_code == 200 and resp.text.strip():
-                    first = resp.text.strip().splitlines()[0].strip()
-                    if first and first[0].isdigit():
-                        return first
-        except Exception:
-            continue
-    return ""
-
-
 def run_git(*args: str, timeout: int = 20) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
@@ -114,6 +93,81 @@ def run_git(*args: str, timeout: int = 20) -> subprocess.CompletedProcess:
         timeout=timeout,
         env=env,
     )
+
+
+def origin_url() -> str:
+    if not (ROOT / ".git").exists():
+        return ""
+    try:
+        result = run_git("remote", "get-url", "origin", timeout=5)
+        return result.stdout.strip() if result.returncode == 0 else ""
+    except Exception:
+        return ""
+
+
+def parse_version_text(text: str) -> str:
+    first = (text or "").strip().splitlines()[0].strip() if text else ""
+    if first and first[0].isdigit():
+        return first
+    return ""
+
+
+def git_remote_version() -> tuple[str, str]:
+    """走服务器 origin（包括已配置的 Git 镜像），不走网页 CDN。"""
+    if not (ROOT / ".git").exists():
+        return "", ""
+    try:
+        fetch = run_git("fetch", "--prune", "origin", "main", timeout=25)
+        if fetch.returncode != 0:
+            run_git("fetch", "--prune", "origin", timeout=25)
+    except Exception:
+        pass
+    version = ""
+    sha = ""
+    try:
+        shown = run_git("show", "origin/main:VERSION", timeout=5)
+        if shown.returncode == 0:
+            version = parse_version_text(shown.stdout)
+    except Exception:
+        pass
+    try:
+        parsed = run_git("rev-parse", "origin/main", timeout=5)
+        if parsed.returncode == 0:
+            sha = parsed.stdout.strip()
+    except Exception:
+        pass
+    return version, sha
+
+
+def fetch_remote_version() -> str:
+    repo = repo_name()
+    stamp = int(time.time())
+    headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+    urls = [
+        f"https://ghproxy.net/https://raw.githubusercontent.com/{repo}/main/VERSION?t={stamp}",
+        f"https://mirror.ghproxy.com/https://raw.githubusercontent.com/{repo}/main/VERSION?t={stamp}",
+        f"https://raw.gitmirror.com/{repo}/main/VERSION?t={stamp}",
+        f"https://raw.githubusercontent.com/{repo}/main/VERSION?t={stamp}",
+    ]
+    origin = origin_url()
+    if "http" in origin:
+        # 如果 origin 本身就是镜像地址，优先按同样前缀拼 raw
+        stripped = origin.rstrip("/")
+        if stripped.endswith(".git"):
+            stripped = stripped[:-4]
+        if "github.com/" in stripped:
+            prefix, _, path = stripped.partition("github.com/")
+            urls.insert(0, f"{prefix}raw.githubusercontent.com/{path}/main/VERSION?t={stamp}")
+    for url in urls:
+        try:
+            with httpx.Client(timeout=6.0, follow_redirects=True, headers=headers) as client:
+                resp = client.get(url)
+                version = parse_version_text(resp.text if resp.status_code == 200 else "")
+                if version:
+                    return version
+        except Exception:
+            continue
+    return ""
 
 
 def local_git_sha() -> str:
@@ -143,8 +197,11 @@ def _refresh_remote_version():
         return
     _remote_cache["busy"] = True
     try:
-        version = fetch_remote_version()
-        sha = fetch_remote_sha()
+        version, sha = git_remote_version()
+        if not version:
+            version = fetch_remote_version()
+        if not sha:
+            sha = fetch_remote_sha()
         if version:
             _remote_cache["version"] = version
         if sha:
@@ -155,7 +212,7 @@ def _refresh_remote_version():
 
 
 def remote_version_fast() -> str:
-    stale = time.time() - _remote_cache["ts"] > 60
+    stale = time.time() - _remote_cache["ts"] > 20
     if stale or not _remote_cache["version"]:
         threading.Thread(target=_refresh_remote_version, daemon=True).start()
     return _remote_cache["version"]
