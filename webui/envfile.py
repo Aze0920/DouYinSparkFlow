@@ -84,6 +84,7 @@ def write_env(data: dict, extra: dict | None = None) -> Path:
         "LOG_LEVEL",
         "WEB_PASSWORD",
         "GITHUB_REPO",
+        "GITHUB_MIRROR",
         "HEADLESS",
         "TASKS",
     ]
