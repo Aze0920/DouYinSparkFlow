@@ -36,6 +36,11 @@ def default_notify() -> dict:
             "task_fail": True,
             "cookie_offline": True,
         },
+        "wxpusher": {
+            "enabled": False,
+            "app_token": "",
+            "uids": "",
+        },
     }
 
 
@@ -83,12 +88,20 @@ def save_notify(payload: dict) -> dict:
     if "enabled" in incoming:
         wechat["enabled"] = bool(incoming.get("enabled"))
     wechat["tpl_style"] = "keyword" if str(wechat.get("tpl_style") or "") == "keyword" else "thing"
+    wxpusher = dict(current.get("wxpusher") or {})
+    incoming_wp = payload.get("wxpusher") if isinstance(payload.get("wxpusher"), dict) else {}
+    if "enabled" in incoming_wp:
+        wxpusher["enabled"] = bool(incoming_wp.get("enabled"))
+    if "app_token" in incoming_wp:
+        wxpusher["app_token"] = str(incoming_wp.get("app_token") or "").strip()
+    if "uids" in incoming_wp:
+        wxpusher["uids"] = str(incoming_wp.get("uids") or "").strip()
     events = dict(current.get("events") or {})
     incoming_events = payload.get("events") if isinstance(payload.get("events"), dict) else {}
     for key in EVENT_KEYS:
         if key in incoming_events:
             events[key] = bool(incoming_events.get(key))
-    data = {"wechat": wechat, "events": events}
+    data = {"wechat": wechat, "wxpusher": wxpusher, "events": events}
     NOTIFY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
 
@@ -98,11 +111,16 @@ def public_notify(data: dict | None = None) -> dict:
     wechat = dict(data.get("wechat") or {})
     secret = str(wechat.get("app_secret") or "")
     wechat["app_secret_set"] = bool(secret)
+    wxpusher = dict(data.get("wxpusher") or {})
+    wp_token = str(wxpusher.get("app_token") or "").strip()
+    wp_uids = str(wxpusher.get("uids") or "").strip()
     return {
         "wechat": wechat,
+        "wxpusher": wxpusher,
         "events": dict(data.get("events") or {}),
         "bound": bool(wechat.get("admin_openid")),
         "ready": bool(wechat.get("enabled") and wechat.get("app_id") and secret and wechat.get("admin_openid")),
+        "wxpusher_ready": bool(wxpusher.get("enabled") and wp_token and wp_uids),
     }
 
 
@@ -190,19 +208,62 @@ def send_wechat(kind: str, title: str, body: str = "") -> dict:
     return data
 
 
+def _parse_uids(raw) -> list[str]:
+    if isinstance(raw, list):
+        parts = raw
+    else:
+        text = str(raw or "").replace("，", ",").replace(";", ",").replace("\n", ",")
+        parts = text.split(",")
+    return [str(item).strip() for item in parts if str(item).strip()]
+
+
+def send_wxpusher(title: str, body: str = "") -> dict:
+    cfg = load_notify().get("wxpusher") or {}
+    if not cfg.get("enabled"):
+        raise RuntimeError("还没打开 WxPusher")
+    token = str(cfg.get("app_token") or "").strip()
+    uids = _parse_uids(cfg.get("uids"))
+    if not token:
+        raise RuntimeError("请填写 WxPusher appToken")
+    if not uids:
+        raise RuntimeError("请填写 WxPusher UID")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    payload = {
+        "appToken": token,
+        "content": f"{title}\n{body or '-'}\n{now}",
+        "summary": (title or "SparkFlow")[:20],
+        "contentType": 1,
+        "uids": uids,
+    }
+    with httpx.Client(timeout=8.0) as client:
+        resp = client.post("https://wxpusher.zjiecode.com/api/send/message", json=payload)
+        data = resp.json()
+    if int(data.get("code") or 0) != 1000:
+        raise RuntimeError(data.get("msg") or "WxPusher 发送失败")
+    logger.info("WxPusher 推送成功 title=%s uids=%s", title, len(uids))
+    return data
+
+
 def notify_event(kind: str, title: str, body: str = "") -> None:
     cfg = load_notify()
-    wechat = cfg.get("wechat") or {}
     events = cfg.get("events") or {}
-    if not wechat.get("enabled"):
-        return
     if kind != "test" and not events.get(kind, True):
+        return
+    wechat = cfg.get("wechat") or {}
+    wxpusher = cfg.get("wxpusher") or {}
+    if not wechat.get("enabled") and not wxpusher.get("enabled"):
         return
 
     def _run():
-        try:
-            send_wechat(kind, title, body)
-        except Exception as exc:
-            logger.warning("公众号推送未发出 kind=%s: %s", kind, exc)
+        if wxpusher.get("enabled"):
+            try:
+                send_wxpusher(title, body)
+            except Exception as exc:
+                logger.warning("WxPusher 未发出 kind=%s: %s", kind, exc)
+        if wechat.get("enabled"):
+            try:
+                send_wechat(kind, title, body)
+            except Exception as exc:
+                logger.warning("公众号推送未发出 kind=%s: %s", kind, exc)
 
     threading.Thread(target=_run, daemon=True).start()
