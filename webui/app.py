@@ -619,11 +619,13 @@ async def wechat_callback(request: Request):
     nonce = request.query_params.get("nonce") or ""
     echostr = request.query_params.get("echostr") or ""
     if request.method == "GET":
+        if not signature and not echostr:
+            return PlainTextResponse("ok")
         if verify_wechat_signature(signature, timestamp, nonce):
             return PlainTextResponse(echostr)
-        raise HTTPException(status_code=403, detail="微信签名校验失败")
+        return PlainTextResponse("invalid signature", status_code=403)
     if signature and not verify_wechat_signature(signature, timestamp, nonce):
-        raise HTTPException(status_code=403, detail="微信签名校验失败")
+        return PlainTextResponse("invalid signature", status_code=403)
     return PlainTextResponse("success")
 
 
