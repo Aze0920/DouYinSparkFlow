@@ -117,7 +117,7 @@ html, body {
 }
 .page-title { font-size: 28px; margin: 0; }
 .sub { color: var(--muted); margin: 6px 0 18px; }
-.cards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .card, .panel, .account, .user-card {
   background: var(--card);
   border: 1px solid var(--line);
@@ -176,6 +176,11 @@ button { cursor: pointer; }
   grid-column: 1 / -1;
 }
 .account-id { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.account-head-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.choice-stack { display: grid; gap: 10px; margin-top: 8px; }
+.choice-stack button { width: 100%; }
+.ck-card { width: min(560px, calc(100% - 24px)); }
+.ck-card textarea { width: 100%; min-height: 220px; font-family: Consolas, "Courier New", monospace; font-size: 12px; }
 .qr-card { width: min(440px, calc(100% - 24px)); text-align: center; }
 .live-wrap {
   position: relative;

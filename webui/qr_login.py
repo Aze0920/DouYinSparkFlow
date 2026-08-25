@@ -1076,6 +1076,10 @@ def _status() -> str:
         return str(_state.get("status") or "idle")
 
 
+def qr_busy() -> bool:
+    return _status() in {"loading", "waiting", "scanned", "verify"}
+
+
 def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
     account = _clean_verify_account(ui.get("account")) or _clean_verify_account(sniff.get("account")) or ""
     uplink_from = str(ui.get("fromMobile") or sniff.get("uplink_from") or _state.get("verify_uplink_from") or "")
@@ -1241,7 +1245,7 @@ def _try_page_user(page) -> dict[str, str]:
         return {}
 
 
-def extract_profile(page, context) -> dict[str, str]:
+def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
     found = {"username": "", "unique_id": ""}
     probes = [
         (HOME + "/passport/web/account/info/", None),
@@ -1264,7 +1268,7 @@ def extract_profile(page, context) -> dict[str, str]:
 
     if not (found["username"] and found["unique_id"]):
         for url in (HOME + "/", HOME + "/user/self", HOME + "/chat"):
-            if _stop.is_set():
+            if allow_stop and _stop.is_set():
                 break
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=45000)

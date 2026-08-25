@@ -16,10 +16,12 @@ from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui.envfile import account_cron, cookie_key, default_cron, env_path, load_env, parse_accounts, read_tasks, write_env
+from webui.cookie_probe import parse_cookie_payload, probe_cookies
 from webui.qr_login import (
     cancel_qr_login,
     choose_verify_method,
     live_page_action,
+    qr_busy,
     snapshot as qr_snapshot,
     start_qr_login,
     submit_verify_code,
@@ -610,6 +612,71 @@ def save_account(request: Request, payload: dict):
     path = write_env({"TASKS": tasks}, extra)
     logger.info("已保存账号 %s unique_id=%s cron=%02d:%02d", row["username"], unique_id, row["cron_hour"], row["cron_minute"])
     return {"ok": True, "path": str(path), "account": row}
+
+
+def _deny_if_browser_busy():
+    if _run_state["running"]:
+        raise HTTPException(status_code=409, detail="续火花任务正在跑，请等它结束")
+    if qr_busy():
+        raise HTTPException(status_code=409, detail="正在扫码登录，请先关掉扫码窗口")
+
+
+@app.post("/api/account/check")
+def check_account_cookie(request: Request, payload: dict | None = None):
+    require_admin(request)
+    _deny_if_browser_busy()
+    payload = payload or {}
+    unique_id = str(payload.get("unique_id") or "").strip()
+    if not unique_id:
+        raise HTTPException(status_code=400, detail="缺少抖音号")
+    env = load_env()
+    raw = env.get(cookie_key(unique_id), "") or payload.get("cookies") or ""
+    if not raw:
+        raise HTTPException(status_code=400, detail="这个账号还没有 Cookie")
+    try:
+        cookies = parse_cookie_payload(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = probe_cookies(cookies)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=409 if "稍后再试" in (result.get("message") or "") else 500,
+            detail=result.get("message") or "检测失败",
+        )
+    if result.get("unique_id") and result.get("unique_id") != unique_id:
+        result["mismatch"] = True
+        result["message"] = (
+            f"Cookie 还能用，但属于「{result.get('username') or '其他账号'}」"
+            f"（{result['unique_id']}），不是当前这个号 {unique_id}"
+        )
+    logger.info(
+        "检测账号 Cookie unique_id=%s valid=%s mismatch=%s",
+        unique_id,
+        result.get("valid"),
+        result.get("mismatch"),
+    )
+    return {**result, "ok": True}
+
+
+@app.post("/api/account/import-cookie")
+def import_account_cookie(request: Request, payload: dict | None = None):
+    require_admin(request)
+    _deny_if_browser_busy()
+    payload = payload or {}
+    try:
+        cookies = parse_cookie_payload(payload.get("cookies"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = probe_cookies(cookies)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=409 if "稍后再试" in (result.get("message") or "") else 500,
+            detail=result.get("message") or "导入失败",
+        )
+    if not result.get("valid") or not result.get("unique_id"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "Cookie 无效，没抓到账号资料")
+    logger.info("导入 Cookie 成功 username=%s unique_id=%s", result.get("username"), result.get("unique_id"))
+    return {**result, "ok": True}
 
 
 @app.get("/api/logs")

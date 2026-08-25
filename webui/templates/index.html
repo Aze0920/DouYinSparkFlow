@@ -44,6 +44,30 @@
       </div>
     </div>
   </div>
+  <div id="addAccountModal" class="modal-mask hidden">
+    <div class="modal-card">
+      <h3 id="addAccountTitle">添加账号</h3>
+      <p class="sub">扫码登录，或只粘贴 Cookie JSON。粘贴后会自动抓取昵称和抖音号。</p>
+      <div class="choice-stack">
+        <button class="btn-primary" type="button" onclick="chooseAddAccount('qr')">扫码登录</button>
+        <button class="btn-ghost" type="button" onclick="chooseAddAccount('ck')">粘贴 Cookie JSON</button>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost" type="button" onclick="closeAddAccount()">取消</button>
+      </div>
+    </div>
+  </div>
+  <div id="ckModal" class="modal-mask hidden">
+    <div class="modal-card ck-card">
+      <h3>粘贴 Cookie JSON</h3>
+      <p class="sub">只需要 Cookie 的 JSON 内容，其它资料不用填。</p>
+      <textarea id="ckJson" rows="10" placeholder='[{"name":"sessionid","value":"...","domain":".douyin.com","path":"/"}]'></textarea>
+      <div class="modal-actions">
+        <button class="btn-ghost" type="button" onclick="closeCkModal()">取消</button>
+        <button class="btn-primary" type="button" id="ckImportBtn" onclick="submitCookieJson()">导入并抓取资料</button>
+      </div>
+    </div>
+  </div>
 
   <div id="loginPage" class="login-page hidden">
     <section class="login-visual">
@@ -99,16 +123,8 @@
         <div class="cards">
           <article class="card"><label>本地版本</label><strong id="localVersion">-</strong></article>
           <article class="card"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
-          <article class="card"><label>账号定时</label><strong id="cronText">-</strong></article>
           <article class="card"><label>账号数量</label><strong id="accountCount">-</strong></article>
         </div>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>快捷操作</h2>
-            <button class="btn-run" id="runBtnHome" onclick="runNow()">立即续火花</button>
-          </div>
-          <p class="sub">任务配置在左侧「任务配置」，完整日志在「运行日志」。管理员可在「用户管理」添加控制台账号。</p>
-        </section>
       </section>
 
       <section id="page-tasks" class="hidden">
@@ -116,7 +132,7 @@
           <div class="panel-head">
             <h2>抖音账号与发送策略</h2>
             <div class="admin-only hidden">
-              <button class="btn-ghost" onclick="startQrLogin(-1)">添加账号</button>
+              <button class="btn-ghost" onclick="openAddAccount()">添加账号</button>
               <button class="btn-ghost" onclick="saveGlobalSettings()">保存模板</button>
             </div>
           </div>
@@ -129,7 +145,7 @@
             </label>
           </div>
           <p class="sub">模板和并发数是全局的。每个账号自己选每天几点发、自己保存、自己点续火花。窗口够宽时一排会自动排多张卡片。</p>
-          <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，用抖音 App 扫码后会自动抓取用户名、抖音号和 Cookie，你只需要填写目标好友。</p>
+          <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码登录，也可以只粘贴 Cookie JSON，昵称和抖音号会自动抓取。</p>
           <div id="accounts" class="accounts-grid"></div>
         </section>
       </section>
@@ -239,7 +255,7 @@
         btn.classList.toggle("active", btn.dataset.page === name);
       });
       const titles = {
-        home: ["总览", "查看版本、状态和快捷操作"],
+        home: ["总览", "查看版本、状态和账号数量"],
         tasks: ["任务配置", "每个账号一张卡片，独立定时、独立保存、独立续火花"],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "管理员可以添加、改密和管理其他控制台账号"],
@@ -293,7 +309,6 @@
       $("localVersion").textContent = "v" + data.local_version;
       $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未获取到";
       $("versionPill").textContent = "v" + data.local_version;
-      $("cronText").textContent = data.cron;
       $("accountCount").textContent = String((data.accounts || []).length);
       setBusy(data.running, data.run_message || "空闲");
       $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
@@ -356,9 +371,12 @@
         <div class="account-head">
           <div>
             <strong>${escapeHtml(name)}</strong>
-            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未扫码登录"} · ${bound ? "已绑定 Cookie" : "未绑定 Cookie"}</div>
+            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${bound ? "已绑定 Cookie" : "未绑定 Cookie"}</div>
           </div>
-          <button class="btn-ghost mini admin-only ${admin ? "" : "hidden"}" onclick="removeAccount(${index})">删除</button>
+          <div class="account-head-actions admin-only ${admin ? "" : "hidden"}">
+            <button class="btn-ghost mini" type="button" onclick="checkAccount(${index})">检测</button>
+            <button class="btn-ghost mini" type="button" onclick="removeAccount(${index})">删除</button>
+          </div>
         </div>
         <input type="hidden" class="username" value="${escapeAttr(name)}" />
         <input type="hidden" class="unique-id" value="${escapeAttr(uid)}" />
@@ -370,7 +388,7 @@
         </label>
         <div class="account-actions admin-only ${admin ? "" : "hidden"}">
           <button class="btn-ghost" type="button" onclick="saveAccount(${index})">保存</button>
-          <button class="btn-ghost" type="button" onclick="startQrLogin(${index})">${bound ? "重新扫码" : "扫码登录"}</button>
+          <button class="btn-ghost" type="button" onclick="openAddAccount(${index})">${bound ? "重新登录" : "扫码登录"}</button>
           <button class="btn-run btn-run-account" type="button" onclick="runAccount(${index})">立即续火花</button>
         </div>
       </div>`;
@@ -646,10 +664,12 @@
       }
       window.__accountCookies[uniqueId] = cookies;
       renderAccounts();
-      $("qrModal").classList.add("hidden");
+      if ($("qrModal")) $("qrModal").classList.add("hidden");
+      if ($("ckModal")) $("ckModal").classList.add("hidden");
+      if ($("addAccountModal")) $("addAccountModal").classList.add("hidden");
       try {
         await saveConfig(true, true);
-        toast("已登录 " + next.username + "，请填写目标好友");
+        toast("已添加 " + next.username + "，请填写目标好友");
       } catch (err) {
         toast(err.message, "err");
       }
@@ -686,6 +706,8 @@
     }
     async function startQrLogin(index) {
       if (!isAdmin()) return;
+      closeAddAccount();
+      closeCkModal();
       qrApplying = false;
       qrReplaceIndex = index;
       stopQrPoll();
@@ -717,6 +739,106 @@
       try {
         await api("/api/douyin/login/cancel", { method: "POST", body: "{}" });
       } catch (e) {}
+    }
+    function openAddAccount(index = -1) {
+      if (!isAdmin()) return;
+      window.__addReplaceIndex = Number.isInteger(index) ? index : -1;
+      if ($("addAccountTitle")) {
+        $("addAccountTitle").textContent = window.__addReplaceIndex >= 0 ? "更新登录" : "添加账号";
+      }
+      $("addAccountModal").classList.remove("hidden");
+    }
+    function closeAddAccount() {
+      $("addAccountModal").classList.add("hidden");
+    }
+    function chooseAddAccount(kind) {
+      closeAddAccount();
+      const idx = Number.isInteger(window.__addReplaceIndex) ? window.__addReplaceIndex : -1;
+      if (kind === "ck") {
+        $("ckJson").value = "";
+        $("ckModal").classList.remove("hidden");
+        setTimeout(() => $("ckJson").focus(), 50);
+        return;
+      }
+      startQrLogin(idx);
+    }
+    function closeCkModal() {
+      $("ckModal").classList.add("hidden");
+    }
+    async function submitCookieJson() {
+      if (!isAdmin()) return;
+      const raw = ($("ckJson").value || "").trim();
+      if (!raw) {
+        toast("请先粘贴 Cookie JSON", "err");
+        return;
+      }
+      const btn = $("ckImportBtn");
+      const old = btn ? btn.textContent : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "正在抓取资料…";
+      }
+      try {
+        const data = await api("/api/account/import-cookie", {
+          method: "POST",
+          body: JSON.stringify({ cookies: raw }),
+        });
+        qrApplying = false;
+        qrReplaceIndex = Number.isInteger(window.__addReplaceIndex) ? window.__addReplaceIndex : -1;
+        await applyQrSuccess({
+          username: data.username,
+          unique_id: data.unique_id,
+          cookies: data.cookies,
+          replace_index: qrReplaceIndex,
+        });
+      } catch (err) {
+        toast(err.message, "err");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = old || "导入并抓取资料";
+        }
+      }
+    }
+    async function checkAccount(index) {
+      if (!isAdmin()) return;
+      const node = document.querySelectorAll(".account")[index];
+      if (!node) return;
+      const item = collectAccount(node);
+      if (!item.unique_id) {
+        toast("这个账号还没有抖音号，请先登录", "err");
+        return;
+      }
+      const btn = node.querySelector(".account-head-actions button");
+      const old = btn ? btn.textContent : "";
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "检测中";
+      }
+      toast("正在检测 Cookie，大约十几秒");
+      try {
+        const data = await api("/api/account/check", {
+          method: "POST",
+          body: JSON.stringify({
+            unique_id: item.unique_id,
+            cookies: item.cookies || window.__accountCookies[item.unique_id] || "",
+          }),
+        });
+        toast(data.message || (data.valid ? "Cookie 有效" : "Cookie 无效"), data.valid && !data.mismatch ? "ok" : "err");
+        if (data.valid && data.username && window.__accounts[index] && window.__accounts[index].username !== data.username && !data.mismatch) {
+          window.__accounts[index].username = data.username;
+          const nameInput = node.querySelector(".username");
+          if (nameInput) nameInput.value = data.username;
+          renderAccounts();
+        }
+      } catch (err) {
+        toast(err.message, "err");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = old || "检测";
+        }
+      }
     }
     function parseCronTime(text) {
       const raw = String(text || "9:00").replace("：", ":").trim();
@@ -753,7 +875,7 @@
       if (!node) return;
       const item = collectAccount(node);
       if (!item.unique_id) {
-        toast("请先扫码登录这个账号", "err");
+        toast("请先登录这个账号", "err");
         return;
       }
       try {
@@ -775,7 +897,7 @@
       if (!node) return;
       const item = collectAccount(node);
       if (!item.unique_id) {
-        toast("请先扫码登录这个账号", "err");
+        toast("请先登录这个账号", "err");
         return;
       }
       const ok = await ask("立即续火花", `现在用「${item.username || "这个账号"}」给目标好友发消息？`);
