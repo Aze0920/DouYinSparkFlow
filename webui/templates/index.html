@@ -126,7 +126,7 @@
         <section class="panel">
           <div class="panel-head">
             <h2>运行日志</h2>
-            <button class="btn-ghost" onclick="loadLogs()">刷新日志</button>
+            <button class="btn-ghost" onclick="loadLogs(true)">刷新日志</button>
           </div>
           <pre class="log-box" id="logs">还没有日志。</pre>
         </section>
@@ -549,10 +549,30 @@
         btn.textContent = oldText;
       }
     }
-    async function loadLogs() {
+    let lastLogText = "";
+    function logHasSelection() {
+      const el = $("logs");
+      const sel = window.getSelection();
+      if (!el || !sel || sel.isCollapsed || !sel.toString()) return false;
+      return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
+    }
+    async function loadLogs(force = false) {
       const data = await api("/api/logs");
-      $("logs").textContent = data.text || "暂无日志";
-      $("logs").scrollTop = $("logs").scrollHeight;
+      const text = data.text || "暂无日志";
+      const el = $("logs");
+      if (!force) {
+        if (text === lastLogText) return;
+        if (logHasSelection()) return;
+      }
+      const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+      if (!force && lastLogText && text.startsWith(lastLogText)) {
+        const extra = text.slice(lastLogText.length);
+        if (extra) el.appendChild(document.createTextNode(extra));
+      } else {
+        el.textContent = text;
+      }
+      lastLogText = text;
+      if (force || nearBottom) el.scrollTop = el.scrollHeight;
     }
     async function loadUsers() {
       const data = await api("/api/users");

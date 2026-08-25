@@ -7,6 +7,7 @@ import random
 import string
 import threading
 import time
+from pathlib import Path
 from typing import Any
 
 from core.browser import get_browser
@@ -16,6 +17,8 @@ logger = setup_logger("app", "DEBUG")
 
 SSO = "https://sso.douyin.com"
 HOME = "https://www.douyin.com"
+CHAT = "https://www.douyin.com/chat"
+DEBUG_SHOT = Path(__file__).resolve().parent.parent / "logs" / "qr-debug.png"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -274,29 +277,76 @@ def extract_profile(page, context) -> dict[str, str]:
     return found
 
 
+def _iter_scopes(page):
+    yield page
+    try:
+        for frame in page.frames:
+            yield frame
+    except Exception:
+        return
+
+
 def _capture_qr_image(page) -> str:
     selectors = [
         "#animate_qrcode_container img",
         "img[src*='qrcode']",
+        "img[src*='qr']",
         "img[alt*='二维码']",
+        "img[alt*='扫码']",
         "[class*='qrcode'] img",
         "[class*='qr-code'] img",
         "[class*='Qrcode'] img",
+        "[class*='qrcode'] canvas",
+        "[class*='scan'] img",
+        "div:has-text('扫码登录') img",
+        "div:has-text('打开「抖音APP」') img",
+        "div:has-text('扫一扫') img",
+        "div:has-text('登录后免费畅享') img",
     ]
-    for selector in selectors:
-        loc = page.locator(selector).first
-        try:
-            if loc.count() == 0:
+    for scope in _iter_scopes(page):
+        for selector in selectors:
+            try:
+                loc = scope.locator(selector).first
+                if loc.count() == 0:
+                    continue
+                loc.wait_for(state="visible", timeout=1200)
+                box = loc.bounding_box()
+                if box and (box["width"] < 90 or box["height"] < 90):
+                    continue
+                png = loc.screenshot()
+                if png and len(png) > 800:
+                    logger.info("页面截到二维码 selector=%s size=%s", selector, len(png))
+                    return base64.b64encode(png).decode("ascii")
+            except Exception:
                 continue
-            loc.wait_for(state="visible", timeout=2500)
-            png = loc.screenshot()
-            if png:
-                logger.info("页面截到二维码 selector=%s size=%s", selector, len(png))
-                return base64.b64encode(png).decode("ascii")
-        except Exception:
-            logger.debug("截二维码失败 selector=%s", selector, exc_info=True)
-            continue
-    logger.warning("页面上没有截到二维码")
+    logger.warning("页面上没有截到二维码 url=%s frames=%s", getattr(page, "url", ""), len(getattr(page, "frames", []) or []))
+    return ""
+
+
+def _wait_chat_qr(page) -> str:
+    logger.info("打开抖音私信页 %s", CHAT)
+    page.goto(CHAT, wait_until="domcontentloaded", timeout=60000)
+    logger.info("私信页已打开 url=%s title=%s", page.url, page.title())
+    try:
+        page.wait_for_selector("text=扫码登录", timeout=12000)
+        logger.info("已出现扫码登录弹窗")
+    except Exception:
+        logger.warning("12 秒内没等到「扫码登录」文案，继续截图尝试")
+    qr_png = ""
+    for attempt in range(12):
+        if _stop.is_set():
+            return ""
+        qr_png = _capture_qr_image(page)
+        if qr_png:
+            return qr_png
+        logger.info("第 %s 次未截到二维码，继续等", attempt + 1)
+        time.sleep(1)
+    try:
+        DEBUG_SHOT.parent.mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(DEBUG_SHOT))
+        logger.error("截二维码失败，已保存调试图 %s", DEBUG_SHOT)
+    except Exception:
+        logger.exception("保存调试截图失败")
     return ""
 
 
@@ -433,18 +483,16 @@ def _worker(replace_index: int):
         except Exception:
             logger.warning("写入 s_v_web_id cookie 失败", exc_info=True)
         try:
-            logger.info("打开抖音首页 %s", HOME)
-            page.goto(HOME + "/", wait_until="domcontentloaded", timeout=60000)
-            logger.info("首页已打开 url=%s title=%s", page.url, page.title())
+            qr_png = _wait_chat_qr(page)
         except Exception:
-            logger.exception("打开抖音首页失败")
+            logger.exception("打开抖音私信页失败")
+            qr_png = ""
 
-        token, qr_png, qr_url = _request_qr(context, fp)
+        token, qr_url = "", ""
         if not qr_png:
-            logger.info("接口未返回二维码图片，尝试从页面截取")
-            _open_login_panel(page)
-            time.sleep(1.2)
-            qr_png = _capture_qr_image(page)
+            logger.info("页面未截到二维码，再试 SSO 接口")
+            token, api_png, qr_url = _request_qr(context, fp)
+            qr_png = api_png
 
         if not qr_png and not qr_url and not token:
             logger.error("获取二维码失败：token、图片、链接都为空")
