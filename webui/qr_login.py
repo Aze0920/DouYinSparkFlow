@@ -104,6 +104,7 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "verify_resend_left": max(0, int((_state.get("verify_resend_at") or 0) - time.time())),
             "live_html": _state.get("live_html") or "",
             "live_hash": _state.get("live_hash") or "",
+            "live_image": _state.get("live_image") or "",
             "live_w": int(_state.get("live_w") or 0),
             "live_h": int(_state.get("live_h") or 0),
         }
@@ -724,215 +725,67 @@ def _clear_commands():
         _commands.clear()
 
 
-FIND_LIVE_CARD_JS = """async () => {
-  const keys = [
-    "身份验证",
-    "接收短信验证码",
-    "发送短信验证",
-    "扫码登录",
-    "请输入验证码",
-    "我已发送",
-    "打开抖音App",
-    "打开「抖音APP」",
-    "登录后免费畅享",
-    "为保障账号安全",
-    "请使用抖音",
-  ];
-  const hitsOf = (t) => keys.filter((k) => (t || "").includes(k)).length;
-  const cardSize = (r) => r.width >= 300 && r.width <= 560 && r.height >= 240 && r.height <= 820 && r.bottom > 8 && r.right > 8;
-
-  const toData = async (img) => {
-    const src = img.currentSrc || img.src || "";
-    if (!src) return "";
-    if (src.startsWith("data:")) return src;
-    try {
-      const resp = await fetch(src, { credentials: "include" });
-      const blob = await resp.blob();
-      return await new Promise((resolve, reject) => {
-        const fr = new FileReader();
-        fr.onload = () => resolve(String(fr.result || ""));
-        fr.onerror = reject;
-        fr.readAsDataURL(blob);
-      });
-    } catch (e) {
-      try {
-        const c = document.createElement("canvas");
-        c.width = img.naturalWidth || img.width || 0;
-        c.height = img.naturalHeight || img.height || 0;
-        if (!c.width || !c.height) return src;
-        c.getContext("2d").drawImage(img, 0, 0);
-        return c.toDataURL("image/png");
-      } catch (e2) {
-        return src;
-      }
-    }
-  };
-
-  const collectStyles = async () => {
-    const chunks = [];
-    for (const node of document.querySelectorAll("style")) {
-      chunks.push(node.textContent || "");
-    }
-    for (const link of document.querySelectorAll('link[rel="stylesheet"]')) {
-      try {
-        const href = link.href;
-        if (!href) continue;
-        const resp = await fetch(href, { credentials: "include" });
-        chunks.push(await resp.text());
-      } catch (e) {}
-    }
-    return chunks
-      .filter(Boolean)
-      .map((css) => "<style>" + String(css).split("</" + "style").join("<\\/" + "style") + "</style>")
-      .join("");
-  };
-
-  const strip = (root) => {
-    root.querySelectorAll("script, iframe, link, meta, noscript").forEach((n) => n.remove());
-    root.querySelectorAll("*").forEach((n) => {
-      [...n.attributes].forEach((a) => {
-        if (/^on/i.test(a.name) || a.name === "srcdoc") n.removeAttribute(a.name);
-      });
-    });
-  };
-
-  const pack = async (el) => {
-    const styles = await collectStyles();
-    const clone = el.cloneNode(true);
-    strip(clone);
-    const liveImgs = el.querySelectorAll("img");
-    const cloneImgs = clone.querySelectorAll("img");
-    for (let i = 0; i < liveImgs.length && i < cloneImgs.length; i++) {
-      cloneImgs[i].src = await toData(liveImgs[i]);
-      cloneImgs[i].removeAttribute("srcset");
-    }
-    const liveCanvas = el.querySelectorAll("canvas");
-    const cloneCanvas = clone.querySelectorAll("canvas");
-    for (let i = 0; i < liveCanvas.length && i < cloneCanvas.length; i++) {
-      try {
-        const img = document.createElement("img");
-        img.src = liveCanvas[i].toDataURL("image/png");
-        img.style.cssText = (cloneCanvas[i].getAttribute("style") || "") + ";display:block;";
-        cloneCanvas[i].replaceWith(img);
-      } catch (e) {}
-    }
-    const r = el.getBoundingClientRect();
-    clone.setAttribute("data-sparkflow-root", "1");
-    clone.style.position = "relative";
-    clone.style.left = "0";
-    clone.style.top = "0";
-    clone.style.right = "auto";
-    clone.style.bottom = "auto";
-    clone.style.margin = "0";
-    clone.style.transform = "none";
-    clone.style.inset = "auto";
-    document.querySelectorAll("[data-sparkflow-live]").forEach((n) => n.removeAttribute("data-sparkflow-live"));
-    el.setAttribute("data-sparkflow-live", "1");
-    const inner = el === document.body
-      ? ("<div data-sparkflow-root='1' style='position:relative;margin:0;width:" + Math.round(r.width) + "px;height:" + Math.round(r.height) + "px'>" + clone.innerHTML + "</div>")
-      : clone.outerHTML;
-    return {
-      html: styles + inner,
-      w: Math.round(r.width),
-      h: Math.round(r.height),
-    };
-  };
-
-  let bestEl = null;
-  let bestScore = -1e9;
-  for (const el of document.querySelectorAll("div, section, article, [role=dialog], form")) {
-    const r = el.getBoundingClientRect();
-    if (!cardSize(r)) continue;
-    const t = (el.innerText || "").replace(/\\s+/g, " ");
-    const hits = hitsOf(t);
-    if (!hits) continue;
-    const cs = getComputedStyle(el);
-    const bg = cs.backgroundColor || "";
-    const light = /255|254|250|249/.test(bg);
-    const pos = cs.position;
-    const btnBonus = /验证|确定|我已发送|重新发送/.test(t) ? 40 : 0;
-    const score =
-      hits * 70 +
-      (light ? 30 : 0) +
-      (pos === "fixed" || pos === "absolute" ? 16 : 0) +
-      btnBonus -
-      Math.abs(r.width - 400) -
-      Math.abs(r.height - 520) * 0.3;
-    if (score > bestScore) {
-      bestScore = score;
-      bestEl = el;
-    }
-  }
-
-  const body = document.body;
-  const bodyText = (body && body.innerText) || "";
-  const bodyHits = hitsOf(bodyText);
-  const bodyR = body ? body.getBoundingClientRect() : { width: 0, height: 0 };
-  const bodyIsCard = bodyHits > 0 && cardSize(bodyR);
-  const target = bodyIsCard ? body : bestEl;
-  if (!target) return { html: "", w: 0, h: 0, score: -1 };
-  const packed = await pack(target);
-  packed.score = bodyIsCard ? bestScore + 90 : bestScore;
-  packed.hits = bodyHits;
-  return packed;
-}"""
+MARK_LIVE_CARD_JS = (Path(__file__).resolve().parent / "mark_live_card.js").read_text(encoding="utf-8")
 
 
 def _capture_live_card(page) -> bool:
     global _live_box
-    best_pack = None
+    best_info = None
     best_scope = None
     best_score = -1e9
     for scope in _iter_scopes(page):
         try:
-            pack = scope.evaluate(FIND_LIVE_CARD_JS)
+            info = scope.evaluate(f"({MARK_LIVE_CARD_JS.strip()})()")
         except Exception:
-            logger.debug("抽取抖音卡片失败 scope=%s", getattr(scope, "url", ""), exc_info=True)
+            logger.debug("标记抖音卡片失败", exc_info=True)
             continue
-        if not pack or not pack.get("html"):
+        if not info or not info.get("ok"):
             continue
-        score = float(pack.get("score") or 0)
+        score = float(info.get("score") or 0)
         if score > best_score:
             best_score = score
-            best_pack = pack
+            best_info = info
             best_scope = scope
-    if not best_pack or not best_scope:
-        logger.debug("没有抓到抖音登录卡片 HTML url=%s frames=%s", getattr(page, "url", ""), len(getattr(page, "frames", []) or []))
+    if not best_scope or not best_info:
         return False
-    box = None
+    loc = best_scope.locator("[data-sparkflow-live='1']").first
     try:
-        loc = best_scope.locator("[data-sparkflow-live='1']").first
+        raw = loc.screenshot(type="png")
         box = loc.bounding_box()
     except Exception:
-        box = None
-    if not box:
-        try:
-            box = best_scope.locator("body").first.bounding_box()
-        except Exception:
-            box = None
-    html = str(best_pack.get("html") or "")
-    digest = str(best_pack.get("w") or "") + ":" + str(best_pack.get("h") or "") + ":" + str(len(html)) + ":" + html[:: max(1, len(html) // 24)][:48]
+        logger.debug("截取抖音卡片失败 info=%s", best_info, exc_info=True)
+        return False
+    if not raw:
+        return False
+    b64 = base64.b64encode(raw).decode("ascii")
+    digest = str(len(b64)) + ":" + b64[:32]
     with _lock:
         if box:
             _live_box.update(
                 {
                     "x": float(box.get("x") or 0),
                     "y": float(box.get("y") or 0),
-                    "w": float(box.get("width") or best_pack.get("w") or 0),
-                    "h": float(box.get("height") or best_pack.get("h") or 0),
+                    "w": float(box.get("width") or best_info.get("w") or 0),
+                    "h": float(box.get("height") or best_info.get("h") or 0),
                 }
             )
         if (_state.get("live_hash") or "") == digest:
             return True
     _set(
-        live_html=html,
+        live_image=b64,
+        live_html="",
         live_hash=digest,
-        live_w=int(best_pack.get("w") or 0),
-        live_h=int(best_pack.get("h") or 0),
-        live_image="",
+        live_w=int(best_info.get("w") or 0),
+        live_h=int(best_info.get("h") or 0),
     )
+    if best_info.get("verify"):
+        logger.info(
+            "已截取身份验证卡片 %sx%s text=%s",
+            best_info.get("w"),
+            best_info.get("h"),
+            best_info.get("text"),
+        )
     return True
-
 
 def _do_live_click(page, rx, ry) -> bool:
     with _lock:
@@ -1093,6 +946,7 @@ def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
         "status": "verify",
         "message": message,
         "qr_base64": "",
+        "qr_url": "",
         "verify_need_code": need_code,
         "verify_need_password": False,
         "verify_info": "",

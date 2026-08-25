@@ -25,7 +25,45 @@
       <div id="liveWrap" class="live-wrap">
         <div id="qrLoading">正在生成二维码…</div>
         <img id="qrImage" class="qr-image hidden" alt="登录二维码" referrerpolicy="no-referrer" />
-        <iframe id="liveFrame" class="live-frame hidden" sandbox="allow-same-origin allow-forms" title="抖音登录卡片"></iframe>
+        <img id="liveShot" class="live-shot hidden" alt="身份验证" draggable="false" tabindex="0" />
+        <input id="liveProxyInput" class="live-proxy" autocomplete="off" />
+      </div>
+      <div id="qrVerify" class="dy-verify hidden">
+        <section id="dyStepChoose">
+          <div class="dy-title">身份验证</div>
+          <p class="dy-sub">为保障账号安全，请先完成身份验证，以确保为本人操作</p>
+          <div id="dyAccount" class="dy-account"></div>
+          <div id="qrVerifyMethods" class="dy-methods"></div>
+        </section>
+        <section id="dyStepSms" class="hidden">
+          <div class="dy-title">接收短信验证码</div>
+          <p class="dy-sub">短信已发送至 <b id="dySmsMobile"></b></p>
+          <div class="dy-code-row">
+            <input id="qrVerifyCode" placeholder="请输入验证码" autocomplete="one-time-code" />
+            <button class="dy-resend" type="button" onclick="resendQrVerify()">重新发送</button>
+          </div>
+          <div id="dySmsError" class="dy-error"></div>
+          <div class="dy-btn-row">
+            <button class="dy-cancel" type="button" onclick="closeQrLogin()">取消</button>
+            <button class="dy-primary" type="button" onclick="submitQrVerifyCode()">验证</button>
+          </div>
+          <button class="dy-link" type="button" onclick="backQrVerify()">无法验证通过？选择其他验证方式</button>
+        </section>
+        <section id="dyStepUplink" class="hidden">
+          <div class="dy-title">发送短信验证</div>
+          <p class="dy-sub">请使用手机号 <b id="qrUplinkFrom"></b> 发送短信验证</p>
+          <p class="dy-fee">发送可能按运营商标准收取 0.1 元/条</p>
+          <ol class="dy-steps">
+            <li>编辑短信内容：<b id="qrUplinkContent">-</b></li>
+            <li>发送至：<b id="qrUplinkTo">-</b></li>
+            <li>发送后回到本页面点击「我已发送」</li>
+          </ol>
+          <div class="dy-btn-row">
+            <button class="dy-cancel" type="button" onclick="closeQrLogin()">取消</button>
+            <button class="dy-primary" type="button" onclick="confirmQrSent()">我已发送</button>
+          </div>
+          <button class="dy-link" type="button" onclick="backQrVerify()">无法验证通过？选择其他验证方式</button>
+        </section>
       </div>
       <div class="modal-actions" id="qrLoginActions">
         <button class="btn-ghost" type="button" onclick="refreshQrLogin()">刷新二维码</button>
@@ -169,6 +207,7 @@
     let qrPollBusy = false;
     let liveQueue = Promise.resolve();
     let liveQuietUntil = 0;
+    let lastVerifyKey = "";
     let githubCheckBusy = false;
     window.__accountCookies = {};
 
@@ -390,35 +429,42 @@
       return "";
     }
     function showLiveCard(data) {
-      const frame = $("liveFrame");
+      const shot = $("liveShot");
       const img = $("qrImage");
       const loading = $("qrLoading");
       const title = $("qrTitle");
       const hint = $("qrHint");
-      if (!frame || !loading) return;
+      if (!loading) return;
       const isVerify = data && data.status === "verify";
-      if (isVerify && data.live_html) {
-        if (Date.now() < liveQuietUntil && frame.dataset.hash) return;
-        const hash = data.live_hash || String(data.live_html.length);
-        if (frame.dataset.hash !== hash) {
-          frame.dataset.hash = hash;
-          const w = Math.max(Number(data.live_w) || 0, 360);
-          const h = Math.max(Number(data.live_h) || 0, 420);
-          frame.style.width = w + "px";
-          frame.style.height = h + "px";
-          frame.srcdoc = "<!DOCTYPE html><html><head><meta charset='utf-8'><style>html,body{margin:0;padding:0;overflow:hidden;background:#fff}</style></head><body>" + data.live_html + "</body></html>";
-        }
-        frame.classList.remove("hidden");
+      if (isVerify) {
         if (img) img.classList.add("hidden");
-        loading.classList.add("hidden");
-        if (title) title.classList.add("hidden");
-        if (hint) hint.classList.add("hidden");
+        if (title) {
+          title.classList.remove("hidden");
+          title.textContent = data.verify_kind === "sms" ? "接收短信验证码" : (data.verify_kind === "uplink" ? "发送短信验证" : "身份验证");
+        }
+        if (hint) {
+          hint.classList.remove("hidden");
+          hint.textContent = "选验证方式、填验证码，点「验证」。也可以直接点上面这张抖音卡片。";
+        }
+        if (data.live_image && shot) {
+          const hash = data.live_hash || String(data.live_image.length);
+          if (shot.dataset.hash !== hash) {
+            shot.dataset.hash = hash;
+            shot.src = "data:image/png;base64," + data.live_image;
+          }
+          shot.classList.remove("hidden");
+          loading.classList.add("hidden");
+        } else if (shot) {
+          shot.classList.add("hidden");
+          loading.classList.remove("hidden");
+          loading.textContent = "正在打开身份验证…";
+        }
         return;
       }
-      frame.classList.add("hidden");
+      if (shot) shot.classList.add("hidden");
       if (title) {
         title.classList.remove("hidden");
-        title.textContent = isVerify ? "身份验证" : "抖音扫码登录";
+        title.textContent = "抖音扫码登录";
       }
       if (hint) hint.classList.remove("hidden");
       const src = qrSrc(data);
@@ -433,33 +479,130 @@
       loading.textContent = (data && data.message) || "正在生成二维码…";
     }
     function resetLiveCard() {
-      const frame = $("liveFrame");
+      const shot = $("liveShot");
       const img = $("qrImage");
       const loading = $("qrLoading");
-      const title = $("qrTitle");
-      const hint = $("qrHint");
+      const panel = $("qrVerify");
       liveQuietUntil = 0;
-      if (frame) {
-        frame.srcdoc = "";
-        frame.dataset.hash = "";
-        frame.classList.add("hidden");
-        frame.style.width = "";
-        frame.style.height = "";
+      lastVerifyKey = "";
+      if (shot) {
+        shot.src = "";
+        shot.dataset.hash = "";
+        shot.classList.add("hidden");
       }
       if (img) {
         img.src = "";
         img.classList.add("hidden");
       }
-      if (title) title.classList.remove("hidden");
-      if (hint) hint.classList.remove("hidden");
+      if (panel) panel.classList.add("hidden");
       if (loading) {
         loading.textContent = "正在生成二维码…";
         loading.classList.remove("hidden");
       }
     }
-    function liveRootRect(doc) {
-      const root = doc.querySelector("[data-sparkflow-root]") || doc.body;
-      return root.getBoundingClientRect();
+    function tickSmsCountdown(left) {
+      const btn = document.querySelector("#dyStepSms .dy-resend");
+      if (!btn) return;
+      const n = Number(left) || 0;
+      if (n <= 0) {
+        btn.disabled = false;
+        btn.textContent = "重新发送";
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = n + "s";
+    }
+    function renderVerifyPanel(data) {
+      const panel = $("qrVerify");
+      if (!panel) return;
+      const isVerify = data.status === "verify";
+      panel.classList.toggle("hidden", !isVerify);
+      if (!isVerify) {
+        lastVerifyKey = "";
+        return;
+      }
+      const kind = data.verify_kind || "";
+      const methods = Array.isArray(data.verify_methods) ? data.verify_methods : [];
+      $("dyStepChoose").classList.toggle("hidden", !!kind);
+      $("dyStepSms").classList.toggle("hidden", kind !== "sms");
+      $("dyStepUplink").classList.toggle("hidden", kind !== "uplink");
+      $("dyAccount").textContent = data.verify_account || "";
+      $("dySmsMobile").textContent = data.verify_uplink_from || "";
+      $("dySmsError").textContent = data.verify_error || "";
+      $("qrUplinkFrom").textContent = data.verify_uplink_from || "绑定手机号";
+      $("qrUplinkTo").textContent = data.verify_uplink_to || "正在读取发送号码…";
+      $("qrUplinkContent").textContent = data.verify_uplink_content || "正在读取短信内容…";
+      if (kind === "sms") tickSmsCountdown(data.verify_resend_left);
+      const key = JSON.stringify({ methods, kind, account: data.verify_account || "" });
+      if (key === lastVerifyKey) return;
+      lastVerifyKey = key;
+      const wrap = $("qrVerifyMethods");
+      wrap.innerHTML = methods.length ? methods.map((item) => {
+        const raw = item.label || item.id || "验证方式";
+        return `<button class="dy-method" type="button" data-id="${escapeAttr(item.id || raw)}" data-label="${escapeAttr(raw)}">${escapeHtml(raw)}</button>`;
+      }).join("") : '<p class="dy-sub">正在读取验证方式，也可以直接点上方卡片里的选项</p>';
+      wrap.onclick = (ev) => {
+        const btn = ev.target.closest("button[data-id]");
+        if (btn) chooseQrVerify(btn.getAttribute("data-id"), btn.getAttribute("data-label") || btn.textContent);
+      };
+    }
+    async function chooseQrVerify(methodId, label) {
+      try {
+        await api("/api/douyin/login/verify", {
+          method: "POST",
+          body: JSON.stringify({ action: "choose", id: methodId, label: label || "" }),
+        });
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function submitQrVerifyCode() {
+      const code = ($("qrVerifyCode").value || "").trim();
+      if (!code) {
+        toast("请输入验证码", "err");
+        return;
+      }
+      const btn = document.querySelector("#dyStepSms .dy-primary");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "验证中…";
+      }
+      try {
+        await api("/api/douyin/login/verify", {
+          method: "POST",
+          body: JSON.stringify({ action: "code", code }),
+        });
+        toast("正在把验证码提交给抖音");
+      } catch (err) {
+        toast(err.message, "err");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "验证";
+        }
+      }
+    }
+    async function resendQrVerify() {
+      try {
+        await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "resend" }) });
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function confirmQrSent() {
+      try {
+        await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "sent" }) });
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function backQrVerify() {
+      lastVerifyKey = "";
+      try {
+        await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "back" }) });
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
     function sendLive(payload) {
       if (payload.action === "type" || payload.action === "key" || payload.action === "fill") liveQuietUntil = Date.now() + 1600;
@@ -476,54 +619,46 @@
       return liveQueue;
     }
     function bindLiveCard() {
-      const frame = $("liveFrame");
-      if (!frame || frame.dataset.bound) return;
-      frame.dataset.bound = "1";
-      frame.addEventListener("load", () => {
-        const doc = frame.contentDocument;
-        if (!doc) return;
-        doc.addEventListener("pointerdown", (ev) => {
-          const isField = /INPUT|TEXTAREA/.test((ev.target && ev.target.tagName) || "");
-          if (!isField) {
-            ev.preventDefault();
-            ev.stopPropagation();
-          }
-          const r = liveRootRect(doc);
-          if (!r.width || !r.height) return;
-          sendLive({
-            action: "click",
-            x: (ev.clientX - r.left) / r.width,
-            y: (ev.clientY - r.top) / r.height,
-          });
-        }, true);
-        doc.addEventListener("keydown", (ev) => {
-          if (ev.isComposing || ev.key === "Process") return;
-          if (ev.key === "Tab") return;
-          if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "v") return;
-          if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a") {
-            ev.preventDefault();
-            sendLive({ action: "key", key: "Control+A" });
-            return;
-          }
-          const special = ["Backspace", "Enter", "Escape", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
-          if (special.includes(ev.key)) {
-            ev.preventDefault();
-            sendLive({ action: "key", key: ev.key });
-          }
-        }, true);
-        doc.addEventListener("paste", (ev) => {
+      const shot = $("liveShot");
+      const inp = $("liveProxyInput");
+      if (!shot || !inp || shot.dataset.bound) return;
+      shot.dataset.bound = "1";
+      shot.addEventListener("pointerdown", (ev) => {
+        ev.preventDefault();
+        const r = shot.getBoundingClientRect();
+        if (!r.width || !r.height) return;
+        inp.focus();
+        sendLive({
+          action: "click",
+          x: (ev.clientX - r.left) / r.width,
+          y: (ev.clientY - r.top) / r.height,
+        });
+      });
+      inp.addEventListener("keydown", (ev) => {
+        if (ev.isComposing || ev.key === "Process") return;
+        if (ev.key === "Tab") return;
+        if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "v") return;
+        if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a") {
           ev.preventDefault();
-          const text = (ev.clipboardData && ev.clipboardData.getData("text")) || "";
-          if (text) sendLive({ action: "type", text: text.slice(0, 120) });
-        }, true);
-        doc.addEventListener("input", (ev) => {
-          if (ev.isComposing) return;
-          const t = ev.target;
-          if (!t || !("value" in t)) return;
-          const text = String(t.value || "");
-          sendLive({ action: "fill", text });
-        }, true);
-        doc.addEventListener("submit", (ev) => ev.preventDefault(), true);
+          sendLive({ action: "key", key: "Control+A" });
+          return;
+        }
+        const special = ["Backspace", "Enter", "Escape", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
+        if (special.includes(ev.key)) {
+          ev.preventDefault();
+          sendLive({ action: "key", key: ev.key });
+        }
+      });
+      inp.addEventListener("paste", (ev) => {
+        ev.preventDefault();
+        const text = (ev.clipboardData && ev.clipboardData.getData("text")) || "";
+        if (text) sendLive({ action: "type", text: text.slice(0, 120) });
+      });
+      inp.addEventListener("input", (ev) => {
+        if (ev.isComposing) return;
+        const text = inp.value;
+        inp.value = "";
+        if (text) sendLive({ action: "type", text });
       });
     }
     async function applyQrSuccess(data) {
@@ -573,9 +708,11 @@
       qrPollBusy = true;
       try {
         const data = await api("/api/douyin/login/status");
-        $("qrHint").textContent = data.message || "请用抖音 App 扫码，并在手机上确认登录";
-        $("qrTitle").textContent = data.status === "verify" ? "身份验证" : "抖音扫码登录";
+        $("qrHint").textContent = data.status === "verify"
+          ? (data.message || "请完成身份验证")
+          : (data.message || "请用抖音 App 扫码，并在手机上确认登录");
         showLiveCard(data);
+        renderVerifyPanel(data);
         if (data.status === "success") {
           await applyQrSuccess(data);
         } else if (data.status === "expired" || data.status === "error") {
@@ -585,7 +722,8 @@
             : (data.message || "二维码已失效");
           $("qrLoading").textContent = data.message || "二维码已失效";
           if ($("qrImage")) $("qrImage").classList.add("hidden");
-          if ($("liveFrame")) $("liveFrame").classList.add("hidden");
+          if ($("liveShot")) $("liveShot").classList.add("hidden");
+          if ($("qrVerify")) $("qrVerify").classList.add("hidden");
           $("qrLoading").classList.remove("hidden");
         }
       } catch (err) {
