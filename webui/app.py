@@ -85,6 +85,10 @@ async def log_api_calls(request: Request, call_next):
         "/api/douyin/login/live",
         "/favicon.ico",
         "/",
+        "/home",
+        "/tasks",
+        "/logs",
+        "/users",
     } or path.startswith("/static/")
     if not quiet:
         logger.info("请求 %s %s", request.method, path)
@@ -305,8 +309,7 @@ def pull_via_mirrors() -> tuple[str, str]:
     )
 
 
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
+def spa_index(request: Request):
     return templates.TemplateResponse(
         "index.html",
         {
@@ -314,6 +317,19 @@ def index(request: Request):
             "version": read_version(),
         },
     )
+
+
+@app.get("/", response_class=HTMLResponse)
+def index(request: Request):
+    return spa_index(request)
+
+
+@app.get("/home", response_class=HTMLResponse)
+@app.get("/tasks", response_class=HTMLResponse)
+@app.get("/logs", response_class=HTMLResponse)
+@app.get("/users", response_class=HTMLResponse)
+def spa_pages(request: Request):
+    return spa_index(request)
 
 
 @app.get("/api/me")

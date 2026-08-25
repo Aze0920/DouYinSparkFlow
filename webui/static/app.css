@@ -98,6 +98,8 @@ html, body {
   color: var(--text);
   padding: 12px 14px;
   border-radius: 12px;
+  text-decoration: none;
+  display: block;
 }
 .nav-btn.active, .nav-btn:hover { background: rgba(255,122,58,.14); }
 .sidebar-foot { margin-top: auto; padding: 10px; color: var(--muted); font-size: 13px; }
