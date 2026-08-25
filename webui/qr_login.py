@@ -324,6 +324,9 @@ VERIFY_SCAN_JS = """() => {
     fromMobile,
     error: err,
     step,
+    needGetCode: [...document.querySelectorAll("button, [role=button], span, div, a")].some((el) => {
+      return (el.innerText || "").replace(/\\s+/g, " ").trim() === "获取验证码";
+    }),
   };
 }"""
 
@@ -550,6 +553,7 @@ def _scan_verify_ui(page) -> dict[str, Any]:
         "fromMobile": "",
         "error": "",
         "step": "",
+        "needGetCode": False,
     }
     for scope in _iter_scopes(page):
         try:
@@ -576,6 +580,8 @@ def _scan_verify_ui(page) -> dict[str, Any]:
             merged["error"] = str(part.get("error") or "")
         if part.get("step") and not merged["step"]:
             merged["step"] = str(part.get("step") or "")
+        if part.get("needGetCode"):
+            merged["needGetCode"] = True
         merged["methods"].extend(part.get("methods") or [])
     merged["methods"] = _uniq_methods(merged["methods"])
     return merged
@@ -584,21 +590,42 @@ def _scan_verify_ui(page) -> dict[str, Any]:
 def _click_verify_method(page, method_id: str, label: str = "") -> bool:
     ident = str(method_id or "").strip()
     zh = _human_verify_label(ident, label)
-    keys = [k for k in (zh, label, ident, VERIFY_WAY_LABELS.get(ident, ""), "接收短信验证码") if k]
+    keys = [k for k in (zh, label, "接收短信验证码", ident) if k]
     keys = list(dict.fromkeys(keys))
     click_js = """(keys) => {
-      const nodes = [...document.querySelectorAll("button, [role=button], li, a, div, p, span")];
+      const nodes = [...document.querySelectorAll("button, [role=button], li, a, p, span, div")];
+      const visible = (el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== "none" && cs.visibility !== "hidden" && Number(cs.opacity || 1) > 0.05;
+      };
+      const isLeaf = (el, t) => {
+        for (const child of el.children) {
+          const ct = (child.innerText || "").replace(/\\s+/g, " ").trim();
+          if (ct === t) return false;
+        }
+        return true;
+      };
       for (const want of keys) {
         const target = String(want || "").replace(/\\s+/g, " ").trim();
         if (!target) continue;
-        const hit = nodes.find((el) => {
+        let best = null;
+        let bestLen = 1e9;
+        for (const el of nodes) {
           const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
-          if (/无法验证|选择其他|用户协议|隐私政策|登录即代表/.test(t)) return false;
-          return t === target || t.startsWith(target + "（") || t.startsWith(target + " ");
-        });
-        if (hit) {
-          hit.click();
-          return (hit.innerText || "").replace(/\\s+/g, " ").trim();
+          if (!t || t.length > 22) continue;
+          if (/发送短信验证|人脸验证|邮箱验证|密码验证|无法验证|选择其他|用户协议|隐私政策/.test(t) && t !== target) continue;
+          const ok = t === target || t.startsWith(target + "（") || t.startsWith(target + "(");
+          if (!ok || !visible(el) || !isLeaf(el, t)) continue;
+          if (t.length < bestLen) {
+            bestLen = t.length;
+            best = el;
+          }
+        }
+        if (best) {
+          best.click();
+          return (best.innerText || "").replace(/\\s+/g, " ").trim();
         }
       }
       return "";
@@ -613,13 +640,69 @@ def _click_verify_method(page, method_id: str, label: str = "") -> bool:
             continue
         for text in keys:
             try:
-                loc = scope.get_by_text(text, exact=False)
+                loc = scope.get_by_text(text, exact=True)
+                if loc.count() == 0:
+                    continue
                 loc.first.click(timeout=2000)
-                logger.info("已点击验证方式 %s", text)
+                logger.info("已精确点击验证方式 %s", text)
                 return True
             except Exception:
                 continue
     logger.warning("没有点到验证方式 id=%s keys=%s", ident, keys)
+    return False
+
+
+def _click_get_sms_code(page) -> bool:
+    labels = ["获取验证码", "发送验证码", "获取短信验证码"]
+    click_js = """(labels) => {
+      const nodes = [...document.querySelectorAll("button, [role=button], a, span, div, p")];
+      const visible = (el) => {
+        const r = el.getBoundingClientRect();
+        if (r.width < 8 || r.height < 8) return false;
+        const cs = getComputedStyle(el);
+        return cs.display !== "none" && cs.visibility !== "hidden";
+      };
+      const isLeaf = (el, t) => {
+        for (const child of el.children) {
+          const ct = (child.innerText || "").replace(/\\s+/g, " ").trim();
+          if (ct === t) return false;
+        }
+        return true;
+      };
+      for (const want of labels) {
+        let best = null;
+        for (const el of nodes) {
+          const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
+          if (t !== want || !visible(el) || !isLeaf(el, t)) continue;
+          best = el;
+          break;
+        }
+        if (best) {
+          best.click();
+          return want;
+        }
+      }
+      return "";
+    }"""
+    for scope in _iter_scopes(page):
+        try:
+            clicked = scope.evaluate(click_js, labels)
+            if clicked:
+                logger.info("已点击获取验证码 -> %s", clicked)
+                return True
+        except Exception:
+            continue
+        for text in labels:
+            try:
+                loc = scope.get_by_text(text, exact=True)
+                if loc.count() == 0:
+                    continue
+                loc.first.click(timeout=2000)
+                logger.info("已精确点击获取验证码 %s", text)
+                return True
+            except Exception:
+                continue
+    logger.warning("没有点到「获取验证码」，短信不会发出")
     return False
 
 
@@ -1412,7 +1495,10 @@ def _worker(replace_index: int):
         missing_qr = 0
         had_qr = bool(qr_url)
         verify_gone = 0
-        sms_picked = False
+        sms_method_clicked = False
+        sms_code_clicked = False
+        sms_form_seen_at = 0.0
+        last_sms_try = 0.0
         _capture_live_card(page)
         while time.time() < deadline and not _stop.is_set():
             while True:
@@ -1437,7 +1523,8 @@ def _worker(replace_index: int):
                     time.sleep(2.2)
                     deadline = max(deadline, time.time() + 120)
                 elif action == "resend":
-                    _click_exact_text(page, ["重新发送"])
+                    if not _click_exact_text(page, ["重新发送"]):
+                        _click_get_sms_code(page)
                     _set(verify_resend_at=time.time() + 60, verify_error="")
                     time.sleep(0.8)
                 elif action == "sent":
@@ -1464,19 +1551,48 @@ def _worker(replace_index: int):
                     )
                 _publish_verify(ui, sniff)
                 step = str(ui.get("step") or "")
-                if step == "sms":
-                    sms_picked = True
-                elif not sms_picked:
-                    logger.info("身份验证自动选择接收短信验证码")
-                    if _click_verify_method(page, "mobile_sms_verify", "接收短信验证码"):
-                        sms_picked = True
+                info = str(ui.get("info") or "")
+                need_get = bool(ui.get("needGetCode"))
+                now_sms = time.time()
+                if sms_code_clicked:
+                    pass
+                elif need_get:
+                    sms_method_clicked = True
+                    sms_form_seen_at = 0.0
+                    if now_sms - last_sms_try >= 1.2:
+                        last_sms_try = now_sms
+                        logger.info("短信页出现「获取验证码」，准备点击发码 info=%s", info[:160])
+                        if _click_get_sms_code(page):
+                            sms_code_clicked = True
+                            _set(
+                                verify_kind="sms",
+                                verify_need_code=True,
+                                verify_resend_at=time.time() + 60,
+                                message="已点获取验证码，请查收短信后填写",
+                            )
+                elif step == "sms" or "请输入验证码" in info:
+                    sms_method_clicked = True
+                    if not sms_form_seen_at:
+                        sms_form_seen_at = now_sms
+                    elif now_sms - sms_form_seen_at >= 2.0:
+                        sms_code_clicked = True
+                        logger.info("短信输入页已无「获取验证码」，按已发出处理")
                         _set(
                             verify_kind="sms",
                             verify_need_code=True,
                             verify_resend_at=time.time() + 60,
-                            message="请输入短信验证码",
+                            message="请填写收到的验证码后点确定",
                         )
-                        time.sleep(1.0)
+                elif now_sms - last_sms_try >= 1.6:
+                    last_sms_try = now_sms
+                    logger.info("身份验证自动选择接收短信验证码 step=%s info=%s", step, info[:180])
+                    if "人脸" in info:
+                        switched = _click_exact_text(page, ["选择其他验证方式", "其他验证方式", "更换验证方式"])
+                        logger.info("已尝试离开人脸验证 switched=%s", bool(switched))
+                        time.sleep(0.9)
+                    if _click_verify_method(page, "mobile_sms_verify", "接收短信验证码"):
+                        sms_method_clicked = True
+                        time.sleep(1.1)
             elif _status() == "verify":
                 _publish_verify(ui, sniff)
                 in_verify = True
