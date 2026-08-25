@@ -18,6 +18,7 @@ fi
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m playwright install chromium || true
+python -m playwright install-deps chromium || true
 export WEB_PORT="$PORT"
 export HEADLESS=true
 python -m webui.app

@@ -7,3 +7,4 @@ logs/
 usersData.json
 .env
 config/.env
+config/users.json

@@ -14,6 +14,17 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from webui.envfile import cookie_key, env_path, load_env, parse_accounts, write_env
+from webui.users import (
+    admin_count,
+    find_user,
+    load_users,
+    make_token,
+    parse_token,
+    public_user,
+    save_users,
+    verify_user,
+    _hash_password,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
@@ -46,17 +57,26 @@ def web_password() -> str:
     return env.get("WEB_PASSWORD") or os.getenv("WEB_PASSWORD") or "sparkflow"
 
 
-def token_of(password: str) -> str:
-    return hashlib.sha256(f"dsf|{password}".encode("utf-8")).hexdigest()
+def current_user(request: Request):
+    return parse_token(request.cookies.get("dsf_auth") or "")
 
 
 def authed(request: Request) -> bool:
-    return request.cookies.get("dsf_auth") == token_of(web_password())
+    return current_user(request) is not None
 
 
 def require_auth(request: Request):
-    if not authed(request):
+    user = current_user(request)
+    if not user:
         raise HTTPException(status_code=401, detail="未登录")
+    return user
+
+
+def require_admin(request: Request):
+    user = require_auth(request)
+    if user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user
 
 
 def fetch_remote_version() -> str:
@@ -109,17 +129,100 @@ def index(request: Request):
 
 @app.get("/api/me")
 def me(request: Request):
-    return {"ok": True, "authed": authed(request)}
+    user = current_user(request)
+    if not user:
+        return {"ok": True, "authed": False}
+    return {"ok": True, "authed": True, "user": public_user(user)}
 
 
 @app.post("/api/login")
 def login(payload: dict):
+    username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
-    if password != web_password():
-        raise HTTPException(status_code=403, detail="密码错误")
-    resp = JSONResponse({"ok": True})
-    resp.set_cookie("dsf_auth", token_of(password), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 14)
+    user = verify_user(username, password)
+    if not user:
+        raise HTTPException(status_code=403, detail="用户名或密码错误")
+    resp = JSONResponse({"ok": True, "user": public_user(user)})
+    resp.set_cookie("dsf_auth", make_token(user["username"]), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 14)
     return resp
+
+
+@app.post("/api/logout")
+def logout():
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie("dsf_auth")
+    return resp
+
+
+@app.get("/api/users")
+def list_users(request: Request):
+    require_admin(request)
+    return {"ok": True, "users": [public_user(u) for u in load_users()]}
+
+
+@app.post("/api/users")
+def create_user(request: Request, payload: dict):
+    require_admin(request)
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    role = str(payload.get("role") or "user").strip() or "user"
+    if role not in ("admin", "user"):
+        raise HTTPException(status_code=400, detail="角色只能是 admin 或 user")
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="用户名和密码都要填")
+    if find_user(username):
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    users = load_users()
+    users.append(
+        {
+            "username": username,
+            "password_hash": _hash_password(username, password),
+            "role": role,
+        }
+    )
+    save_users(users)
+    return {"ok": True, "users": [public_user(u) for u in users]}
+
+
+@app.post("/api/users/update")
+def update_user(request: Request, payload: dict):
+    admin = require_admin(request)
+    username = str(payload.get("username") or "").strip()
+    user = find_user(username)
+    if not user:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    users = load_users()
+    role = payload.get("role")
+    password = payload.get("password")
+    for item in users:
+        if item.get("username") != username:
+            continue
+        if role in ("admin", "user"):
+            if item.get("role") == "admin" and role != "admin" and admin_count(users) <= 1:
+                raise HTTPException(status_code=400, detail="至少保留一个管理员")
+            item["role"] = role
+        if password:
+            item["password_hash"] = _hash_password(username, str(password))
+        break
+    save_users(users)
+    return {"ok": True, "users": [public_user(u) for u in users]}
+
+
+@app.post("/api/users/delete")
+def delete_user(request: Request, payload: dict):
+    admin = require_admin(request)
+    username = str(payload.get("username") or "").strip()
+    if username == admin.get("username"):
+        raise HTTPException(status_code=400, detail="不能删除当前登录账号")
+    users = load_users()
+    target = next((u for u in users if u.get("username") == username), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if target.get("role") == "admin" and admin_count(users) <= 1:
+        raise HTTPException(status_code=400, detail="至少保留一个管理员")
+    users = [u for u in users if u.get("username") != username]
+    save_users(users)
+    return {"ok": True, "users": [public_user(u) for u in users]}
 
 
 @app.get("/api/status")
@@ -173,7 +276,6 @@ def get_config(request: Request):
         "friend_list_wait_time": int(env.get("FRIEND_LIST_WAIT_TIME") or 2000),
         "task_retry_times": int(env.get("TASK_RETRY_TIMES") or 3),
         "log_level": env.get("LOG_LEVEL") or "DEBUG",
-        "web_password": web_password(),
         "github_repo": repo_name(),
         "accounts": accounts,
     }
@@ -181,7 +283,7 @@ def get_config(request: Request):
 
 @app.post("/api/config")
 def save_config(request: Request, payload: dict):
-    require_auth(request)
+    require_admin(request)
     accounts = payload.get("accounts") or []
     tasks = []
     extra = {}
@@ -226,7 +328,6 @@ def save_config(request: Request, payload: dict):
         "FRIEND_LIST_WAIT_TIME": str(payload.get("friend_list_wait_time") or 2000),
         "TASK_RETRY_TIMES": str(payload.get("task_retry_times") or 3),
         "LOG_LEVEL": payload.get("log_level") or "DEBUG",
-        "WEB_PASSWORD": payload.get("web_password") or web_password(),
         "GITHUB_REPO": payload.get("github_repo") or repo_name(),
         "HEADLESS": "true",
         "TASKS": tasks,

@@ -3,27 +3,15 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>DouYinSparkFlow 控制台</title>
+  <title>DouYinSparkFlow</title>
   <link rel="stylesheet" href="/static/app.css?v={{ version }}" />
 </head>
 <body>
   <div id="toasts" class="toast-wrap"></div>
-
-  <div id="login" class="login-mask hidden">
-    <form class="login-card" onsubmit="return doLogin(event)">
-      <div class="spark-mark">✦</div>
-      <h1>SparkFlow</h1>
-      <p>续火花控制台，输入密码进入</p>
-      <input id="password" type="password" placeholder="默认 sparkflow" autocomplete="current-password" />
-      <button class="btn-primary" type="submit">进入控制台</button>
-      <div id="loginError" class="error"></div>
-    </form>
-  </div>
-
   <div id="modal" class="modal-mask hidden">
     <div class="modal-card">
-      <h3 id="modalTitle">确认操作</h3>
-      <p id="modalText" class="hint"></p>
+      <h3 id="modalTitle">确认</h3>
+      <p id="modalText" class="sub"></p>
       <div class="modal-actions">
         <button class="btn-ghost" id="modalCancel">取消</button>
         <button class="btn-run" id="modalOk">确定</button>
@@ -31,95 +19,146 @@
     </div>
   </div>
 
-  <div class="shell">
-    <header class="topbar">
-      <div class="brand-wrap">
+  <div id="loginPage" class="login-page hidden">
+    <section class="login-visual">
+      <div class="spark-mark">✦</div>
+      <h2>把火花续在自己手里</h2>
+      <p>管理员可以添加和控制台账号。默认账号 admin / admin，登录后请尽快改密码。</p>
+    </section>
+    <section class="login-box">
+      <form class="login-card" onsubmit="return doLogin(event)">
+        <h1>登录控制台</h1>
+        <p>使用管理员或普通账号进入</p>
+        <input id="loginUser" placeholder="用户名，默认 admin" autocomplete="username" />
+        <input id="loginPass" type="password" placeholder="密码，默认 admin" autocomplete="current-password" />
+        <button class="btn-primary" type="submit">进入系统</button>
+        <div id="loginError" class="error"></div>
+      </form>
+    </section>
+  </div>
+
+  <div id="app" class="app hidden">
+    <aside class="sidebar">
+      <div class="brand">
         <div class="spark-mark">✦</div>
         <div>
-          <div class="brand">DouYin<span>SparkFlow</span></div>
-          <div class="sub">火花续航控制台</div>
+          <b>SparkFlow</b>
+          <span id="versionPill">v{{ version }}</span>
         </div>
       </div>
-      <div class="top-actions">
-        <span class="pill" id="versionPill">v{{ version }}</span>
-        <span class="status-dot" id="liveDot"><i></i><b id="runText">空闲</b></span>
-        <button class="btn-ghost" onclick="refreshAll()">刷新</button>
-        <button class="btn-primary" id="updateBtn" onclick="doUpdate()">从 GitHub 更新</button>
+      <button class="nav-btn active" data-page="home" onclick="showPage('home')">总览</button>
+      <button class="nav-btn" data-page="tasks" onclick="showPage('tasks')">任务配置</button>
+      <button class="nav-btn" data-page="logs" onclick="showPage('logs')">运行日志</button>
+      <button class="nav-btn admin-only hidden" data-page="users" onclick="showPage('users')">用户管理</button>
+      <div class="sidebar-foot">
+        <div id="whoami">未登录</div>
+        <button class="btn-ghost mini" onclick="doLogout()">退出登录</button>
       </div>
-    </header>
+    </aside>
 
-    <section class="cards">
-      <article class="card">
-        <label>本地版本</label>
-        <strong id="localVersion">-</strong>
-      </article>
-      <article class="card">
-        <label>GitHub 版本</label>
-        <strong id="remoteVersion">-</strong>
-      </article>
-      <article class="card">
-        <label>定时发送</label>
-        <strong id="cronText">-</strong>
-      </article>
-      <article class="card">
-        <label>账号数量</label>
-        <strong id="accountCount">-</strong>
-      </article>
-    </section>
+    <main class="main">
+      <div class="topbar">
+        <div>
+          <h1 class="page-title" id="pageTitle">总览</h1>
+          <div class="sub" id="pageSub">查看运行状态与版本</div>
+        </div>
+        <div class="row">
+          <span class="status-dot" id="liveDot"><i></i><b id="runText">空闲</b></span>
+          <button class="btn-ghost" onclick="refreshAll()">刷新</button>
+          <button class="btn-primary admin-only hidden" id="updateBtn" onclick="doUpdate()">从 GitHub 更新</button>
+        </div>
+      </div>
 
-    <div class="workspace">
-      <section class="panel">
-        <div class="panel-head">
-          <h2>任务配置</h2>
-          <div>
-            <button class="btn-ghost" onclick="addAccount()">添加账号</button>
-            <button class="btn-ghost" id="saveBtn" onclick="saveConfig()">保存配置</button>
-            <button class="btn-run" id="runBtn" onclick="runNow()">立即续火花</button>
+      <section id="page-home">
+        <div class="cards">
+          <article class="card"><label>本地版本</label><strong id="localVersion">-</strong></article>
+          <article class="card"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
+          <article class="card"><label>定时发送</label><strong id="cronText">-</strong></article>
+          <article class="card"><label>账号数量</label><strong id="accountCount">-</strong></article>
+        </div>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>快捷操作</h2>
+            <button class="btn-run" id="runBtnHome" onclick="runNow()">立即续火花</button>
           </div>
-        </div>
-        <div class="grid two">
-          <label>每天发送时间
-            <div class="row">
-              <input id="cronHour" type="number" min="0" max="23" />
-              <span>:</span>
-              <input id="cronMinute" type="number" min="0" max="59" />
-            </div>
-          </label>
-          <label>控制台密码
-            <input id="webPassword" type="text" />
-          </label>
-          <label class="span-2">消息模板
-            <textarea id="messageTemplate" rows="3"></textarea>
-          </label>
-          <label class="span-2">GitHub 仓库
-            <input id="githubRepo" type="text" />
-          </label>
-        </div>
-        <div id="accounts"></div>
+          <p class="sub">任务配置在左侧「任务配置」，完整日志在「运行日志」。管理员可在「用户管理」添加控制台账号。</p>
+        </section>
       </section>
 
-      <section class="panel">
-        <div class="panel-head">
-          <h2>运行日志</h2>
-          <button class="btn-ghost" onclick="loadLogs()">刷新日志</button>
-        </div>
-        <pre class="log-box" id="logs">还没有日志。保存配置后点「立即续火花」，这里会实时刷出结果。</pre>
+      <section id="page-tasks" class="hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>抖音账号与发送策略</h2>
+            <div class="admin-only hidden">
+              <button class="btn-ghost" onclick="addAccount()">添加账号</button>
+              <button class="btn-ghost" onclick="saveConfig()">保存配置</button>
+              <button class="btn-run" id="runBtn" onclick="runNow()">立即续火花</button>
+            </div>
+          </div>
+          <div class="grid two">
+            <label>每天发送时间
+              <div class="row">
+                <input id="cronHour" type="number" min="0" max="23" />
+                <span>:</span>
+                <input id="cronMinute" type="number" min="0" max="59" />
+              </div>
+            </label>
+            <label>GitHub 仓库
+              <input id="githubRepo" />
+            </label>
+            <label class="span-2">消息模板
+              <textarea id="messageTemplate" rows="3"></textarea>
+            </label>
+          </div>
+          <div id="accounts"></div>
+        </section>
       </section>
-    </div>
+
+      <section id="page-logs" class="hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>运行日志</h2>
+            <button class="btn-ghost" onclick="loadLogs()">刷新日志</button>
+          </div>
+          <pre class="log-box" id="logs">还没有日志。</pre>
+        </section>
+      </section>
+
+      <section id="page-users" class="hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>控制台用户</h2>
+          </div>
+          <div class="grid two">
+            <label>用户名<input id="newUsername" placeholder="例如 operator1" /></label>
+            <label>密码<input id="newPassword" type="password" placeholder="登录密码" /></label>
+            <label>角色
+              <select id="newRole">
+                <option value="user">普通用户</option>
+                <option value="admin">管理员</option>
+              </select>
+            </label>
+            <label>&nbsp;<button class="btn-primary" onclick="createUser()">添加账户</button></label>
+          </div>
+          <div id="userList"></div>
+        </section>
+      </section>
+    </main>
   </div>
 
   <script>
     const $ = (id) => document.getElementById(id);
-    let logTimer = null;
+    let current = null;
+    let pollBusy = false;
+    let page = "home";
 
     function toast(message, type = "ok") {
       const el = document.createElement("div");
       el.className = "toast " + type;
       el.textContent = message;
       $("toasts").appendChild(el);
-      setTimeout(() => el.remove(), 3200);
+      setTimeout(() => el.remove(), 2800);
     }
-
     function ask(title, text) {
       return new Promise((resolve) => {
         $("modalTitle").textContent = title;
@@ -127,76 +166,85 @@
         $("modal").classList.remove("hidden");
         const done = (ok) => {
           $("modal").classList.add("hidden");
-          $("modalOk").onclick = null;
-          $("modalCancel").onclick = null;
           resolve(ok);
         };
         $("modalOk").onclick = () => done(true);
         $("modalCancel").onclick = () => done(false);
       });
     }
-
-    function accountCard(data, index) {
-      return `
-        <div class="account" data-index="${index}">
-          <div class="account-head">
-            <strong>账号 ${index + 1}</strong>
-            <button class="btn-ghost mini" onclick="removeAccount(${index})">删除</button>
-          </div>
-          <div class="grid two">
-            <label>用户名
-              <input class="username" value="${escapeAttr(data.username || "")}" />
-            </label>
-            <label>编号 / 抖音号
-              <input class="unique-id" value="${escapeAttr(data.unique_id || "")}" />
-            </label>
-            <label>目标好友（一行一个）
-              <textarea class="targets" rows="5">${escapeHtml((data.targets || []).join("\n"))}</textarea>
-            </label>
-            <label>Cookie JSON
-              <textarea class="cookies" rows="5" placeholder="从 Cookie-Editor 导出 JSON 后粘贴">${escapeHtml(data.cookies || "")}</textarea>
-            </label>
-          </div>
-        </div>`;
-    }
-
     function escapeHtml(text) {
       return String(text || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
     }
     function escapeAttr(text) {
       return escapeHtml(text).replaceAll('"', "&quot;");
     }
-
     async function api(path, options = {}) {
       const resp = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
       const data = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(data.detail || data.message || "请求失败");
       return data;
     }
+    function isAdmin() {
+      return current && current.role === "admin";
+    }
+    function applyRole() {
+      document.querySelectorAll(".admin-only").forEach((el) => el.classList.toggle("hidden", !isAdmin()));
+      $("whoami").textContent = current ? `${current.username} · ${current.role === "admin" ? "管理员" : "普通用户"}` : "";
+    }
+    function showPage(name) {
+      page = name;
+      ["home", "tasks", "logs", "users"].forEach((key) => {
+        $("page-" + key).classList.toggle("hidden", key !== name);
+      });
+      document.querySelectorAll(".nav-btn").forEach((btn) => {
+        btn.classList.toggle("active", btn.dataset.page === name);
+      });
+      const titles = {
+        home: ["总览", "查看版本、状态和快捷操作"],
+        tasks: ["任务配置", "管理抖音账号、好友和发送模板"],
+        logs: ["运行日志", "任务输出会在这个页面自动刷新"],
+        users: ["用户管理", "管理员可以添加、改密和管理其他控制台账号"],
+      };
+      $("pageTitle").textContent = titles[name][0];
+      $("pageSub").textContent = titles[name][1];
+      if (name === "logs") loadLogs();
+      if (name === "users" && isAdmin()) loadUsers();
+    }
 
     async function doLogin(event) {
       event.preventDefault();
       $("loginError").textContent = "";
       try {
-        await api("/api/login", { method: "POST", body: JSON.stringify({ password: $("password").value }) });
-        $("login").classList.add("hidden");
-        toast("已进入控制台");
+        const data = await api("/api/login", {
+          method: "POST",
+          body: JSON.stringify({ username: $("loginUser").value, password: $("loginPass").value }),
+        });
+        current = data.user;
+        $("loginPage").classList.add("hidden");
+        $("app").classList.remove("hidden");
+        applyRole();
         await boot();
+        toast("欢迎，" + current.username);
       } catch (err) {
         $("loginError").textContent = err.message;
       }
       return false;
     }
+    async function doLogout() {
+      await api("/api/logout", { method: "POST", body: "{}" });
+      location.reload();
+    }
 
     function setBusy(busy, text) {
       $("liveDot").classList.toggle("busy", !!busy);
       $("runText").textContent = text;
-      $("runBtn").disabled = !!busy;
-      $("runBtn").textContent = busy ? "发送中..." : "立即续火花";
+      ["runBtn", "runBtnHome"].forEach((id) => {
+        if ($(id)) {
+          $(id).disabled = !!busy;
+          $(id).textContent = busy ? "发送中..." : "立即续火花";
+        }
+      });
     }
-
-    let pollBusy = false;
-
     async function checkStatus() {
       const data = await api("/api/status");
       $("localVersion").textContent = "v" + data.local_version;
@@ -204,23 +252,30 @@
       $("versionPill").textContent = "v" + data.local_version;
       $("cronText").textContent = data.cron;
       $("accountCount").textContent = String((data.accounts || []).length);
-      setBusy(data.running, data.run_message || (data.running ? "执行中" : "空闲"));
+      setBusy(data.running, data.run_message || "空闲");
       $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
       return data;
     }
-
+    function accountCard(data, index) {
+      return `<div class="account">
+        <div class="account-head"><strong>账号 ${index + 1}</strong>
+          <button class="btn-ghost mini admin-only ${isAdmin() ? "" : "hidden"}" onclick="removeAccount(${index})">删除</button>
+        </div>
+        <div class="grid two">
+          <label>用户名<input class="username" value="${escapeAttr(data.username || "")}" ${isAdmin() ? "" : "disabled"} /></label>
+          <label>编号 / 抖音号<input class="unique-id" value="${escapeAttr(data.unique_id || "")}" ${isAdmin() ? "" : "disabled"} /></label>
+          <label>目标好友（一行一个）<textarea class="targets" ${isAdmin() ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea></label>
+          <label>Cookie JSON<textarea class="cookies" ${isAdmin() ? "" : "disabled"}>${escapeHtml(data.cookies || "")}</textarea></label>
+        </div>
+      </div>`;
+    }
     async function loadConfig() {
       const cfg = await api("/api/config");
       $("cronHour").value = cfg.cron_hour;
       $("cronMinute").value = String(cfg.cron_minute).padStart(2, "0");
-      $("webPassword").value = cfg.web_password;
       $("messageTemplate").value = cfg.message_template;
       $("githubRepo").value = cfg.github_repo;
       window.__accounts = cfg.accounts.length ? cfg.accounts : [{ username: "账号1", unique_id: "", targets: [], cookies: "" }];
-      renderAccounts();
-    }
-
-    function renderAccounts() {
       $("accounts").innerHTML = window.__accounts.map(accountCard).join("");
     }
     function collectAccounts() {
@@ -234,111 +289,152 @@
     function addAccount() {
       window.__accounts = collectAccounts();
       window.__accounts.push({ username: "新账号", unique_id: "", targets: [], cookies: "" });
-      renderAccounts();
+      $("accounts").innerHTML = window.__accounts.map(accountCard).join("");
     }
     function removeAccount(index) {
       window.__accounts = collectAccounts();
       window.__accounts.splice(index, 1);
       if (!window.__accounts.length) addAccount();
-      else renderAccounts();
+      else $("accounts").innerHTML = window.__accounts.map(accountCard).join("");
     }
-
     async function saveConfig(silent = false) {
-      const body = {
-        cron_hour: Number($("cronHour").value || 9),
-        cron_minute: Number($("cronMinute").value || 0),
-        cron_second: 0,
-        tz: "Asia/Shanghai",
-        message_template: $("messageTemplate").value,
-        web_password: $("webPassword").value,
-        github_repo: $("githubRepo").value,
-        accounts: collectAccounts(),
-      };
-      await api("/api/config", { method: "POST", body: JSON.stringify(body) });
+      await api("/api/config", {
+        method: "POST",
+        body: JSON.stringify({
+          cron_hour: Number($("cronHour").value || 9),
+          cron_minute: Number($("cronMinute").value || 0),
+          message_template: $("messageTemplate").value,
+          github_repo: $("githubRepo").value,
+          accounts: collectAccounts(),
+        }),
+      });
       if (!silent) toast("配置已保存");
       await checkStatus();
     }
-
     async function runNow() {
       toast("正在启动任务...");
       const ok = await ask("立即续火花", "现在就会给配置里的好友发消息，确定继续？");
       if (!ok) return;
       try {
-        $("runBtn").disabled = true;
-        $("runBtn").textContent = "发送中...";
-        await saveConfig(true);
+        if (isAdmin()) await saveConfig(true);
         const data = await api("/api/run", { method: "POST", body: "{}" });
         toast(data.message || "任务已开始");
-        setBusy(true, "正在执行续火花任务");
+        showPage("logs");
         await loadLogs();
       } catch (err) {
         toast(err.message, "err");
-        $("runBtn").disabled = false;
-        $("runBtn").textContent = "立即续火花";
       }
     }
-
     async function doUpdate() {
-      const ok = await ask("从 GitHub 更新", "将覆盖服务器上的源码。配置文件不会被删。");
+      const ok = await ask("从 GitHub 更新", "将覆盖服务器源码，配置和用户数据会保留。");
       if (!ok) return;
       try {
         const data = await api("/api/update", { method: "POST", body: "{}" });
-        toast(data.message || "更新完成");
-        setTimeout(() => location.reload(), 1600);
+        toast(data.message);
+        setTimeout(() => location.reload(), 1500);
       } catch (err) {
         toast(err.message, "err");
       }
     }
-
     async function loadLogs() {
       const data = await api("/api/logs");
       $("logs").textContent = data.text || "暂无日志";
       $("logs").scrollTop = $("logs").scrollHeight;
     }
-
-    function startLogWatch() {
-      if (logTimer) return;
-      logTimer = setInterval(async () => {
-        try {
-          await loadLogs();
-          await checkStatus();
-        } catch (e) {}
-      }, 2000);
+    async function loadUsers() {
+      const data = await api("/api/users");
+      $("userList").innerHTML = data.users.map((u) => `
+        <div class="user-card">
+          <div class="account-head">
+            <strong>${escapeHtml(u.username)}</strong>
+            <span class="pill">${u.role === "admin" ? "管理员" : "普通用户"}</span>
+          </div>
+          <div class="grid two">
+            <label>重置密码<input data-user="${escapeAttr(u.username)}" class="reset-pass" type="password" placeholder="留空则不改" /></label>
+            <label>角色
+              <select data-user="${escapeAttr(u.username)}" class="reset-role">
+                <option value="user" ${u.role === "user" ? "selected" : ""}>普通用户</option>
+                <option value="admin" ${u.role === "admin" ? "selected" : ""}>管理员</option>
+              </select>
+            </label>
+            <button class="btn-ghost" onclick="saveUser('${escapeAttr(u.username)}')">保存这个账户</button>
+            <button class="btn-run" onclick="removeUser('${escapeAttr(u.username)}')">删除账户</button>
+          </div>
+        </div>`).join("");
     }
-    function stopLogWatch() {
-      if (!logTimer) return;
-      clearInterval(logTimer);
-      logTimer = null;
+    async function createUser() {
+      try {
+        await api("/api/users", {
+          method: "POST",
+          body: JSON.stringify({
+            username: $("newUsername").value,
+            password: $("newPassword").value,
+            role: $("newRole").value,
+          }),
+        });
+        toast("已添加账户");
+        $("newUsername").value = "";
+        $("newPassword").value = "";
+        await loadUsers();
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
-
+    async function saveUser(username) {
+      const pass = document.querySelector(`.reset-pass[data-user="${username}"]`)?.value || "";
+      const role = document.querySelector(`.reset-role[data-user="${username}"]`)?.value || "user";
+      try {
+        await api("/api/users/update", { method: "POST", body: JSON.stringify({ username, password: pass, role }) });
+        toast("账户已更新");
+        await loadUsers();
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function removeUser(username) {
+      const ok = await ask("删除账户", "确定删除 " + username + " 吗？");
+      if (!ok) return;
+      try {
+        await api("/api/users/delete", { method: "POST", body: JSON.stringify({ username }) });
+        toast("已删除");
+        await loadUsers();
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
     async function refreshAll() {
       await checkStatus();
-      await loadLogs();
-      toast("状态已刷新");
+      if (page === "logs") await loadLogs();
+      if (page === "users") await loadUsers();
+      toast("已刷新");
     }
-
     async function boot() {
       await checkStatus();
       await loadConfig();
-      await loadLogs();
+      showPage("home");
       setInterval(async () => {
         if (pollBusy) return;
         pollBusy = true;
         try {
           await checkStatus();
-          await loadLogs();
+          if (page === "logs") await loadLogs();
         } catch (e) {}
         pollBusy = false;
       }, 2000);
     }
-
     (async () => {
       try {
         const me = await api("/api/me");
-        if (!me.authed) $("login").classList.remove("hidden");
-        else await boot();
+        if (!me.authed) {
+          $("loginPage").classList.remove("hidden");
+        } else {
+          current = me.user;
+          $("app").classList.remove("hidden");
+          applyRole();
+          await boot();
+        }
       } catch (e) {
-        $("login").classList.remove("hidden");
+        $("loginPage").classList.remove("hidden");
       }
     })();
   </script>
