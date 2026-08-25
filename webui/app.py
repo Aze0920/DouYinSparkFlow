@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -51,6 +51,7 @@ from webui.cards import (
     list_public_cards,
     public_card,
 )
+from webui.notify import load_notify, notify_event, public_notify, save_notify, send_wechat, verify_wechat_signature
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
@@ -98,6 +99,8 @@ async def log_api_calls(request: Request, call_next):
         "/logs",
         "/users",
         "/cards",
+        "/settings",
+        "/api/wechat/callback",
     } or path.startswith("/static/")
     if not quiet:
         logger.info("请求 %s %s", request.method, path)
@@ -366,6 +369,7 @@ def index(request: Request):
 @app.get("/logs", response_class=HTMLResponse)
 @app.get("/users", response_class=HTMLResponse)
 @app.get("/cards", response_class=HTMLResponse)
+@app.get("/settings", response_class=HTMLResponse)
 def spa_pages(request: Request):
     return spa_index(request)
 
@@ -582,6 +586,45 @@ def delete_card_api(request: Request, payload: dict | None = None):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "cards": list_public_cards()}
+
+
+@app.get("/api/settings/notify")
+def get_notify_settings(request: Request):
+    require_admin(request)
+    return {"ok": True, **public_notify()}
+
+
+@app.post("/api/settings/notify")
+def save_notify_settings(request: Request, payload: dict | None = None):
+    admin = require_admin(request)
+    data = save_notify(payload or {})
+    logger.info("已保存推送设置 admin=%s enabled=%s", admin.get("username"), (data.get("wechat") or {}).get("enabled"))
+    return {"ok": True, **public_notify(data)}
+
+
+@app.post("/api/settings/notify/test")
+def test_notify_settings(request: Request):
+    require_admin(request)
+    try:
+        send_wechat("test", "SparkFlow 测试推送", "公众号消息通道正常")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "message": "测试消息已发送"}
+
+
+@app.api_route("/api/wechat/callback", methods=["GET", "POST"])
+async def wechat_callback(request: Request):
+    signature = request.query_params.get("signature") or ""
+    timestamp = request.query_params.get("timestamp") or ""
+    nonce = request.query_params.get("nonce") or ""
+    echostr = request.query_params.get("echostr") or ""
+    if request.method == "GET":
+        if verify_wechat_signature(signature, timestamp, nonce):
+            return PlainTextResponse(echostr)
+        raise HTTPException(status_code=403, detail="微信签名校验失败")
+    if signature and not verify_wechat_signature(signature, timestamp, nonce):
+        raise HTTPException(status_code=403, detail="微信签名校验失败")
+    return PlainTextResponse("success")
 
 
 @app.get("/api/status")
@@ -888,15 +931,22 @@ def check_account_cookie(request: Request, payload: dict | None = None):
         result["cookie_status"] = "bad"
 
     tasks = read_tasks(env)
+    old_status = ""
+    account_name = unique_id
     for index, item in enumerate(tasks):
         if str(item.get("unique_id") or "").strip() == unique_id:
+            old_status = str(item.get("cookie_status") or "").strip()
+            account_name = str(item.get("username") or unique_id)
             item["cookie_status"] = result.get("cookie_status") or "bad"
             got_name = str(result.get("username") or "").strip()
             if result.get("cookie_status") == "ok" and got_name and got_name != "抖音账号":
                 item["username"] = got_name
+                account_name = got_name
             tasks[index] = item
             write_env({"TASKS": tasks})
             break
+    if result.get("cookie_status") == "bad" and old_status != "bad":
+        notify_event("cookie_offline", "抖音账号掉线", f"{account_name} {unique_id}")
     logger.info(
         "检测账号 Cookie unique_id=%s valid=%s mismatch=%s got=%s",
         unique_id,
@@ -1042,13 +1092,17 @@ def _run_task(unique_ids=None):
             fh.write(f"\n----- 手动执行 exit={proc.returncode} -----\n")
             fh.write(extra[-8000:])
         _run_state["message"] = "执行完成" if proc.returncode == 0 else f"执行失败，退出码 {proc.returncode}"
+        names_text = "、".join(ids) if ids else "全部账号"
         if proc.returncode == 0:
             logger.info("续火花任务执行完成")
+            notify_event("task_done", "续火花完成", names_text)
         else:
             logger.error("续火花任务失败 exit=%s", proc.returncode)
+            notify_event("task_fail", "续火花失败", f"退出码 {proc.returncode}")
     except Exception as exc:
         _run_state["message"] = f"执行异常：{exc}"
         logger.exception("续火花任务异常")
+        notify_event("task_fail", "续火花异常", str(exc))
     finally:
         _run_state["running"] = False
         _run_state["running_ids"] = []

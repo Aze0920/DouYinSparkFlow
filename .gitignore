@@ -9,3 +9,4 @@ usersData.json
 config/.env
 config/users.json
 config/cards.json
+config/notify.json

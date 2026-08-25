@@ -168,6 +168,59 @@ body.spark-locked .spark-action {
   word-break: break-all;
 }
 .card-fresh { outline: 1px solid rgba(79, 210, 165, 0.55); }
+.key-result {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  margin-top: 12px;
+}
+.key-result pre {
+  flex: 1;
+  margin: 0;
+  min-height: 0;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+  background: #070b12;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1.5;
+  font-family: Consolas, "Courier New", monospace;
+}
+.key-result button { flex-shrink: 0; align-self: center; }
+.key-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 16px;
+}
+.key-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+.key-row .card-code { min-width: 220px; }
+.key-meta {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+}
+.key-actions { display: flex; gap: 8px; flex-shrink: 0; }
+.key-actions button { width: auto; }
+.check-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+.check-line input { width: auto; margin: 0; }
 .accounts-grid, .users-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
@@ -344,4 +397,10 @@ body.spark-locked .spark-action {
   }
   .main { margin-left: 0; height: auto; overflow: visible; }
   .log-box { height: 42vh; min-height: 200px; }
+  .key-row {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .key-row .card-code { min-width: 0; width: 100%; }
+  .key-meta { width: 100%; }
 }

@@ -112,6 +112,7 @@
       <a class="nav-btn" href="/logs" data-page="logs" onclick="return navTo(event, 'logs')">运行日志</a>
       <a class="nav-btn admin-only hidden" href="/users" data-page="users" onclick="return navTo(event, 'users')">用户管理</a>
       <a class="nav-btn admin-only hidden" href="/cards" data-page="cards" onclick="return navTo(event, 'cards')">卡密管理</a>
+      <a class="nav-btn admin-only hidden" href="/settings" data-page="settings" onclick="return navTo(event, 'settings')">设置</a>
       <div class="sidebar-foot">
         <div id="whoami">未登录</div>
         <button class="btn-ghost mini" onclick="doLogout()">退出登录</button>
@@ -214,8 +215,9 @@
         <section class="panel">
           <div class="panel-head">
             <h2>生成卡密</h2>
+            <button class="btn-ghost" type="button" onclick="return navTo(event, 'settings')">设置</button>
           </div>
-          <p class="sub">默认 1 天、可添加 1 个抖音账号。生成后请立刻复制发给用户，一张卡密只能注册一次。</p>
+          <p class="sub">默认 1 天、可添加 1 个抖音账号。一张卡密只能注册一次。生成后可用右侧复制按钮发给用户。</p>
           <div class="grid two">
             <label>有效天数<input id="cardDays" type="number" min="1" max="3650" value="1" /></label>
             <label>可添加账号数<input id="cardMaxAccounts" type="number" min="1" max="100" value="1" /></label>
@@ -223,8 +225,55 @@
             <label>备注<input id="cardNote" placeholder="可选，例如 7天体验" /></label>
             <label class="span-2">&nbsp;<button class="btn-primary" onclick="generateCards()">生成卡密</button></label>
           </div>
-          <pre class="log-box hidden" id="newCardCodes"></pre>
-          <div id="cardList" class="users-grid"></div>
+          <div class="key-result hidden" id="newCardWrap">
+            <pre id="newCardCodes"></pre>
+            <button class="btn-ghost" type="button" onclick="copyNewCards()">复制</button>
+          </div>
+          <div id="cardList" class="key-list"></div>
+        </section>
+      </section>
+
+      <section id="page-settings" class="hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>微信公众号</h2>
+            <span class="ck-status" id="wxBindStatus">未绑定</span>
+          </div>
+          <p class="sub">填好 AppID、AppSecret、Token 后，把公众号后台的服务器 URL 配成当前站点的 <code>/api/wechat/callback</code>。扫码绑定会后续接上，现在先把管理员 OpenID 填进来就能推送。</p>
+          <div class="grid two">
+            <label>AppID<input id="wxAppId" placeholder="wx 开头的公众号 AppID" autocomplete="off" /></label>
+            <label>AppSecret<input id="wxAppSecret" type="password" placeholder="公众号 AppSecret" autocomplete="off" /></label>
+            <label>Token<input id="wxToken" placeholder="服务器配置里的 Token" autocomplete="off" /></label>
+            <label>EncodingAESKey<input id="wxAesKey" placeholder="可选，安全模式才需要" autocomplete="off" /></label>
+            <label class="span-2">管理员 OpenID<input id="wxOpenId" placeholder="关注公众号后的 OpenID" autocomplete="off" /></label>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>消息推送</h2>
+          </div>
+          <p class="sub">用公众号模板消息推送。模板建议包含 thing1 / time2 / thing3，或旧版 first / keyword1 / keyword2 / remark。</p>
+          <div class="grid two">
+            <label class="check-line"><input id="wxEnabled" type="checkbox" /> 启用公众号推送</label>
+            <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
+            <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
+            <label class="check-line"><input id="wxEventOffline" type="checkbox" checked /> 抖音账号掉线</label>
+            <label>完成模板 ID<input id="wxTplDone" placeholder="续火花完成" autocomplete="off" /></label>
+            <label>失败模板 ID<input id="wxTplFail" placeholder="续火花失败" autocomplete="off" /></label>
+            <label>掉线模板 ID<input id="wxTplOffline" placeholder="Cookie 失效 / 抖音掉线" autocomplete="off" /></label>
+            <label>模板字段
+              <select id="wxTplStyle">
+                <option value="thing">新版 thing1 / time2 / thing3</option>
+                <option value="keyword">旧版 first / keyword / remark</option>
+              </select>
+            </label>
+            <label class="span-2">
+              <span class="row">
+                <button class="btn-primary" type="button" onclick="saveNotifySettings()">保存设置</button>
+                <button class="btn-ghost" type="button" onclick="testNotifySettings()">发送测试</button>
+              </span>
+            </label>
+          </div>
         </section>
       </section>
     </main>
@@ -346,13 +395,14 @@
       }
     }
     function pagePath(name) {
-      return { home: "/", logs: "/logs", users: "/users", cards: "/cards" }[name] || "/";
+      return { home: "/", logs: "/logs", users: "/users", cards: "/cards", settings: "/settings" }[name] || "/";
     }
     function pathToPage(pathname) {
       const p = String(pathname || "/").replace(/\/+$/, "") || "/";
       if (p === "/logs") return "logs";
       if (p === "/users") return "users";
       if (p === "/cards") return "cards";
+      if (p === "/settings") return "settings";
       return "home";
     }
     function navTo(event, name) {
@@ -364,10 +414,10 @@
     function showPage(name, opts) {
       opts = opts || {};
       if (name === "tasks") name = "home";
-      if (!["home", "logs", "users", "cards"].includes(name)) name = "home";
-      if ((name === "users" || name === "cards") && current && !isAdmin()) name = "home";
+      if (!["home", "logs", "users", "cards", "settings"].includes(name)) name = "home";
+      if ((name === "users" || name === "cards" || name === "settings") && current && !isAdmin()) name = "home";
       page = name;
-      ["home", "logs", "users", "cards"].forEach((key) => {
+      ["home", "logs", "users", "cards", "settings"].forEach((key) => {
         $("page-" + key).classList.toggle("hidden", key !== name);
       });
       document.querySelectorAll(".nav-btn").forEach((btn) => {
@@ -377,7 +427,8 @@
         home: ["总览", "当前账号、版本，以及抖音任务配置"],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "管理员永久有效。普通用户的天数和账号额度由卡密或这里指定"],
-        cards: ["卡密管理", "生成卡密，设置有效天数和可添加的抖音账号数"],
+        cards: ["卡密管理", "一排一张卡密，生成后可复制发给用户"],
+        settings: ["设置", "绑定微信公众号，并推送任务完成、抖音掉线等消息"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
@@ -390,6 +441,7 @@
       if (name === "logs") loadLogs();
       if (name === "users" && isAdmin()) loadUsers();
       if (name === "cards" && isAdmin()) loadCards();
+      if (name === "settings" && isAdmin()) loadNotifySettings();
     }
     window.addEventListener("popstate", () => {
       showPage(pathToPage(location.pathname), { skipHistory: true });
@@ -1318,22 +1370,25 @@
       if ($("cardList")) {
         $("cardList").innerHTML = (cards || []).map((item) => {
           const used = !!item.used;
-          return `<div class="user-card ${createdCodes.has(item.code) ? "card-fresh" : ""}">
-            <div class="account-head">
-              <div>
-                <strong class="card-code">${escapeHtml(item.code)}</strong>
-                <div class="account-id">${item.days} 天 · ${item.max_accounts} 个账号${item.note ? " · " + escapeHtml(item.note) : ""}</div>
-              </div>
-              <span class="ck-status ${used ? "ck-bad" : "ck-ok"}">${escapeHtml(item.status_label || "")}</span>
-            </div>
-            <div class="account-id">生成 ${escapeHtml(item.created_label || "-")}${used && item.used_label ? " · 使用 " + escapeHtml(item.used_label) : ""}</div>
-            <div class="account-actions">
-              <button class="btn-ghost" type="button" onclick="copyText('${escapeAttr(item.code)}')">复制</button>
-              ${used ? "" : `<button class="btn-run" type="button" onclick="removeCard('${escapeAttr(item.code)}')">删除</button>`}
+          return `<div class="key-row ${createdCodes.has(item.code) ? "card-fresh" : ""}">
+            <strong class="card-code">${escapeHtml(item.code)}</strong>
+            <div class="key-meta">${item.days} 天 · ${item.max_accounts} 个账号${item.note ? " · " + escapeHtml(item.note) : ""} · 生成 ${escapeHtml(item.created_label || "-")}${used && item.used_label ? " · 使用 " + escapeHtml(item.used_label) : ""}</div>
+            <span class="ck-status ${used ? "ck-bad" : "ck-ok"}">${escapeHtml(item.status_label || "")}</span>
+            <div class="key-actions">
+              <button class="btn-ghost mini" type="button" onclick="copyText('${escapeAttr(item.code)}')">复制</button>
+              ${used ? "" : `<button class="btn-run mini" type="button" onclick="removeCard('${escapeAttr(item.code)}')">删除</button>`}
             </div>
           </div>`;
-        }).join("");
+        }).join("") || `<p class="sub">还没有卡密。填好天数和账号数后点「生成卡密」。</p>`;
       }
+    }
+    function copyNewCards() {
+      const text = ($("newCardCodes") && $("newCardCodes").textContent) || "";
+      if (!text.trim()) {
+        toast("还没有可复制的卡密", "err");
+        return;
+      }
+      copyText(text);
     }
     async function loadCards() {
       const data = await api("/api/cards");
@@ -1352,15 +1407,10 @@
         });
         const created = data.created || [];
         const codes = created.map((item) => item.code).join("\n");
-        if ($("newCardCodes")) {
-          $("newCardCodes").textContent = codes;
-          $("newCardCodes").classList.toggle("hidden", !codes);
-        }
+        if ($("newCardCodes")) $("newCardCodes").textContent = codes;
+        if ($("newCardWrap")) $("newCardWrap").classList.toggle("hidden", !codes);
         renderCards(data.cards || [], created);
-        if (codes) {
-          try { await navigator.clipboard.writeText(codes); } catch (e) {}
-          toast("已生成 " + created.length + " 张卡密，并复制到剪贴板");
-        }
+        toast("已生成 " + created.length + " 张卡密");
       } catch (err) {
         toast(err.message, "err");
       }
@@ -1381,6 +1431,70 @@
       if (page === "logs") await loadLogs();
       if (page === "users") await loadUsers();
       if (page === "cards") await loadCards();
+      if (page === "settings") await loadNotifySettings();
+    }
+    function fillNotifySettings(data) {
+      const wx = data.wechat || {};
+      const events = data.events || {};
+      if ($("wxAppId")) $("wxAppId").value = wx.app_id || "";
+      if ($("wxAppSecret")) $("wxAppSecret").value = wx.app_secret || "";
+      if ($("wxToken")) $("wxToken").value = wx.token || "";
+      if ($("wxAesKey")) $("wxAesKey").value = wx.aes_key || "";
+      if ($("wxOpenId")) $("wxOpenId").value = wx.admin_openid || "";
+      if ($("wxTplDone")) $("wxTplDone").value = wx.tpl_task_done || "";
+      if ($("wxTplFail")) $("wxTplFail").value = wx.tpl_task_fail || "";
+      if ($("wxTplOffline")) $("wxTplOffline").value = wx.tpl_cookie_offline || "";
+      if ($("wxTplStyle")) $("wxTplStyle").value = wx.tpl_style === "keyword" ? "keyword" : "thing";
+      if ($("wxEnabled")) $("wxEnabled").checked = !!wx.enabled;
+      if ($("wxEventDone")) $("wxEventDone").checked = events.task_done !== false;
+      if ($("wxEventFail")) $("wxEventFail").checked = events.task_fail !== false;
+      if ($("wxEventOffline")) $("wxEventOffline").checked = events.cookie_offline !== false;
+      if ($("wxBindStatus")) {
+        $("wxBindStatus").textContent = data.ready ? "可推送" : (data.bound ? "已填 OpenID" : "未绑定");
+        $("wxBindStatus").className = "ck-status " + (data.ready ? "ck-ok" : "ck-unknown");
+      }
+    }
+    async function loadNotifySettings() {
+      const data = await api("/api/settings/notify");
+      fillNotifySettings(data);
+    }
+    async function saveNotifySettings() {
+      try {
+        const data = await api("/api/settings/notify", {
+          method: "POST",
+          body: JSON.stringify({
+            wechat: {
+              enabled: !!( $("wxEnabled") && $("wxEnabled").checked ),
+              app_id: ($("wxAppId") && $("wxAppId").value) || "",
+              app_secret: ($("wxAppSecret") && $("wxAppSecret").value) || "",
+              token: ($("wxToken") && $("wxToken").value) || "",
+              aes_key: ($("wxAesKey") && $("wxAesKey").value) || "",
+              admin_openid: ($("wxOpenId") && $("wxOpenId").value) || "",
+              tpl_task_done: ($("wxTplDone") && $("wxTplDone").value) || "",
+              tpl_task_fail: ($("wxTplFail") && $("wxTplFail").value) || "",
+              tpl_cookie_offline: ($("wxTplOffline") && $("wxTplOffline").value) || "",
+              tpl_style: ($("wxTplStyle") && $("wxTplStyle").value) || "thing",
+            },
+            events: {
+              task_done: !!( $("wxEventDone") && $("wxEventDone").checked ),
+              task_fail: !!( $("wxEventFail") && $("wxEventFail").checked ),
+              cookie_offline: !!( $("wxEventOffline") && $("wxEventOffline").checked ),
+            },
+          }),
+        });
+        fillNotifySettings(data);
+        toast("设置已保存");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function testNotifySettings() {
+      try {
+        const data = await api("/api/settings/notify/test", { method: "POST", body: "{}" });
+        toast(data.message || "测试消息已发送");
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
     async function boot() {
       await checkStatus();
