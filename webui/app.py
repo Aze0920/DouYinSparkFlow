@@ -18,6 +18,7 @@ from webui.envfile import cookie_key, env_path, load_env, parse_accounts, write_
 from webui.qr_login import (
     cancel_qr_login,
     choose_verify_method,
+    live_page_action,
     snapshot as qr_snapshot,
     start_qr_login,
     submit_verify_code,
@@ -71,6 +72,7 @@ async def log_api_calls(request: Request, call_next):
         "/api/logs",
         "/api/me",
         "/api/douyin/login/status",
+        "/api/douyin/login/live",
         "/favicon.ico",
         "/",
     } or path.startswith("/static/")
@@ -640,6 +642,17 @@ def douyin_login_verify(request: Request, payload: dict | None = None):
     if action in {"resend", "sent", "back"}:
         return {"ok": True, **verify_page_action(action)}
     raise HTTPException(status_code=400, detail="未知验证动作")
+
+
+@app.post("/api/douyin/login/live")
+def douyin_login_live(request: Request, payload: dict | None = None):
+    require_admin(request)
+    payload = payload or {}
+    action = str(payload.get("action") or payload.get("type") or "").strip()
+    result = live_page_action(action, payload)
+    if not result.get("ok"):
+        raise HTTPException(status_code=400, detail=result.get("message") or "未知操作")
+    return result
 
 
 @app.post("/api/run")

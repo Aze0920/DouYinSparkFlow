@@ -50,13 +50,21 @@ _state: dict[str, Any] = {
     "verify_uplink_content": "",
     "verify_error": "",
     "verify_resend_at": 0,
+    "live_image": "",
+    "live_w": 0,
+    "live_h": 0,
 }
+_live_box = {"x": 0, "y": 0, "w": 0, "h": 0}
 
 
 def _set(**kwargs):
     with _lock:
         _state.update(kwargs)
-    note = {k: v for k, v in kwargs.items() if k not in {"qr_base64", "qr_url", "cookies", "verify_image"}}
+    note = {
+        k: v
+        for k, v in kwargs.items()
+        if k not in {"qr_base64", "qr_url", "cookies", "verify_image", "live_image", "live_w", "live_h"}
+    }
     if note:
         logger.info("扫码状态 %s", note)
 
@@ -83,6 +91,9 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "verify_uplink_content": _state.get("verify_uplink_content") or "",
             "verify_error": _state.get("verify_error") or "",
             "verify_resend_left": max(0, int((_state.get("verify_resend_at") or 0) - time.time())),
+            "live_image": _state.get("live_image") or "",
+            "live_w": int(_state.get("live_w") or 0),
+            "live_h": int(_state.get("live_h") or 0),
         }
         if include_cookies and data["status"] == "success":
             data["cookies"] = _state.get("cookies") or []
@@ -701,6 +712,181 @@ def _clear_commands():
         _commands.clear()
 
 
+FIND_LIVE_CARD_JS = """() => {
+  const keys = [
+    "身份验证",
+    "接收短信验证码",
+    "发送短信验证",
+    "扫码登录",
+    "请输入验证码",
+    "我已发送",
+    "打开抖音App",
+    "打开「抖音APP」",
+    "登录后免费畅享",
+    "为保障账号安全",
+  ];
+  const ok = (r) => r.width >= 240 && r.height >= 160 && r.width <= 760 && r.height <= 960 && r.bottom > 8 && r.right > 8;
+  let best = null;
+  let bestArea = Infinity;
+  for (const el of document.querySelectorAll("div, section, article")) {
+    const t = (el.innerText || "").replace(/\\s+/g, " ");
+    if (!keys.some((k) => t.includes(k))) continue;
+    const r = el.getBoundingClientRect();
+    if (!ok(r)) continue;
+    const area = r.width * r.height;
+    if (area < bestArea) {
+      bestArea = area;
+      best = { x: r.x, y: r.y, w: r.width, h: r.height };
+    }
+  }
+  if (best) return best;
+  const qr = document.querySelector("#animate_qrcode_container, [class*='qrcode'], [class*='Qrcode'], [class*='qr-code']");
+  let p = qr;
+  for (let i = 0; i < 8 && p; i++) {
+    const r = p.getBoundingClientRect();
+    if (r.width >= 260 && r.height >= 240 && r.width <= 680 && r.height <= 860) {
+      return { x: r.x, y: r.y, w: r.width, h: r.height };
+    }
+    p = p.parentElement;
+  }
+  return null;
+}"""
+
+
+def _scope_offset(scope, page) -> tuple[float, float]:
+    if scope is page:
+        return 0.0, 0.0
+    try:
+        if scope == page.main_frame:
+            return 0.0, 0.0
+    except Exception:
+        pass
+    try:
+        box = scope.frame_element().bounding_box()
+        if box:
+            return float(box["x"]), float(box["y"])
+    except Exception:
+        pass
+    return 0.0, 0.0
+
+
+def _capture_live_card(page) -> bool:
+    global _live_box
+    best = None
+    best_area = 10**12
+    for scope in _iter_scopes(page):
+        try:
+            box = scope.evaluate(FIND_LIVE_CARD_JS)
+        except Exception:
+            continue
+        if not box:
+            continue
+        ox, oy = _scope_offset(scope, page)
+        cand = {
+            "x": float(box.get("x") or 0) + ox,
+            "y": float(box.get("y") or 0) + oy,
+            "w": float(box.get("w") or 0),
+            "h": float(box.get("h") or 0),
+        }
+        area = cand["w"] * cand["h"]
+        if cand["w"] < 8 or cand["h"] < 8:
+            continue
+        if area < best_area:
+            best_area = area
+            best = cand
+    if not best:
+        return False
+    vp = page.viewport_size or {"width": 1280, "height": 860}
+    x = max(0.0, min(best["x"], float(vp["width"]) - 2))
+    y = max(0.0, min(best["y"], float(vp["height"]) - 2))
+    w = max(8.0, min(best["w"], float(vp["width"]) - x))
+    h = max(8.0, min(best["h"], float(vp["height"]) - y))
+    clip = {"x": int(x), "y": int(y), "width": int(w), "height": int(h)}
+    try:
+        raw = page.screenshot(clip=clip, type="png")
+    except Exception:
+        logger.debug("截取抖音卡片失败 clip=%s", clip, exc_info=True)
+        return False
+    with _lock:
+        _live_box.update({"x": x, "y": y, "w": w, "h": h})
+    _set(live_image=base64.b64encode(raw).decode("ascii"), live_w=int(w), live_h=int(h))
+    return True
+
+
+def _do_live_click(page, rx, ry) -> bool:
+    with _lock:
+        box = dict(_live_box)
+    if float(box.get("w") or 0) <= 0 or float(box.get("h") or 0) <= 0:
+        logger.warning("同步点击失败：还没有抖音卡片坐标")
+        return False
+    try:
+        ratio_x = max(0.0, min(1.0, float(rx)))
+        ratio_y = max(0.0, min(1.0, float(ry)))
+    except (TypeError, ValueError):
+        return False
+    x = box["x"] + ratio_x * box["w"]
+    y = box["y"] + ratio_y * box["h"]
+    logger.info("同步点击抖音卡片 x=%.1f y=%.1f", x, y)
+    try:
+        page.mouse.click(x, y)
+    except Exception:
+        logger.exception("同步点击抖音卡片失败")
+        return False
+    return True
+
+
+def _playwright_key(key: str) -> str:
+    raw = str(key or "").strip()
+    aliases = {" ": "Space"}
+    raw = aliases.get(raw, raw)
+    allowed = {
+        "Backspace",
+        "Enter",
+        "Escape",
+        "Delete",
+        "ArrowLeft",
+        "ArrowRight",
+        "ArrowUp",
+        "ArrowDown",
+        "Home",
+        "End",
+        "Space",
+        "Control+A",
+        "Control+a",
+    }
+    return raw if raw in allowed else ""
+
+
+def _handle_live_command(page, cmd: dict[str, Any]) -> None:
+    action = str(cmd.get("type") or "")
+    if action == "live_click":
+        _do_live_click(page, cmd.get("x"), cmd.get("y"))
+        time.sleep(0.22)
+        _capture_live_card(page)
+        return
+    if action == "live_type":
+        text = str(cmd.get("text") or "")[:120]
+        if text:
+            logger.info("同步输入抖音卡片 len=%s", len(text))
+            try:
+                page.keyboard.type(text, delay=18)
+            except Exception:
+                logger.exception("同步输入失败")
+        time.sleep(0.12)
+        _capture_live_card(page)
+        return
+    if action == "live_key":
+        key = _playwright_key(str(cmd.get("key") or ""))
+        if key:
+            logger.info("同步按键 %s", key)
+            try:
+                page.keyboard.press(key)
+            except Exception:
+                logger.exception("同步按键失败")
+        time.sleep(0.12)
+        _capture_live_card(page)
+
+
 def _status() -> str:
     with _lock:
         return str(_state.get("status") or "idle")
@@ -1015,11 +1201,13 @@ def _wait_chat_qr(page) -> str:
     try:
         page.wait_for_selector("text=扫码登录", timeout=12000)
         logger.info("已出现扫码登录弹窗")
+        _capture_live_card(page)
     except Exception:
         logger.warning("12 秒内没等到「扫码登录」文案，继续取二维码地址")
     for attempt in range(12):
         if _stop.is_set():
             return ""
+        _capture_live_card(page)
         qr_url = _extract_qr_url(page)
         if qr_url:
             return qr_url
@@ -1152,6 +1340,9 @@ def _worker(replace_index: int):
             verify_uplink_from="",
             verify_uplink_to="",
             verify_uplink_content="",
+            live_image="",
+            live_w=0,
+            live_h=0,
         )
         logger.info("扫码线程启动 replace_index=%s", replace_index)
         logger.info("正在启动浏览器")
@@ -1216,14 +1407,22 @@ def _worker(replace_index: int):
         deadline = time.time() + 180
         last_shot = 0
         last_cookie_log = 0
+        last_live = 0
         missing_qr = 0
         had_qr = bool(qr_url)
         verify_gone = 0
+        _capture_live_card(page)
         while time.time() < deadline and not _stop.is_set():
-            cmd = _pop_command()
-            if cmd:
+            while True:
+                cmd = _pop_command()
+                if not cmd:
+                    break
                 action = str(cmd.get("type") or "")
-                if action == "choose":
+                if action.startswith("live_"):
+                    _handle_live_command(page, cmd)
+                    deadline = max(deadline, time.time() + 180)
+                    last_live = time.time()
+                elif action == "choose":
                     _click_verify_method(page, str(cmd.get("id") or ""), str(cmd.get("label") or ""))
                     time.sleep(1.6)
                     deadline = max(deadline, time.time() + 180)
@@ -1254,12 +1453,13 @@ def _worker(replace_index: int):
             in_verify = bool(ui.get("visible"))
             if in_verify:
                 deadline = max(deadline, time.time() + 240)
-                logger.info(
-                    "已进入身份验证 methods=%s account=%s info=%s",
-                    ui.get("methods"),
-                    ui.get("account"),
-                    (ui.get("info") or "")[:180],
-                )
+                if _status() != "verify":
+                    logger.info(
+                        "已进入身份验证 methods=%s account=%s info=%s",
+                        ui.get("methods"),
+                        ui.get("account"),
+                        (ui.get("info") or "")[:180],
+                    )
                 _publish_verify(ui, sniff)
             elif _status() == "verify":
                 _publish_verify(ui, sniff)
@@ -1330,7 +1530,10 @@ def _worker(replace_index: int):
                     missing_qr += 1
                     logger.info("二维码地址已消失 %s 次", missing_qr)
                 last_shot = now
-            time.sleep(1)
+            if now - last_live >= 0.7:
+                _capture_live_card(page)
+                last_live = now
+            time.sleep(0.45)
         else:
             if _stop.is_set():
                 _set(status="idle", message="", qr_base64="")
@@ -1375,6 +1578,7 @@ def _worker(replace_index: int):
             cookies=cookies,
             qr_base64="",
             qr_url="",
+            live_image="",
         )
     except Exception as exc:
         logger.exception("扫码登录线程异常")
@@ -1401,6 +1605,8 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
         _thread.join(timeout=8)
     _stop.clear()
     _clear_commands()
+    with _lock:
+        _live_box.update({"x": 0, "y": 0, "w": 0, "h": 0})
     _set(
         status="loading",
         message="正在生成二维码…",
@@ -1420,6 +1626,9 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
         verify_uplink_from="",
         verify_uplink_to="",
         verify_uplink_content="",
+        live_image="",
+        live_w=0,
+        live_h=0,
     )
     _thread = threading.Thread(target=_worker, args=(replace_index,), daemon=True)
     _thread.start()
@@ -1445,8 +1654,29 @@ def cancel_qr_login() -> dict[str, Any]:
         verify_uplink_from="",
         verify_uplink_to="",
         verify_uplink_content="",
+        live_image="",
+        live_w=0,
+        live_h=0,
     )
     return snapshot()
+
+
+def live_page_action(action: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = payload or {}
+    kind = str(action or "").strip()
+    if kind == "click":
+        _push_command({"type": "live_click", "x": payload.get("x"), "y": payload.get("y")})
+    elif kind == "type":
+        text = str(payload.get("text") or "")[:120]
+        if text:
+            _push_command({"type": "live_type", "text": text})
+    elif kind in {"key", "press"}:
+        key = str(payload.get("key") or "")
+        if key:
+            _push_command({"type": "live_key", "key": key})
+    else:
+        return {"ok": False, "message": "未知操作"}
+    return {"ok": True}
 
 
 def choose_verify_method(method_id: str, label: str = "") -> dict[str, Any]:
