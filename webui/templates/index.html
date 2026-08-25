@@ -21,9 +21,10 @@
   <div id="qrModal" class="modal-mask hidden">
     <div class="modal-card qr-card">
       <h3 id="qrTitle">抖音扫码登录</h3>
-      <p id="qrHint" class="sub">正在把抖音登录卡片贴过来…</p>
+      <p id="qrHint" class="sub">请用抖音 App 扫码，并在手机上确认登录</p>
       <div id="liveWrap" class="live-wrap">
-        <div id="qrLoading">正在打开抖音登录卡片…</div>
+        <div id="qrLoading">正在生成二维码…</div>
+        <img id="qrImage" class="qr-image hidden" alt="登录二维码" referrerpolicy="no-referrer" />
         <iframe id="liveFrame" class="live-frame hidden" sandbox="allow-same-origin allow-forms" title="抖音登录卡片"></iframe>
       </div>
       <div class="modal-actions" id="qrLoginActions">
@@ -381,38 +382,59 @@
         qrTimer = null;
       }
     }
+    function qrSrc(data) {
+      const url = data && data.qr_url;
+      const b64 = data && data.qr_base64;
+      if (url) return url;
+      if (b64) return b64.startsWith("data:") ? b64 : ("data:image/png;base64," + b64);
+      return "";
+    }
     function showLiveCard(data) {
       const frame = $("liveFrame");
+      const img = $("qrImage");
       const loading = $("qrLoading");
       const title = $("qrTitle");
       const hint = $("qrHint");
       if (!frame || !loading) return;
-      if (data && data.live_html) {
+      const isVerify = data && data.status === "verify";
+      if (isVerify && data.live_html) {
         if (Date.now() < liveQuietUntil && frame.dataset.hash) return;
         const hash = data.live_hash || String(data.live_html.length);
         if (frame.dataset.hash !== hash) {
           frame.dataset.hash = hash;
-          const w = Number(data.live_w) || 400;
-          const h = Number(data.live_h) || 520;
+          const w = Math.max(Number(data.live_w) || 0, 360);
+          const h = Math.max(Number(data.live_h) || 0, 420);
           frame.style.width = w + "px";
           frame.style.height = h + "px";
           frame.srcdoc = "<!DOCTYPE html><html><head><meta charset='utf-8'><style>html,body{margin:0;padding:0;overflow:hidden;background:#fff}</style></head><body>" + data.live_html + "</body></html>";
         }
         frame.classList.remove("hidden");
+        if (img) img.classList.add("hidden");
         loading.classList.add("hidden");
         if (title) title.classList.add("hidden");
         if (hint) hint.classList.add("hidden");
         return;
       }
-      if (title) title.classList.remove("hidden");
-      if (hint) hint.classList.remove("hidden");
-      if (data && (data.status === "loading" || data.status === "waiting" || data.status === "scanned" || data.status === "verify")) {
-        loading.textContent = (data && data.message) || "正在把抖音登录卡片贴过来…";
-        if (frame.classList.contains("hidden")) loading.classList.remove("hidden");
+      frame.classList.add("hidden");
+      if (title) {
+        title.classList.remove("hidden");
+        title.textContent = isVerify ? "身份验证" : "抖音扫码登录";
       }
+      if (hint) hint.classList.remove("hidden");
+      const src = qrSrc(data);
+      if (src && img) {
+        img.src = src;
+        img.classList.remove("hidden");
+        loading.classList.add("hidden");
+        return;
+      }
+      if (img) img.classList.add("hidden");
+      loading.classList.remove("hidden");
+      loading.textContent = (data && data.message) || "正在生成二维码…";
     }
     function resetLiveCard() {
       const frame = $("liveFrame");
+      const img = $("qrImage");
       const loading = $("qrLoading");
       const title = $("qrTitle");
       const hint = $("qrHint");
@@ -424,10 +446,14 @@
         frame.style.width = "";
         frame.style.height = "";
       }
+      if (img) {
+        img.src = "";
+        img.classList.add("hidden");
+      }
       if (title) title.classList.remove("hidden");
       if (hint) hint.classList.remove("hidden");
       if (loading) {
-        loading.textContent = "正在把抖音登录卡片贴过来…";
+        loading.textContent = "正在生成二维码…";
         loading.classList.remove("hidden");
       }
     }
@@ -547,7 +573,7 @@
       qrPollBusy = true;
       try {
         const data = await api("/api/douyin/login/status");
-        $("qrHint").textContent = data.message || "点下面这张抖音卡片，操作会同步到抖音页面";
+        $("qrHint").textContent = data.message || "请用抖音 App 扫码，并在手机上确认登录";
         $("qrTitle").textContent = data.status === "verify" ? "身份验证" : "抖音扫码登录";
         showLiveCard(data);
         if (data.status === "success") {
@@ -558,7 +584,9 @@
             ? "扫码失败，详细原因请看左侧「运行日志」"
             : (data.message || "二维码已失效");
           $("qrLoading").textContent = data.message || "二维码已失效";
-          if (!data.live_html) $("qrLoading").classList.remove("hidden");
+          if ($("qrImage")) $("qrImage").classList.add("hidden");
+          if ($("liveFrame")) $("liveFrame").classList.add("hidden");
+          $("qrLoading").classList.remove("hidden");
         }
       } catch (err) {
         stopQrPoll();
@@ -576,7 +604,7 @@
       $("qrTitle").textContent = "抖音扫码登录";
       $("qrHint").classList.remove("hidden");
       $("qrLoginActions").classList.remove("hidden");
-      $("qrHint").textContent = "点下面这张抖音卡片，操作会同步到抖音页面";
+      $("qrHint").textContent = "请用抖音 App 扫码，并在手机上确认登录";
       resetLiveCard();
       $("qrModal").classList.remove("hidden");
       try {

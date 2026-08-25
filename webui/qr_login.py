@@ -887,6 +887,7 @@ def _capture_live_card(page) -> bool:
         try:
             pack = scope.evaluate(FIND_LIVE_CARD_JS)
         except Exception:
+            logger.debug("抽取抖音卡片失败 scope=%s", getattr(scope, "url", ""), exc_info=True)
             continue
         if not pack or not pack.get("html"):
             continue
@@ -896,6 +897,7 @@ def _capture_live_card(page) -> bool:
             best_pack = pack
             best_scope = scope
     if not best_pack or not best_scope:
+        logger.debug("没有抓到抖音登录卡片 HTML url=%s frames=%s", getattr(page, "url", ""), len(getattr(page, "frames", []) or []))
         return False
     box = None
     try:

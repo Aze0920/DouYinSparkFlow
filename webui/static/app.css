@@ -150,12 +150,20 @@ button { cursor: pointer; }
 .qr-card { width: min(520px, calc(100% - 24px)); text-align: center; }
 .live-wrap {
   position: relative;
-  min-height: 120px;
+  min-height: 240px;
   display: grid;
   place-items: center;
   background: transparent;
   color: #555;
   margin: 8px 0 4px;
+}
+.qr-image {
+  width: 228px;
+  height: 228px;
+  object-fit: contain;
+  background: #fff;
+  padding: 10px;
+  border-radius: 16px;
 }
 .live-frame {
   border: 0;
