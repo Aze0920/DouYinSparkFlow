@@ -21,11 +21,10 @@
   <div id="qrModal" class="modal-mask hidden">
     <div class="modal-card qr-card">
       <h3 id="qrTitle">抖音扫码登录</h3>
-      <p id="qrHint" class="sub">点下面这张抖音卡片，操作会同步到抖音页面</p>
+      <p id="qrHint" class="sub">正在把抖音登录卡片贴过来…</p>
       <div id="liveWrap" class="live-wrap">
         <div id="qrLoading">正在打开抖音登录卡片…</div>
-        <img id="liveCard" class="live-card hidden" alt="抖音登录卡片" draggable="false" />
-        <input id="liveProxyInput" class="live-proxy" autocomplete="off" />
+        <iframe id="liveFrame" class="live-frame hidden" sandbox="allow-same-origin allow-forms" title="抖音登录卡片"></iframe>
       </div>
       <div class="modal-actions" id="qrLoginActions">
         <button class="btn-ghost" type="button" onclick="refreshQrLogin()">刷新二维码</button>
@@ -168,6 +167,7 @@
     let qrApplying = false;
     let qrPollBusy = false;
     let liveQueue = Promise.resolve();
+    let liveQuietUntil = 0;
     let githubCheckBusy = false;
     window.__accountCookies = {};
 
@@ -382,44 +382,67 @@
       }
     }
     function showLiveCard(data) {
-      const img = $("liveCard");
+      const frame = $("liveFrame");
       const loading = $("qrLoading");
-      if (!img || !loading) return;
-      if (data && data.live_image) {
-        const hash = String(data.live_image.length) + ":" + data.live_image.slice(0, 48);
-        if (img.dataset.hash !== hash) {
-          img.dataset.hash = hash;
-          img.src = "data:image/png;base64," + data.live_image;
+      const title = $("qrTitle");
+      const hint = $("qrHint");
+      if (!frame || !loading) return;
+      if (data && data.live_html) {
+        if (Date.now() < liveQuietUntil && frame.dataset.hash) return;
+        const hash = data.live_hash || String(data.live_html.length);
+        if (frame.dataset.hash !== hash) {
+          frame.dataset.hash = hash;
+          const w = Number(data.live_w) || 400;
+          const h = Number(data.live_h) || 520;
+          frame.style.width = w + "px";
+          frame.style.height = h + "px";
+          frame.srcdoc = "<!DOCTYPE html><html><head><meta charset='utf-8'><style>html,body{margin:0;padding:0;overflow:hidden;background:#fff}</style></head><body>" + data.live_html + "</body></html>";
         }
-        img.classList.remove("hidden");
+        frame.classList.remove("hidden");
         loading.classList.add("hidden");
+        if (title) title.classList.add("hidden");
+        if (hint) hint.classList.add("hidden");
         return;
       }
+      if (title) title.classList.remove("hidden");
+      if (hint) hint.classList.remove("hidden");
       if (data && (data.status === "loading" || data.status === "waiting" || data.status === "scanned" || data.status === "verify")) {
-        loading.textContent = (data && data.message) || "正在打开抖音登录卡片…";
-        if (!img.src) loading.classList.remove("hidden");
+        loading.textContent = (data && data.message) || "正在把抖音登录卡片贴过来…";
+        if (frame.classList.contains("hidden")) loading.classList.remove("hidden");
       }
     }
     function resetLiveCard() {
-      const img = $("liveCard");
+      const frame = $("liveFrame");
       const loading = $("qrLoading");
-      if (img) {
-        img.src = "";
-        img.dataset.hash = "";
-        img.classList.add("hidden");
+      const title = $("qrTitle");
+      const hint = $("qrHint");
+      liveQuietUntil = 0;
+      if (frame) {
+        frame.srcdoc = "";
+        frame.dataset.hash = "";
+        frame.classList.add("hidden");
+        frame.style.width = "";
+        frame.style.height = "";
       }
+      if (title) title.classList.remove("hidden");
+      if (hint) hint.classList.remove("hidden");
       if (loading) {
-        loading.textContent = "正在打开抖音登录卡片…";
+        loading.textContent = "正在把抖音登录卡片贴过来…";
         loading.classList.remove("hidden");
       }
     }
+    function liveRootRect(doc) {
+      const root = doc.querySelector("[data-sparkflow-root]") || doc.body;
+      return root.getBoundingClientRect();
+    }
     function sendLive(payload) {
+      if (payload.action === "type" || payload.action === "key" || payload.action === "fill") liveQuietUntil = Date.now() + 1600;
       liveQueue = liveQueue.then(async () => {
         await api("/api/douyin/login/live", {
           method: "POST",
           body: JSON.stringify(payload),
         });
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        await new Promise((resolve) => setTimeout(resolve, 350));
         await pollQrLogin();
       }).catch((err) => {
         if (err && err.message) toast(err.message, "err");
@@ -427,44 +450,54 @@
       return liveQueue;
     }
     function bindLiveCard() {
-      const img = $("liveCard");
-      const inp = $("liveProxyInput");
-      if (!img || !inp || img.dataset.bound) return;
-      img.dataset.bound = "1";
-      img.addEventListener("pointerdown", (ev) => {
-        ev.preventDefault();
-        const r = img.getBoundingClientRect();
-        if (!r.width || !r.height) return;
-        const x = (ev.clientX - r.left) / r.width;
-        const y = (ev.clientY - r.top) / r.height;
-        inp.focus();
-        sendLive({ action: "click", x, y });
-      });
-      inp.addEventListener("keydown", (ev) => {
-        if (ev.isComposing || ev.key === "Process") return;
-        if (ev.key === "Tab") return;
-        if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "v") return;
-        if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a") {
+      const frame = $("liveFrame");
+      if (!frame || frame.dataset.bound) return;
+      frame.dataset.bound = "1";
+      frame.addEventListener("load", () => {
+        const doc = frame.contentDocument;
+        if (!doc) return;
+        doc.addEventListener("pointerdown", (ev) => {
+          const isField = /INPUT|TEXTAREA/.test((ev.target && ev.target.tagName) || "");
+          if (!isField) {
+            ev.preventDefault();
+            ev.stopPropagation();
+          }
+          const r = liveRootRect(doc);
+          if (!r.width || !r.height) return;
+          sendLive({
+            action: "click",
+            x: (ev.clientX - r.left) / r.width,
+            y: (ev.clientY - r.top) / r.height,
+          });
+        }, true);
+        doc.addEventListener("keydown", (ev) => {
+          if (ev.isComposing || ev.key === "Process") return;
+          if (ev.key === "Tab") return;
+          if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "v") return;
+          if ((ev.ctrlKey || ev.metaKey) && ev.key.toLowerCase() === "a") {
+            ev.preventDefault();
+            sendLive({ action: "key", key: "Control+A" });
+            return;
+          }
+          const special = ["Backspace", "Enter", "Escape", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
+          if (special.includes(ev.key)) {
+            ev.preventDefault();
+            sendLive({ action: "key", key: ev.key });
+          }
+        }, true);
+        doc.addEventListener("paste", (ev) => {
           ev.preventDefault();
-          sendLive({ action: "key", key: "Control+A" });
-          return;
-        }
-        const special = ["Backspace", "Enter", "Escape", "Delete", "ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"];
-        if (special.includes(ev.key)) {
-          ev.preventDefault();
-          sendLive({ action: "key", key: ev.key });
-        }
-      });
-      inp.addEventListener("paste", (ev) => {
-        ev.preventDefault();
-        const text = (ev.clipboardData && ev.clipboardData.getData("text")) || "";
-        if (text) sendLive({ action: "type", text: text.slice(0, 120) });
-      });
-      inp.addEventListener("input", (ev) => {
-        if (ev.isComposing) return;
-        const text = inp.value;
-        inp.value = "";
-        if (text) sendLive({ action: "type", text });
+          const text = (ev.clipboardData && ev.clipboardData.getData("text")) || "";
+          if (text) sendLive({ action: "type", text: text.slice(0, 120) });
+        }, true);
+        doc.addEventListener("input", (ev) => {
+          if (ev.isComposing) return;
+          const t = ev.target;
+          if (!t || !("value" in t)) return;
+          const text = String(t.value || "");
+          sendLive({ action: "fill", text });
+        }, true);
+        doc.addEventListener("submit", (ev) => ev.preventDefault(), true);
       });
     }
     async function applyQrSuccess(data) {
@@ -525,7 +558,7 @@
             ? "扫码失败，详细原因请看左侧「运行日志」"
             : (data.message || "二维码已失效");
           $("qrLoading").textContent = data.message || "二维码已失效";
-          if (!data.live_image) $("qrLoading").classList.remove("hidden");
+          if (!data.live_html) $("qrLoading").classList.remove("hidden");
         }
       } catch (err) {
         stopQrPoll();

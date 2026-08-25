@@ -147,34 +147,22 @@ button { cursor: pointer; }
 .mini { padding: 6px 10px; font-size: 12px; }
 .account, .user-card { padding: 16px; margin-top: 12px; }
 .account-id { color: var(--muted); font-size: 12px; margin-top: 4px; }
-.qr-card { width: min(460px, calc(100% - 24px)); text-align: center; }
+.qr-card { width: min(520px, calc(100% - 24px)); text-align: center; }
 .live-wrap {
   position: relative;
-  min-height: 280px;
+  min-height: 120px;
   display: grid;
   place-items: center;
-  background: #fff;
+  background: transparent;
   color: #555;
-  border-radius: 16px;
-  overflow: hidden;
   margin: 8px 0 4px;
 }
-.live-card {
-  width: 100%;
-  height: auto;
-  display: block;
-  cursor: pointer;
-  user-select: none;
-  -webkit-user-drag: none;
-}
-.live-proxy {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-  width: 1px;
-  height: 1px;
+.live-frame {
   border: 0;
-  padding: 0;
+  background: #fff;
+  border-radius: 12px;
+  display: block;
+  max-width: 100%;
 }
 .log-box {
   height: min(52vh, 520px);

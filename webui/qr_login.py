@@ -50,7 +50,8 @@ _state: dict[str, Any] = {
     "verify_uplink_content": "",
     "verify_error": "",
     "verify_resend_at": 0,
-    "live_image": "",
+    "live_html": "",
+    "live_hash": "",
     "live_w": 0,
     "live_h": 0,
 }
@@ -63,7 +64,17 @@ def _set(**kwargs):
     note = {
         k: v
         for k, v in kwargs.items()
-        if k not in {"qr_base64", "qr_url", "cookies", "verify_image", "live_image", "live_w", "live_h"}
+        if k not in {
+            "qr_base64",
+            "qr_url",
+            "cookies",
+            "verify_image",
+            "live_image",
+            "live_html",
+            "live_hash",
+            "live_w",
+            "live_h",
+        }
     }
     if note:
         logger.info("扫码状态 %s", note)
@@ -91,7 +102,8 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "verify_uplink_content": _state.get("verify_uplink_content") or "",
             "verify_error": _state.get("verify_error") or "",
             "verify_resend_left": max(0, int((_state.get("verify_resend_at") or 0) - time.time())),
-            "live_image": _state.get("live_image") or "",
+            "live_html": _state.get("live_html") or "",
+            "live_hash": _state.get("live_hash") or "",
             "live_w": int(_state.get("live_w") or 0),
             "live_h": int(_state.get("live_h") or 0),
         }
@@ -712,7 +724,7 @@ def _clear_commands():
         _commands.clear()
 
 
-FIND_LIVE_CARD_JS = """() => {
+FIND_LIVE_CARD_JS = """async () => {
   const keys = [
     "身份验证",
     "接收短信验证码",
@@ -724,92 +736,199 @@ FIND_LIVE_CARD_JS = """() => {
     "打开「抖音APP」",
     "登录后免费畅享",
     "为保障账号安全",
+    "请使用抖音",
   ];
-  const ok = (r) => r.width >= 240 && r.height >= 160 && r.width <= 760 && r.height <= 960 && r.bottom > 8 && r.right > 8;
-  let best = null;
-  let bestArea = Infinity;
-  for (const el of document.querySelectorAll("div, section, article")) {
-    const t = (el.innerText || "").replace(/\\s+/g, " ");
-    if (!keys.some((k) => t.includes(k))) continue;
+  const hitsOf = (t) => keys.filter((k) => (t || "").includes(k)).length;
+  const cardSize = (r) => r.width >= 300 && r.width <= 560 && r.height >= 240 && r.height <= 820 && r.bottom > 8 && r.right > 8;
+
+  const toData = async (img) => {
+    const src = img.currentSrc || img.src || "";
+    if (!src) return "";
+    if (src.startsWith("data:")) return src;
+    try {
+      const resp = await fetch(src, { credentials: "include" });
+      const blob = await resp.blob();
+      return await new Promise((resolve, reject) => {
+        const fr = new FileReader();
+        fr.onload = () => resolve(String(fr.result || ""));
+        fr.onerror = reject;
+        fr.readAsDataURL(blob);
+      });
+    } catch (e) {
+      try {
+        const c = document.createElement("canvas");
+        c.width = img.naturalWidth || img.width || 0;
+        c.height = img.naturalHeight || img.height || 0;
+        if (!c.width || !c.height) return src;
+        c.getContext("2d").drawImage(img, 0, 0);
+        return c.toDataURL("image/png");
+      } catch (e2) {
+        return src;
+      }
+    }
+  };
+
+  const collectStyles = async () => {
+    const chunks = [];
+    for (const node of document.querySelectorAll("style")) {
+      chunks.push(node.textContent || "");
+    }
+    for (const link of document.querySelectorAll('link[rel="stylesheet"]')) {
+      try {
+        const href = link.href;
+        if (!href) continue;
+        const resp = await fetch(href, { credentials: "include" });
+        chunks.push(await resp.text());
+      } catch (e) {}
+    }
+    return chunks
+      .filter(Boolean)
+      .map((css) => "<style>" + String(css).split("</" + "style").join("<\\/" + "style") + "</style>")
+      .join("");
+  };
+
+  const strip = (root) => {
+    root.querySelectorAll("script, iframe, link, meta, noscript").forEach((n) => n.remove());
+    root.querySelectorAll("*").forEach((n) => {
+      [...n.attributes].forEach((a) => {
+        if (/^on/i.test(a.name) || a.name === "srcdoc") n.removeAttribute(a.name);
+      });
+    });
+  };
+
+  const pack = async (el) => {
+    const styles = await collectStyles();
+    const clone = el.cloneNode(true);
+    strip(clone);
+    const liveImgs = el.querySelectorAll("img");
+    const cloneImgs = clone.querySelectorAll("img");
+    for (let i = 0; i < liveImgs.length && i < cloneImgs.length; i++) {
+      cloneImgs[i].src = await toData(liveImgs[i]);
+      cloneImgs[i].removeAttribute("srcset");
+    }
+    const liveCanvas = el.querySelectorAll("canvas");
+    const cloneCanvas = clone.querySelectorAll("canvas");
+    for (let i = 0; i < liveCanvas.length && i < cloneCanvas.length; i++) {
+      try {
+        const img = document.createElement("img");
+        img.src = liveCanvas[i].toDataURL("image/png");
+        img.style.cssText = (cloneCanvas[i].getAttribute("style") || "") + ";display:block;";
+        cloneCanvas[i].replaceWith(img);
+      } catch (e) {}
+    }
     const r = el.getBoundingClientRect();
-    if (!ok(r)) continue;
-    const area = r.width * r.height;
-    if (area < bestArea) {
-      bestArea = area;
-      best = { x: r.x, y: r.y, w: r.width, h: r.height };
+    clone.setAttribute("data-sparkflow-root", "1");
+    clone.style.position = "relative";
+    clone.style.left = "0";
+    clone.style.top = "0";
+    clone.style.right = "auto";
+    clone.style.bottom = "auto";
+    clone.style.margin = "0";
+    clone.style.transform = "none";
+    clone.style.inset = "auto";
+    document.querySelectorAll("[data-sparkflow-live]").forEach((n) => n.removeAttribute("data-sparkflow-live"));
+    el.setAttribute("data-sparkflow-live", "1");
+    const inner = el === document.body
+      ? ("<div data-sparkflow-root='1' style='position:relative;margin:0;width:" + Math.round(r.width) + "px;height:" + Math.round(r.height) + "px'>" + clone.innerHTML + "</div>")
+      : clone.outerHTML;
+    return {
+      html: styles + inner,
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+    };
+  };
+
+  let bestEl = null;
+  let bestScore = -1e9;
+  for (const el of document.querySelectorAll("div, section, article, [role=dialog], form")) {
+    const r = el.getBoundingClientRect();
+    if (!cardSize(r)) continue;
+    const t = (el.innerText || "").replace(/\\s+/g, " ");
+    const hits = hitsOf(t);
+    if (!hits) continue;
+    const cs = getComputedStyle(el);
+    const bg = cs.backgroundColor || "";
+    const light = /255|254|250|249/.test(bg);
+    const pos = cs.position;
+    const btnBonus = /验证|确定|我已发送|重新发送/.test(t) ? 40 : 0;
+    const score =
+      hits * 70 +
+      (light ? 30 : 0) +
+      (pos === "fixed" || pos === "absolute" ? 16 : 0) +
+      btnBonus -
+      Math.abs(r.width - 400) -
+      Math.abs(r.height - 520) * 0.3;
+    if (score > bestScore) {
+      bestScore = score;
+      bestEl = el;
     }
   }
-  if (best) return best;
-  const qr = document.querySelector("#animate_qrcode_container, [class*='qrcode'], [class*='Qrcode'], [class*='qr-code']");
-  let p = qr;
-  for (let i = 0; i < 8 && p; i++) {
-    const r = p.getBoundingClientRect();
-    if (r.width >= 260 && r.height >= 240 && r.width <= 680 && r.height <= 860) {
-      return { x: r.x, y: r.y, w: r.width, h: r.height };
-    }
-    p = p.parentElement;
-  }
-  return null;
+
+  const body = document.body;
+  const bodyText = (body && body.innerText) || "";
+  const bodyHits = hitsOf(bodyText);
+  const bodyR = body ? body.getBoundingClientRect() : { width: 0, height: 0 };
+  const bodyIsCard = bodyHits > 0 && cardSize(bodyR);
+  const target = bodyIsCard ? body : bestEl;
+  if (!target) return { html: "", w: 0, h: 0, score: -1 };
+  const packed = await pack(target);
+  packed.score = bodyIsCard ? bestScore + 90 : bestScore;
+  packed.hits = bodyHits;
+  return packed;
 }"""
-
-
-def _scope_offset(scope, page) -> tuple[float, float]:
-    if scope is page:
-        return 0.0, 0.0
-    try:
-        if scope == page.main_frame:
-            return 0.0, 0.0
-    except Exception:
-        pass
-    try:
-        box = scope.frame_element().bounding_box()
-        if box:
-            return float(box["x"]), float(box["y"])
-    except Exception:
-        pass
-    return 0.0, 0.0
 
 
 def _capture_live_card(page) -> bool:
     global _live_box
-    best = None
-    best_area = 10**12
+    best_pack = None
+    best_scope = None
+    best_score = -1e9
     for scope in _iter_scopes(page):
         try:
-            box = scope.evaluate(FIND_LIVE_CARD_JS)
+            pack = scope.evaluate(FIND_LIVE_CARD_JS)
         except Exception:
             continue
-        if not box:
+        if not pack or not pack.get("html"):
             continue
-        ox, oy = _scope_offset(scope, page)
-        cand = {
-            "x": float(box.get("x") or 0) + ox,
-            "y": float(box.get("y") or 0) + oy,
-            "w": float(box.get("w") or 0),
-            "h": float(box.get("h") or 0),
-        }
-        area = cand["w"] * cand["h"]
-        if cand["w"] < 8 or cand["h"] < 8:
-            continue
-        if area < best_area:
-            best_area = area
-            best = cand
-    if not best:
+        score = float(pack.get("score") or 0)
+        if score > best_score:
+            best_score = score
+            best_pack = pack
+            best_scope = scope
+    if not best_pack or not best_scope:
         return False
-    vp = page.viewport_size or {"width": 1280, "height": 860}
-    x = max(0.0, min(best["x"], float(vp["width"]) - 2))
-    y = max(0.0, min(best["y"], float(vp["height"]) - 2))
-    w = max(8.0, min(best["w"], float(vp["width"]) - x))
-    h = max(8.0, min(best["h"], float(vp["height"]) - y))
-    clip = {"x": int(x), "y": int(y), "width": int(w), "height": int(h)}
+    box = None
     try:
-        raw = page.screenshot(clip=clip, type="png")
+        loc = best_scope.locator("[data-sparkflow-live='1']").first
+        box = loc.bounding_box()
     except Exception:
-        logger.debug("截取抖音卡片失败 clip=%s", clip, exc_info=True)
-        return False
+        box = None
+    if not box:
+        try:
+            box = best_scope.locator("body").first.bounding_box()
+        except Exception:
+            box = None
+    html = str(best_pack.get("html") or "")
+    digest = str(best_pack.get("w") or "") + ":" + str(best_pack.get("h") or "") + ":" + str(len(html)) + ":" + html[:: max(1, len(html) // 24)][:48]
     with _lock:
-        _live_box.update({"x": x, "y": y, "w": w, "h": h})
-    _set(live_image=base64.b64encode(raw).decode("ascii"), live_w=int(w), live_h=int(h))
+        if box:
+            _live_box.update(
+                {
+                    "x": float(box.get("x") or 0),
+                    "y": float(box.get("y") or 0),
+                    "w": float(box.get("width") or best_pack.get("w") or 0),
+                    "h": float(box.get("height") or best_pack.get("h") or 0),
+                }
+            )
+        if (_state.get("live_hash") or "") == digest:
+            return True
+    _set(
+        live_html=html,
+        live_hash=digest,
+        live_w=int(best_pack.get("w") or 0),
+        live_h=int(best_pack.get("h") or 0),
+        live_image="",
+    )
     return True
 
 
@@ -885,6 +1004,53 @@ def _handle_live_command(page, cmd: dict[str, Any]) -> None:
                 logger.exception("同步按键失败")
         time.sleep(0.12)
         _capture_live_card(page)
+        return
+    if action == "live_fill":
+        text = str(cmd.get("text") or "")[:120]
+        logger.info("同步填写抖音卡片 len=%s", len(text))
+        _do_live_fill(page, text)
+        time.sleep(0.12)
+        _capture_live_card(page)
+
+
+def _do_live_fill(page, text: str) -> bool:
+    fill_js = """(value) => {
+      const setValue = (node, v) => {
+        const proto = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")
+          || Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, "value");
+        if (proto && proto.set) proto.set.call(node, v);
+        else node.value = v;
+        node.dispatchEvent(new Event("input", { bubbles: true }));
+        node.dispatchEvent(new Event("change", { bubbles: true }));
+      };
+      const el = document.activeElement;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA") && el.type !== "hidden") {
+        setValue(el, value);
+        return true;
+      }
+      const box = [...document.querySelectorAll("input, textarea")].find((n) => {
+        const type = (n.type || "").toLowerCase();
+        return type !== "hidden" && type !== "checkbox" && type !== "radio";
+      });
+      if (box) {
+        setValue(box, value);
+        return true;
+      }
+      return false;
+    }"""
+    for scope in _iter_scopes(page):
+        try:
+            if scope.evaluate(fill_js, text):
+                return True
+        except Exception:
+            continue
+    try:
+        page.keyboard.press("Control+A")
+        page.keyboard.type(text, delay=12)
+        return True
+    except Exception:
+        logger.exception("同步填写失败")
+        return False
 
 
 def _status() -> str:
@@ -1340,7 +1506,8 @@ def _worker(replace_index: int):
             verify_uplink_from="",
             verify_uplink_to="",
             verify_uplink_content="",
-            live_image="",
+            live_html="",
+            live_hash="",
             live_w=0,
             live_h=0,
         )
@@ -1578,7 +1745,8 @@ def _worker(replace_index: int):
             cookies=cookies,
             qr_base64="",
             qr_url="",
-            live_image="",
+            live_html="",
+            live_hash="",
         )
     except Exception as exc:
         logger.exception("扫码登录线程异常")
@@ -1626,7 +1794,8 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
         verify_uplink_from="",
         verify_uplink_to="",
         verify_uplink_content="",
-        live_image="",
+        live_html="",
+        live_hash="",
         live_w=0,
         live_h=0,
     )
@@ -1654,7 +1823,8 @@ def cancel_qr_login() -> dict[str, Any]:
         verify_uplink_from="",
         verify_uplink_to="",
         verify_uplink_content="",
-        live_image="",
+        live_html="",
+        live_hash="",
         live_w=0,
         live_h=0,
     )
@@ -1674,6 +1844,9 @@ def live_page_action(action: str, payload: dict[str, Any] | None = None) -> dict
         key = str(payload.get("key") or "")
         if key:
             _push_command({"type": "live_key", "key": key})
+    elif kind == "fill":
+        text = str(payload.get("text") or "")[:120]
+        _push_command({"type": "live_fill", "text": text})
     else:
         return {"ok": False, "message": "未知操作"}
     return {"ok": True}
