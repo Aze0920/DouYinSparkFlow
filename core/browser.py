@@ -6,23 +6,14 @@ from utils.config import DEBUG, get_environment, Environment
 
 PLAYWRIGHT_BROWSERS_PATH = "../chrome"
 
+
 def install_browser():
-    """
-    安装 Chromium 浏览器
-    """
-    try:
-        subprocess.run(["playwright", "install", "chromium"], check=True)
-        print("浏览器安装完成，请重新运行程序。")
-    except subprocess.CalledProcessError as e:
-        print(f"发生未知错误：{e}")
+    cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+    subprocess.run(cmd, check=True)
+    print("浏览器安装完成")
 
 
-def get_browser():
-    """
-    启动浏览器实例
-    :return: 浏览器实例
-    """
-
+def get_browser(retried=False):
     env = get_environment()
     explicit_headless = os.getenv("HEADLESS")
     if explicit_headless is not None:
@@ -32,27 +23,28 @@ def get_browser():
     else:
         headless = True
 
-    if env == Environment.LOCAL:
+    # Linux 服务器用 Playwright 默认缓存；Windows 本地才用项目里的 chrome 目录
+    if os.name == "nt" and env == Environment.LOCAL:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.abspath(
             os.path.join(os.path.dirname(__file__), PLAYWRIGHT_BROWSERS_PATH)
         )
-        if DEBUG and explicit_headless is None and os.name == "nt":
+        if DEBUG and explicit_headless is None:
             headless = False
     elif env == Environment.PACKED:
         os.environ["PLAYWRIGHT_BROWSERS_PATH"] = os.path.abspath(
             os.path.join(os.path.dirname(sys.executable), PLAYWRIGHT_BROWSERS_PATH)
         )
+    else:
+        os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
 
     try:
-        # 启动浏览器
-        playwright = sync_playwright().start() 
+        playwright = sync_playwright().start()
         browser = playwright.chromium.launch(headless=headless)
         return playwright, browser
     except Exception as e:
-        # 捕获浏览器启动错误
-        if "Executable doesn't exist" in str(e) and env != Environment.GITHUBACTION:
-            print("浏览器可执行文件不存在！")
+        if "Executable doesn't exist" in str(e) and env != Environment.GITHUBACTION and not retried:
+            print("浏览器可执行文件不存在，正在安装 Chromium...")
             install_browser()
-            sys.exit(1)
-        else:
-            traceback.print_exc()
+            return get_browser(retried=True)
+        traceback.print_exc()
+        raise

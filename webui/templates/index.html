@@ -318,8 +318,11 @@
       await loadConfig();
       await loadLogs();
       setInterval(async () => {
-        try { await checkStatus(); } catch (e) {}
-      }, 5000);
+        try {
+          await checkStatus();
+          await loadLogs();
+        } catch (e) {}
+      }, 2000);
     }
 
     (async () => {

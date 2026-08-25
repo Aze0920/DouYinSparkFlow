@@ -1,5 +1,7 @@
 import json
+import os
 import re
+import shutil
 from pathlib import Path
 
 from dotenv import dotenv_values
@@ -8,22 +10,17 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def env_path() -> Path:
-    for candidate in (
-        Path(os_env("CONFIG_ENV_FILE", "")),
-        ROOT / ".env",
-        ROOT / "config" / ".env",
-    ):
-        if str(candidate) and candidate.is_file():
-            return candidate
+    custom = os.getenv("CONFIG_ENV_FILE", "").strip()
+    if custom:
+        path = Path(custom)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        return path
     target = ROOT / "config" / ".env"
     target.parent.mkdir(parents=True, exist_ok=True)
+    legacy = ROOT / ".env"
+    if not target.is_file() and legacy.is_file():
+        shutil.copy2(legacy, target)
     return target
-
-
-def os_env(name: str, default: str = "") -> str:
-    import os
-
-    return os.getenv(name, default)
 
 
 def load_env() -> dict:
@@ -39,9 +36,9 @@ def _dump_value(value) -> str:
     if isinstance(value, (dict, list)):
         text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     else:
-        text = str(value).replace("\r\n", "\n").replace("\r", "\n")
-        text = text.replace("\n", r"\n")
-    if any(ch in text for ch in ["#", '"', "'", " "]):
+        text = str(value).replace("\r\n", "\n").replace("\r", "\n").replace("\n", r"\n")
+    # JSON 里本身有双引号，不能再整体加引号，否则刷新后读不回来
+    if "\n" in text or text.strip().startswith("#"):
         escaped = text.replace("\\", "\\\\").replace('"', '\\"')
         return f'"{escaped}"'
     return text
@@ -83,9 +80,7 @@ def write_env(data: dict, extra: dict | None = None) -> Path:
             lines.append(f"{key}={_dump_value(current[key])}")
             seen.add(key)
     for key in sorted(current):
-        if key in seen:
-            continue
-        if key.startswith("COOKIES_"):
+        if key.startswith("COOKIES_") and key not in seen:
             lines.append(f"{key}={_dump_value(current[key])}")
             seen.add(key)
     for key, value in current.items():
@@ -93,6 +88,11 @@ def write_env(data: dict, extra: dict | None = None) -> Path:
             lines.append(f"{key}={_dump_value(value)}")
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
+
+
+def cookie_key(unique_id: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9_]", "", str(unique_id).strip())
+    return f"COOKIES_{cleaned.upper()}"
 
 
 def parse_accounts(env: dict) -> list:
@@ -104,9 +104,9 @@ def parse_accounts(env: dict) -> list:
     accounts = []
     for task in tasks or []:
         unique_id = str(task.get("unique_id") or "").strip()
-        cookie_key = f"COOKIES_{unique_id.upper()}"
-        cookies_raw = env.get(cookie_key, "")
+        cookies_raw = env.get(cookie_key(unique_id), "")
         cookies_ok = False
+        parsed = None
         if cookies_raw:
             try:
                 parsed = json.loads(cookies_raw) if isinstance(cookies_raw, str) else cookies_raw
@@ -119,12 +119,7 @@ def parse_accounts(env: dict) -> list:
                 "unique_id": unique_id,
                 "targets": task.get("targets") or [],
                 "cookies_set": cookies_ok,
-                "cookie_count": 0,
+                "cookie_count": len(parsed) if cookies_ok else 0,
             }
         )
     return accounts
-
-
-def cookie_key(unique_id: str) -> str:
-    cleaned = re.sub(r"[^A-Za-z0-9_]", "", str(unique_id).strip())
-    return f"COOKIES_{cleaned.upper()}"
