@@ -7,7 +7,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 USERS_FILE = ROOT / "config" / "users.json"
 SECRET = "dsf-user-v1"
-TRIAL_HOURS = 24
 USERNAME_RE = re.compile(r"^[\w.-]{2,24}$", re.UNICODE)
 
 
@@ -64,6 +63,23 @@ def user_can_spark(user: dict | None) -> bool:
     return bool(user) and not is_expired(user)
 
 
+def account_limit(user: dict | None) -> int:
+    if not user:
+        return 1
+    if is_permanent(user):
+        return 0
+    try:
+        n = int(user.get("max_accounts") if user.get("max_accounts") not in (None, "") else 1)
+    except (TypeError, ValueError):
+        n = 1
+    return max(1, min(n, 100))
+
+
+def account_limit_label(user: dict | None) -> str:
+    n = account_limit(user)
+    return "账号不限" if n == 0 else f"{n} 个账号"
+
+
 def remaining_label(user: dict | None) -> str:
     if is_permanent(user):
         return "永久"
@@ -83,20 +99,38 @@ def remaining_label(user: dict | None) -> str:
     return f"剩余 {max(minutes, 1)} 分"
 
 
-def make_user(username: str, password: str, role: str = "user", days: int | None = None) -> dict:
+def make_user(
+    username: str,
+    password: str,
+    role: str = "user",
+    days: int | None = None,
+    max_accounts: int | None = None,
+    card_code: str = "",
+) -> dict:
     created = now_utc()
     role = "admin" if role == "admin" else "user"
+    try:
+        days_n = max(1, int(days)) if days not in (None, "") else 1
+    except (TypeError, ValueError):
+        days_n = 1
+    try:
+        accounts_n = max(1, int(max_accounts)) if max_accounts not in (None, "") else 1
+    except (TypeError, ValueError):
+        accounts_n = 1
     row = {
         "username": username.strip(),
         "password_hash": _hash_password(username.strip(), password),
         "role": role,
         "created_at": to_iso(created),
         "permanent": role == "admin",
-        "expires_at": None if role == "admin" else to_iso(created + timedelta(hours=TRIAL_HOURS if days is None else max(1, int(days)) * 24)),
+        "expires_at": None if role == "admin" else to_iso(created + timedelta(days=days_n)),
+        "max_accounts": 0 if role == "admin" else min(accounts_n, 100),
+        "card_code": str(card_code or "").strip(),
     }
     if role == "admin":
         row["expires_at"] = None
         row["permanent"] = True
+        row["max_accounts"] = 0
     return row
 
 
@@ -106,15 +140,24 @@ def normalize_user(user: dict) -> tuple[dict, bool]:
         user["created_at"] = to_iso(now_utc())
         changed = True
     if user.get("role") == "admin":
-        if not user.get("permanent") or user.get("expires_at"):
+        if not user.get("permanent") or user.get("expires_at") or user.get("max_accounts") not in (0, "0"):
             user["permanent"] = True
             user["expires_at"] = None
+            user["max_accounts"] = 0
             changed = True
-    elif not user.get("expires_at"):
-        created = parse_iso(user.get("created_at")) or now_utc()
-        user["expires_at"] = to_iso(created + timedelta(hours=TRIAL_HOURS))
-        user["permanent"] = False
-        changed = True
+    else:
+        user["permanent"] = bool(user.get("permanent"))
+        if user.get("max_accounts") in (None, ""):
+            user["max_accounts"] = 1
+            changed = True
+        else:
+            try:
+                n = max(1, min(int(user.get("max_accounts")), 100))
+            except (TypeError, ValueError):
+                n = 1
+            if user.get("max_accounts") != n:
+                user["max_accounts"] = n
+                changed = True
     return user, changed
 
 
@@ -186,6 +229,9 @@ def public_user(user: dict) -> dict:
         "created_label": created.astimezone().strftime("%Y-%m-%d %H:%M") if created else "-",
         "expires_label": "永久" if is_permanent(user) else (exp.astimezone().strftime("%Y-%m-%d %H:%M") if exp else "-"),
         "remain_label": remaining_label(user),
+        "max_accounts": account_limit(user),
+        "account_limit_label": account_limit_label(user),
+        "card_code": user.get("card_code") or "",
     }
 
 

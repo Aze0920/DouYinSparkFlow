@@ -119,7 +119,7 @@ html, body {
 }
 .page-title { font-size: 28px; margin: 0; }
 .sub { color: var(--muted); margin: 6px 0 18px; }
-.cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
 .card, .panel, .account, .user-card {
   background: var(--card);
   border: 1px solid var(--line);
@@ -128,7 +128,8 @@ html, body {
 }
 .card { padding: 16px; }
 .card label { color: var(--muted); font-size: 12px; display: block; margin-bottom: 8px; }
-.card strong { font-size: 24px; }
+.card strong { font-size: 24px; word-break: break-all; }
+.card-sub { color: var(--muted); font-size: 12px; margin-top: 6px; min-height: 16px; }
 .panel { padding: 18px; margin-top: 16px; }
 .grid { display: grid; gap: 12px; }
 .grid.two { grid-template-columns: 1fr 1fr; }
@@ -161,7 +162,12 @@ body.spark-locked .spark-action {
   opacity: 0.55;
   cursor: not-allowed;
 }
-#expiredBanner { color: var(--rose); }
+.card-code {
+  font-family: Consolas, "Courier New", monospace;
+  letter-spacing: 0.4px;
+  word-break: break-all;
+}
+.card-fresh { outline: 1px solid rgba(79, 210, 165, 0.55); }
 .accounts-grid, .users-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));

@@ -30,6 +30,7 @@ from webui.qr_login import (
 )
 from webui.users import (
     admin_count,
+    account_limit,
     extend_user,
     find_user,
     load_users,
@@ -42,6 +43,13 @@ from webui.users import (
     valid_username,
     verify_user,
     _hash_password,
+)
+from webui.cards import (
+    consume_card,
+    create_cards,
+    delete_card,
+    list_public_cards,
+    public_card,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -89,6 +97,7 @@ async def log_api_calls(request: Request, call_next):
         "/tasks",
         "/logs",
         "/users",
+        "/cards",
     } or path.startswith("/static/")
     if not quiet:
         logger.info("请求 %s %s", request.method, path)
@@ -151,8 +160,36 @@ def require_admin(request: Request):
 def require_spark(request: Request):
     user = require_auth(request)
     if not user_can_spark(user):
-        raise HTTPException(status_code=403, detail="试用已到期，无法续火花")
+        raise HTTPException(status_code=403, detail="卡密已到期，无法续火花")
     return user
+
+
+def _is_admin(user: dict | None) -> bool:
+    return bool(user) and user.get("role") == "admin"
+
+
+def _account_owner(item: dict | None) -> str:
+    return str((item or {}).get("owner") or "").strip()
+
+
+def _filter_accounts(user: dict | None, accounts: list) -> list:
+    if _is_admin(user):
+        return accounts
+    name = str((user or {}).get("username") or "")
+    return [item for item in accounts if _account_owner(item) == name]
+
+
+def _owned_tasks(user: dict | None, tasks: list) -> list:
+    name = str((user or {}).get("username") or "")
+    return [item for item in tasks if _account_owner(item) == name]
+
+
+def _assert_account_quota(user: dict | None, count: int) -> None:
+    if _is_admin(user):
+        return
+    limit = account_limit(user)
+    if limit and count > limit:
+        raise HTTPException(status_code=403, detail=f"当前卡密最多添加 {limit} 个抖音账号")
 
 
 def run_git(*args: str, timeout: int = 20) -> subprocess.CompletedProcess:
@@ -328,6 +365,7 @@ def index(request: Request):
 @app.get("/tasks", response_class=HTMLResponse)
 @app.get("/logs", response_class=HTMLResponse)
 @app.get("/users", response_class=HTMLResponse)
+@app.get("/cards", response_class=HTMLResponse)
 def spa_pages(request: Request):
     return spa_index(request)
 
@@ -358,6 +396,7 @@ def login(payload: dict):
 def register(payload: dict):
     username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
+    card_code = str(payload.get("card") or payload.get("card_code") or "").strip()
     if not valid_username(username):
         raise HTTPException(status_code=400, detail="用户名用 2-24 位字母、数字、下划线或短横线")
     if len(password) < 4:
@@ -366,11 +405,28 @@ def register(payload: dict):
         raise HTTPException(status_code=400, detail="不能注册管理员用户名")
     if find_user(username):
         raise HTTPException(status_code=400, detail="用户名已存在")
+    try:
+        card = consume_card(card_code, username)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     users = load_users()
-    user = make_user(username, password, role="user")
+    user = make_user(
+        username,
+        password,
+        role="user",
+        days=card.get("days"),
+        max_accounts=card.get("max_accounts"),
+        card_code=card.get("code") or card_code,
+    )
     users.append(user)
     save_users(users)
-    logger.info("前台注册账号 user=%s expires=%s", username, user.get("expires_at"))
+    logger.info(
+        "前台注册账号 user=%s expires=%s max_accounts=%s card=%s",
+        username,
+        user.get("expires_at"),
+        user.get("max_accounts"),
+        card.get("code"),
+    )
     resp = JSONResponse({"ok": True, "user": public_user(user)})
     resp.set_cookie("dsf_auth", make_token(user["username"]), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 14)
     return resp
@@ -404,12 +460,25 @@ def create_user(request: Request, payload: dict):
     if find_user(username):
         raise HTTPException(status_code=400, detail="用户名已存在")
     days = payload.get("days")
+    max_accounts = payload.get("max_accounts")
     try:
         days_n = 1 if days in (None, "") else max(1, int(days))
     except (TypeError, ValueError):
         days_n = 1
+    try:
+        accounts_n = 1 if max_accounts in (None, "") else max(1, int(max_accounts))
+    except (TypeError, ValueError):
+        accounts_n = 1
     users = load_users()
-    users.append(make_user(username, password, role=role, days=None if role == "admin" else days_n))
+    users.append(
+        make_user(
+            username,
+            password,
+            role=role,
+            days=None if role == "admin" else days_n,
+            max_accounts=None if role == "admin" else accounts_n,
+        )
+    )
     save_users(users)
     return {"ok": True, "users": [public_user(u) for u in users]}
 
@@ -425,6 +494,7 @@ def update_user(request: Request, payload: dict):
     role = payload.get("role")
     password = payload.get("password")
     extra_days = payload.get("extra_days")
+    max_accounts = payload.get("max_accounts")
     for item in users:
         if item.get("username") != username:
             continue
@@ -435,10 +505,13 @@ def update_user(request: Request, payload: dict):
             if role == "admin":
                 item["permanent"] = True
                 item["expires_at"] = None
+                item["max_accounts"] = 0
             else:
                 item["permanent"] = False
                 if not item.get("expires_at"):
                     extend_user(item, 1)
+                if not item.get("max_accounts"):
+                    item["max_accounts"] = 1
         if password:
             item["password_hash"] = _hash_password(username, str(password))
         if extra_days not in (None, "", 0, "0") and item.get("role") != "admin":
@@ -446,6 +519,11 @@ def update_user(request: Request, payload: dict):
                 extend_user(item, int(extra_days))
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="延长天数必须是数字")
+        if max_accounts not in (None, "") and item.get("role") != "admin":
+            try:
+                item["max_accounts"] = max(1, min(int(max_accounts), 100))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="账号额度必须是数字")
         break
     save_users(users)
     return {"ok": True, "users": [public_user(u) for u in users]}
@@ -468,6 +546,44 @@ def delete_user(request: Request, payload: dict):
     return {"ok": True, "users": [public_user(u) for u in users]}
 
 
+@app.get("/api/cards")
+def list_cards_api(request: Request):
+    require_admin(request)
+    return {"ok": True, "cards": list_public_cards()}
+
+
+@app.post("/api/cards")
+def create_cards_api(request: Request, payload: dict | None = None):
+    admin = require_admin(request)
+    payload = payload or {}
+    created = create_cards(
+        days=payload.get("days"),
+        max_accounts=payload.get("max_accounts"),
+        count=payload.get("count"),
+        note=payload.get("note"),
+    )
+    logger.info(
+        "生成卡密 admin=%s count=%s days=%s max_accounts=%s",
+        admin.get("username"),
+        len(created),
+        payload.get("days"),
+        payload.get("max_accounts"),
+    )
+    return {"ok": True, "created": [public_card(item) for item in created], "cards": list_public_cards()}
+
+
+@app.post("/api/cards/delete")
+def delete_card_api(request: Request, payload: dict | None = None):
+    require_admin(request)
+    payload = payload or {}
+    code = str(payload.get("code") or "").strip()
+    try:
+        delete_card(code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "cards": list_public_cards()}
+
+
 @app.get("/api/status")
 def status(request: Request):
     user = require_auth(request)
@@ -486,7 +602,7 @@ def status(request: Request):
         if label not in seen:
             seen.add(label)
             times.append(label)
-    return {
+    payload = {
         "ok": True,
         "local_version": local,
         "remote_version": remote,
@@ -499,9 +615,12 @@ def status(request: Request):
         "running": _run_state["running"],
         "run_message": _run_state["message"],
         "running_ids": list(_run_state.get("running_ids") or []),
-        "accounts": accounts,
+        "accounts": _filter_accounts(user, accounts),
         "me": public_user(user),
     }
+    if _is_admin(user):
+        payload["total_accounts"] = len(accounts)
+    return payload
 
 
 @app.post("/api/github/check")
@@ -543,6 +662,7 @@ def _task_from_account(account: dict, env: dict, existing: dict | None = None) -
     existing = existing or {}
     source = str(account.get("cookie_source") or existing.get("cookie_source") or "").strip()
     status = str(account.get("cookie_status") or existing.get("cookie_status") or "").strip()
+    owner = str(account.get("owner") or existing.get("owner") or "").strip()
     row = {
         "username": str(account.get("username") or "账号").strip(),
         "unique_id": unique_id,
@@ -554,6 +674,8 @@ def _task_from_account(account: dict, env: dict, existing: dict | None = None) -
         row["cookie_source"] = source
     if status:
         row["cookie_status"] = status
+    if owner:
+        row["owner"] = owner
     return row
 
 
@@ -586,7 +708,7 @@ def _clamp_task_threads(value) -> int:
 
 @app.get("/api/config")
 def get_config(request: Request):
-    require_auth(request)
+    user = require_auth(request)
     env = load_env()
     try:
         hitokoto = json.loads(env.get("HITOKOTO_TYPES", '["文学","影视","诗词","哲学"]'))
@@ -615,25 +737,48 @@ def get_config(request: Request):
         "max_task_threads": _clamp_task_threads(env.get("MAX_TASK_THREADS") or 10),
         "log_level": env.get("LOG_LEVEL") or "DEBUG",
         "github_repo": repo_name(),
-        "accounts": accounts,
+        "accounts": _filter_accounts(user, accounts),
     }
 
 
 @app.post("/api/config")
 def save_config(request: Request, payload: dict):
-    require_spark(request)
+    user = require_spark(request)
     env = load_env()
     extra = {}
+    existing = read_tasks(env)
+    existing_by_id = {str(item.get("unique_id") or "").strip(): item for item in existing if item.get("unique_id")}
     if "accounts" in payload:
-        tasks = []
+        incoming = []
         for account in payload.get("accounts") or []:
             unique_id = str(account.get("unique_id") or "").strip()
             if not unique_id:
                 raise HTTPException(status_code=400, detail="每个账号都要填写抖音号/编号")
-            tasks.append(_task_from_account(account, env))
+            incoming.append(_task_from_account(account, env, existing_by_id.get(unique_id)))
             extra.update(_cookie_extra(account))
+        name = str(user.get("username") or "")
+        if _is_admin(user):
+            tasks = []
+            for row in incoming:
+                uid = row["unique_id"]
+                old = existing_by_id.get(uid) or {}
+                if not row.get("owner"):
+                    row["owner"] = _account_owner(old) or name
+                tasks.append(row)
+        else:
+            keep = [item for item in existing if _account_owner(item) != name]
+            keep_ids = {str(item.get("unique_id") or "").strip() for item in keep}
+            mine = []
+            for row in incoming:
+                uid = row["unique_id"]
+                if uid in keep_ids:
+                    raise HTTPException(status_code=400, detail="该抖音号已被其他用户绑定")
+                row["owner"] = name
+                mine.append(row)
+            _assert_account_quota(user, len(mine))
+            tasks = keep + mine
     else:
-        tasks = read_tasks(env)
+        tasks = existing
 
     hour, minute = default_cron(env)
     if payload.get("cron_hour") is not None:
@@ -665,17 +810,27 @@ def save_config(request: Request, payload: dict):
 
 @app.post("/api/account")
 def save_account(request: Request, payload: dict):
-    require_spark(request)
+    user = require_spark(request)
     env = load_env()
     unique_id = str(payload.get("unique_id") or "").strip()
     if not unique_id:
         raise HTTPException(status_code=400, detail="缺少抖音号")
-    row = _task_from_account(payload, env)
     tasks = read_tasks(env)
+    existing = next((item for item in tasks if str(item.get("unique_id") or "").strip() == unique_id), None)
+    name = str(user.get("username") or "")
+    if not _is_admin(user):
+        if existing and _account_owner(existing) != name:
+            raise HTTPException(status_code=403, detail="不能修改其他用户的账号")
+        if existing is None:
+            _assert_account_quota(user, len(_owned_tasks(user, tasks)) + 1)
+    row = _task_from_account(payload, env, existing)
+    if not _is_admin(user):
+        row["owner"] = name
+    elif not row.get("owner"):
+        row["owner"] = _account_owner(existing) or name
     replaced = False
     for index, item in enumerate(tasks):
         if str(item.get("unique_id") or "").strip() == unique_id:
-            row = _task_from_account(payload, env, item)
             tasks[index] = {**item, **row}
             replaced = True
             break
@@ -814,11 +969,17 @@ def _scheduler_loop():
             env = load_env()
             now = _now_local()
             stamp = now.strftime("%Y-%m-%d %H:%M")
+            owners = {str(item.get("username") or ""): item for item in load_users()}
             due = []
             for acc in parse_accounts(env):
                 uid = str(acc.get("unique_id") or "").strip()
                 if not uid or not acc.get("cookies_set"):
                     continue
+                owner_name = _account_owner(acc)
+                if owner_name:
+                    owner = owners.get(owner_name)
+                    if not user_can_spark(owner):
+                        continue
                 hour = acc.get("cron_hour")
                 minute = acc.get("cron_minute")
                 hour = 9 if hour is None else int(hour)
@@ -956,14 +1117,26 @@ def douyin_login_live(request: Request, payload: dict | None = None):
 
 @app.post("/api/run")
 def run_now(request: Request, payload: dict | None = None):
-    require_spark(request)
+    user = require_spark(request)
     if _run_state["running"]:
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
     if not _run_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
     payload = payload or {}
     unique_id = str(payload.get("unique_id") or "").strip()
-    ids = [unique_id] if unique_id else None
+    accounts = parse_accounts(load_env())
+    visible = _filter_accounts(user, accounts)
+    visible_ids = {str(item.get("unique_id") or "").strip() for item in visible if item.get("unique_id")}
+    if unique_id:
+        if unique_id not in visible_ids:
+            _run_lock.release()
+            raise HTTPException(status_code=403, detail="只能运行自己的抖音账号")
+        ids = [unique_id]
+    else:
+        ids = [uid for uid in visible_ids if uid]
+        if not ids:
+            _run_lock.release()
+            raise HTTPException(status_code=400, detail="还没有可运行的抖音账号")
     try:
         threading.Thread(target=_run_task, args=(ids,), daemon=True).start()
     finally:

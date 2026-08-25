@@ -175,6 +175,7 @@ def parse_accounts(env: dict) -> list:
                 "cron_minute": minute,
                 "cookie_source": str(task.get("cookie_source") or "").strip(),
                 "cookie_status": str(task.get("cookie_status") or "").strip(),
+                "owner": str(task.get("owner") or "").strip(),
                 "cookies_set": cookies_ok,
                 "cookie_count": len(parsed) if cookies_ok else 0,
             }

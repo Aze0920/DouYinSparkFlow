@@ -8,3 +8,4 @@ usersData.json
 .env
 config/.env
 config/users.json
+config/cards.json

@@ -73,7 +73,7 @@
     <section class="login-visual">
       <div class="spark-mark">✦</div>
       <h2>把火花续在自己手里</h2>
-      <p>管理员永久有效。也可以自己注册账号，试用 24 小时后续火花会停用。</p>
+      <p>管理员生成卡密后才能注册。卡密决定能用多少天、能添加几个抖音账号，默认是 1 天、1 个账号。</p>
     </section>
     <section class="login-box">
       <form class="login-card" id="loginForm" onsubmit="return doLogin(event)">
@@ -82,15 +82,16 @@
         <input id="loginUser" placeholder="用户名，默认 admin" autocomplete="username" />
         <input id="loginPass" type="password" placeholder="密码，默认 admin" autocomplete="current-password" />
         <button class="btn-primary" type="submit">进入系统</button>
-        <button class="btn-ghost" type="button" onclick="showRegisterForm()">没有账号？注册试用 1 天</button>
+        <button class="btn-ghost" type="button" onclick="showRegisterForm()">没有账号？用卡密注册</button>
         <div id="loginError" class="error"></div>
       </form>
       <form class="login-card hidden" id="registerForm" onsubmit="return doRegister(event)">
         <h1>注册账号</h1>
-        <p>注册后立刻开始计时，24 小时内可续火花，到期后按钮会禁止点击。</p>
+        <p>必须填写卡密。有效天数和可添加的抖音账号数以卡密为准。</p>
         <input id="regUser" placeholder="用户名" autocomplete="username" />
         <input id="regPass" type="password" placeholder="密码，至少 4 位" autocomplete="new-password" />
         <input id="regPass2" type="password" placeholder="再输入一次密码" autocomplete="new-password" />
+        <input id="regCard" placeholder="卡密，例如 DSF-XXXX-XXXX-XXXX" autocomplete="off" />
         <button class="btn-primary" type="submit">注册并进入</button>
         <button class="btn-ghost" type="button" onclick="showLoginForm()">已有账号？去登录</button>
         <div id="registerError" class="error"></div>
@@ -108,9 +109,9 @@
         </div>
       </div>
       <a class="nav-btn active" href="/" data-page="home" onclick="return navTo(event, 'home')">总览</a>
-      <a class="nav-btn" href="/tasks" data-page="tasks" onclick="return navTo(event, 'tasks')">任务配置</a>
       <a class="nav-btn" href="/logs" data-page="logs" onclick="return navTo(event, 'logs')">运行日志</a>
       <a class="nav-btn admin-only hidden" href="/users" data-page="users" onclick="return navTo(event, 'users')">用户管理</a>
+      <a class="nav-btn admin-only hidden" href="/cards" data-page="cards" onclick="return navTo(event, 'cards')">卡密管理</a>
       <div class="sidebar-foot">
         <div id="whoami">未登录</div>
         <button class="btn-ghost mini" onclick="doLogout()">退出登录</button>
@@ -132,13 +133,23 @@
 
       <section id="page-home">
         <div class="cards">
+          <article class="card">
+            <label>当前用户</label>
+            <strong id="homeUsername">-</strong>
+            <div class="card-sub" id="homeRole"></div>
+          </article>
+          <article class="card">
+            <label>到期时间</label>
+            <strong id="homeExpires">-</strong>
+            <div class="card-sub" id="homeRemain"></div>
+          </article>
           <article class="card"><label>本地版本</label><strong id="localVersion">-</strong></article>
           <article class="card"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
-          <article class="card"><label>账号数量</label><strong id="accountCount">-</strong></article>
+          <article class="card admin-only hidden" id="accountCountCard">
+            <label>全部账号数量</label>
+            <strong id="accountCount">-</strong>
+          </article>
         </div>
-      </section>
-
-      <section id="page-tasks" class="hidden">
         <section class="panel">
           <div class="panel-head">
             <h2>抖音账号与发送策略</h2>
@@ -156,7 +167,8 @@
             </label>
           </div>
           <p class="sub">模板和并发数是全局的。每个账号自己选每天几点发、自己保存、自己点续火花。窗口够宽时一排会自动排多张卡片。</p>
-          <p class="sub hidden" id="expiredBanner">试用已到期，续火花按钮已禁用。如需继续使用请联系管理员。</p>
+          <p class="sub" id="accountQuota">账号额度会显示在这里。</p>
+          <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。如需继续使用请联系管理员获取卡密。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码登录，也可以只粘贴 Cookie JSON，昵称和抖音号会自动抓取。</p>
           <div id="accounts" class="accounts-grid"></div>
         </section>
@@ -180,7 +192,7 @@
           <div class="panel-head">
             <h2>控制台用户</h2>
           </div>
-          <p class="sub">管理员永久有效。前台注册和这里添加的普通用户默认试用 1 天，到期后不能续火花。</p>
+          <p class="sub">管理员永久有效。普通用户必须用卡密注册，有效天数和抖音账号额度由卡密决定。这里也可以直接开用户，并指定天数和账号额度。</p>
           <div class="grid two">
             <label>用户名<input id="newUsername" placeholder="例如 operator1" /></label>
             <label>密码<input id="newPassword" type="password" placeholder="登录密码" /></label>
@@ -190,10 +202,29 @@
                 <option value="admin">管理员（永久）</option>
               </select>
             </label>
-            <label>试用天数<input id="newDays" type="number" min="1" max="365" value="1" /></label>
+            <label>有效天数<input id="newDays" type="number" min="1" max="3650" value="1" /></label>
+            <label>可添加账号数<input id="newMaxAccounts" type="number" min="1" max="100" value="1" /></label>
             <label class="span-2">&nbsp;<button class="btn-primary" onclick="createUser()">添加账户</button></label>
           </div>
           <div id="userList" class="users-grid"></div>
+        </section>
+      </section>
+
+      <section id="page-cards" class="hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>生成卡密</h2>
+          </div>
+          <p class="sub">默认 1 天、可添加 1 个抖音账号。生成后请立刻复制发给用户，一张卡密只能注册一次。</p>
+          <div class="grid two">
+            <label>有效天数<input id="cardDays" type="number" min="1" max="3650" value="1" /></label>
+            <label>可添加账号数<input id="cardMaxAccounts" type="number" min="1" max="100" value="1" /></label>
+            <label>生成数量<input id="cardCount" type="number" min="1" max="50" value="1" /></label>
+            <label>备注<input id="cardNote" placeholder="可选，例如 7天体验" /></label>
+            <label class="span-2">&nbsp;<button class="btn-primary" onclick="generateCards()">生成卡密</button></label>
+          </div>
+          <pre class="log-box hidden" id="newCardCodes"></pre>
+          <div id="cardList" class="users-grid"></div>
         </section>
       </section>
     </main>
@@ -261,32 +292,67 @@
       if (current.role === "admin" || current.permanent) return true;
       return !current.expired && current.can_spark !== false;
     }
+    function sparkLockMsg(action = "无法操作") {
+      return "卡密已到期，" + action;
+    }
+    function unlimitedAccounts() {
+      return isAdmin() || !current || Number(current.max_accounts) === 0;
+    }
+    function accountQuotaText() {
+      const used = (window.__accounts || []).length;
+      if (unlimitedAccounts()) return "已添加 " + used + " 个账号，额度不限";
+      const max = Number(current && current.max_accounts) || 1;
+      return "已添加 " + used + " / " + max + " 个账号";
+    }
+    function canAddAccount() {
+      if (unlimitedAccounts()) return true;
+      const max = Number(current && current.max_accounts) || 1;
+      return (window.__accounts || []).length < max;
+    }
+    function updateAccountQuota() {
+      if ($("accountQuota")) $("accountQuota").textContent = accountQuotaText();
+    }
     function applySparkLock() {
       const ok = canSpark();
       document.body.classList.toggle("spark-locked", !ok);
       document.querySelectorAll(".spark-action").forEach((el) => {
         el.disabled = !ok;
-        el.title = ok ? "" : "试用已到期，无法操作";
+        el.title = ok ? "" : sparkLockMsg();
       });
       if ($("expiredBanner")) $("expiredBanner").classList.toggle("hidden", ok);
+      updateAccountQuota();
     }
     function applyRole() {
       document.querySelectorAll(".admin-only").forEach((el) => el.classList.toggle("hidden", !isAdmin()));
       const tag = current
-        ? `${current.username} · ${current.role === "admin" ? "管理员 · 永久" : (current.remain_label || "普通用户")}`
+        ? `${current.username} · ${current.role === "admin" ? "管理员 · 永久" : ((current.remain_label || "普通用户") + " · " + (current.account_limit_label || ""))}`
         : "";
       $("whoami").textContent = tag;
+      updateHomeProfile();
       applySparkLock();
     }
+    function updateHomeProfile() {
+      if ($("homeUsername")) $("homeUsername").textContent = current ? (current.username || "-") : "-";
+      if ($("homeRole")) $("homeRole").textContent = current ? (isAdmin() ? "管理员" : "普通用户") : "";
+      if ($("homeExpires")) {
+        $("homeExpires").textContent = current
+          ? (isAdmin() || current.permanent ? "永久" : (current.expires_label || "-"))
+          : "-";
+      }
+      if ($("homeRemain")) {
+        $("homeRemain").textContent = current
+          ? (isAdmin() || current.permanent ? "不过期" : (current.remain_label || ""))
+          : "";
+      }
+    }
     function pagePath(name) {
-      return { home: "/", tasks: "/tasks", logs: "/logs", users: "/users" }[name] || "/";
+      return { home: "/", logs: "/logs", users: "/users", cards: "/cards" }[name] || "/";
     }
     function pathToPage(pathname) {
       const p = String(pathname || "/").replace(/\/+$/, "") || "/";
-      if (p === "/tasks") return "tasks";
       if (p === "/logs") return "logs";
       if (p === "/users") return "users";
-      if (p === "/home") return "home";
+      if (p === "/cards") return "cards";
       return "home";
     }
     function navTo(event, name) {
@@ -297,20 +363,21 @@
     }
     function showPage(name, opts) {
       opts = opts || {};
-      if (!["home", "tasks", "logs", "users"].includes(name)) name = "home";
-      if (name === "users" && current && !isAdmin()) name = "home";
+      if (name === "tasks") name = "home";
+      if (!["home", "logs", "users", "cards"].includes(name)) name = "home";
+      if ((name === "users" || name === "cards") && current && !isAdmin()) name = "home";
       page = name;
-      ["home", "tasks", "logs", "users"].forEach((key) => {
+      ["home", "logs", "users", "cards"].forEach((key) => {
         $("page-" + key).classList.toggle("hidden", key !== name);
       });
       document.querySelectorAll(".nav-btn").forEach((btn) => {
         btn.classList.toggle("active", btn.dataset.page === name);
       });
       const titles = {
-        home: ["总览", "查看版本、状态和账号数量"],
-        tasks: ["任务配置", "每个账号一张卡片，独立定时、独立保存、独立续火花"],
+        home: ["总览", "当前账号、版本，以及抖音任务配置"],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
-        users: ["用户管理", "每个用户一张卡片。管理员永久有效，普通用户默认试用 1 天"],
+        users: ["用户管理", "管理员永久有效。普通用户的天数和账号额度由卡密或这里指定"],
+        cards: ["卡密管理", "生成卡密，设置有效天数和可添加的抖音账号数"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
@@ -322,6 +389,7 @@
       }
       if (name === "logs") loadLogs();
       if (name === "users" && isAdmin()) loadUsers();
+      if (name === "cards" && isAdmin()) loadCards();
     }
     window.addEventListener("popstate", () => {
       showPage(pathToPage(location.pathname), { skipHistory: true });
@@ -368,14 +436,18 @@
       try {
         const data = await api("/api/register", {
           method: "POST",
-          body: JSON.stringify({ username, password }),
+          body: JSON.stringify({
+            username,
+            password,
+            card: ($("regCard") && $("regCard").value) || "",
+          }),
         });
         current = data.user;
         $("loginPage").classList.add("hidden");
         $("app").classList.remove("hidden");
         applyRole();
         await boot();
-        toast("已注册，试用 24 小时");
+        toast("注册成功，有效期 " + (current.remain_label || "") + "，" + (current.account_limit_label || ""));
       } catch (err) {
         $("registerError").textContent = err.message;
       }
@@ -406,7 +478,9 @@
       $("localVersion").textContent = "v" + data.local_version;
       $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未获取到";
       $("versionPill").textContent = "v" + data.local_version;
-      $("accountCount").textContent = String((data.accounts || []).length);
+      if ($("accountCount")) {
+        $("accountCount").textContent = data.total_accounts == null ? "-" : String(data.total_accounts);
+      }
       setBusy(data.running, data.run_message || "空闲", data.running_ids || []);
       if (data.me) {
         current = Object.assign(current || {}, data.me);
@@ -489,7 +563,7 @@
         <div class="account-head">
           <div>
             <strong>${escapeHtml(name)}</strong>
-            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${escapeHtml(source)}</div>
+            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${escapeHtml(source)}${isAdmin() && data.owner ? " · 所属 " + escapeHtml(data.owner) : ""}</div>
           </div>
           <div class="account-head-right">
             <span class="ck-status ${ck.cls}">${ck.text}</span>
@@ -503,6 +577,7 @@
         <input type="hidden" class="unique-id" value="${escapeAttr(uid)}" />
         <input type="hidden" class="cookie-source" value="${escapeAttr(data.cookie_source || "")}" />
         <input type="hidden" class="cookie-status" value="${escapeAttr(data.cookie_status || "")}" />
+        <input type="hidden" class="account-owner" value="${escapeAttr(data.owner || "")}" />
         <label>每天发送时间
           <input class="cron-time spark-action" type="time" name="cron-${index}-${escapeAttr(uid)}" autocomplete="off" value="${escapeAttr(cron)}" ${operate ? "" : "disabled"} />
         </label>
@@ -519,6 +594,7 @@
     function renderAccounts() {
       $("accounts").innerHTML = (window.__accounts || []).map(accountCard).join("");
       $("noAccounts").classList.toggle("hidden", !!(window.__accounts && window.__accounts.length));
+      updateAccountQuota();
       const st = window.__lastStatus;
       if (st) setBusy(st.running, st.run_message || "空闲", st.running_ids || []);
       applySparkLock();
@@ -546,6 +622,7 @@
         cron_minute: t.minute,
         cookie_source: (node.querySelector(".cookie-source") && node.querySelector(".cookie-source").value) || "",
         cookie_status: (node.querySelector(".cookie-status") && node.querySelector(".cookie-status").value) || "",
+        owner: (node.querySelector(".account-owner") && node.querySelector(".account-owner").value) || "",
         cookies: window.__accountCookies[uniqueId] || "",
       };
     }
@@ -553,7 +630,7 @@
       return [...document.querySelectorAll(".account")].map(collectAccount).filter((item) => item.unique_id);
     }
     async function removeAccount(index) {
-      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
       window.__accounts = collectAccounts();
       const removed = window.__accounts.splice(index, 1)[0];
       if (removed && removed.unique_id) delete window.__accountCookies[removed.unique_id];
@@ -791,6 +868,11 @@
         next.cron_minute = Number.isFinite(Number(window.__accounts[exist].cron_minute)) ? window.__accounts[exist].cron_minute : 0;
         window.__accounts[exist] = next;
       } else {
+        if (!canAddAccount()) {
+          qrApplying = false;
+          toast("当前卡密最多添加 " + ((current && current.max_accounts) || 1) + " 个账号", "err");
+          return;
+        }
         window.__accounts.push(next);
       }
       window.__accountCookies[uniqueId] = cookies;
@@ -836,7 +918,7 @@
       }
     }
     async function startQrLogin(index) {
-      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
       closeAddAccount();
       closeCkModal();
       qrApplying = false;
@@ -872,8 +954,12 @@
       } catch (e) {}
     }
     function openAddAccount(index = -1) {
-      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
       window.__addReplaceIndex = Number.isInteger(index) ? index : -1;
+      if (window.__addReplaceIndex < 0 && !canAddAccount()) {
+        toast("当前卡密最多添加 " + ((current && current.max_accounts) || 1) + " 个账号", "err");
+        return;
+      }
       if ($("addAccountTitle")) {
         $("addAccountTitle").textContent = window.__addReplaceIndex >= 0 ? "更新登录" : "添加账号";
       }
@@ -897,7 +983,7 @@
       $("ckModal").classList.add("hidden");
     }
     async function submitCookieJson() {
-      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
       const raw = ($("ckJson").value || "").trim();
       if (!raw) {
         toast("请先粘贴 Cookie JSON", "err");
@@ -933,7 +1019,7 @@
       }
     }
     async function checkAccount(index) {
-      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
       const node = document.querySelectorAll(".account")[index];
       if (!node) return;
       const item = collectAccount(node);
@@ -998,7 +1084,7 @@
       await checkStatus();
     }
     async function saveGlobalSettings() {
-      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
       try {
         await saveConfig(false, false);
       } catch (err) {
@@ -1006,7 +1092,7 @@
       }
     }
     async function saveAccount(index, silent = false) {
-      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return false; }
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return false; }
       const node = document.querySelectorAll(".account")[index];
       if (!node) return;
       const item = collectAccount(node);
@@ -1029,7 +1115,7 @@
       }
     }
     async function runAccount(index) {
-      if (!canSpark()) { toast("试用已到期，无法续火花", "err"); return; }
+      if (!canSpark()) { toast(sparkLockMsg("无法续火花"), "err"); return; }
       const node = document.querySelectorAll(".account")[index];
       if (!node) return;
       const item = collectAccount(node);
@@ -1138,7 +1224,7 @@
           <div class="account-head">
             <div>
               <strong>${escapeHtml(u.username)}</strong>
-              <div class="account-id">注册 ${escapeHtml(u.created_label || "-")} · 到期 ${escapeHtml(u.expires_label || "-")}</div>
+              <div class="account-id">注册 ${escapeHtml(u.created_label || "-")} · 到期 ${escapeHtml(u.expires_label || "-")}${u.card_code ? " · 卡密 " + escapeHtml(u.card_code) : ""}</div>
             </div>
             <div class="account-head-right">
               <span class="pill">${admin ? "管理员" : "普通用户"}</span>
@@ -1152,7 +1238,8 @@
               <option value="admin" ${admin ? "selected" : ""}>管理员（永久）</option>
             </select>
           </label>
-          ${admin ? "" : `<label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="1" max="365" placeholder="例如 1" /></label>`}
+          ${admin ? "" : `<label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="1" max="3650" placeholder="例如 1" /></label>
+          <label>账号额度<input data-user="${escapeAttr(u.username)}" class="max-accounts" type="number" min="1" max="100" value="${escapeAttr(String(u.max_accounts || 1))}" /></label>`}
           <div class="account-actions">
             <button class="btn-ghost" type="button" onclick="saveUser('${escapeAttr(u.username)}')">保存</button>
             <button class="btn-run" type="button" onclick="removeUser('${escapeAttr(u.username)}')">删除</button>
@@ -1163,6 +1250,7 @@
     function toggleNewUserDays() {
       const admin = $("newRole") && $("newRole").value === "admin";
       if ($("newDays")) $("newDays").disabled = !!admin;
+      if ($("newMaxAccounts")) $("newMaxAccounts").disabled = !!admin;
     }
     async function createUser() {
       try {
@@ -1173,6 +1261,7 @@
             password: $("newPassword").value,
             role: $("newRole").value,
             days: Number($("newDays") && $("newDays").value) || 1,
+            max_accounts: Number($("newMaxAccounts") && $("newMaxAccounts").value) || 1,
           }),
         });
         toast("已添加账户");
@@ -1187,10 +1276,17 @@
       const pass = document.querySelector(`.reset-pass[data-user="${username}"]`)?.value || "";
       const role = document.querySelector(`.reset-role[data-user="${username}"]`)?.value || "user";
       const extra = document.querySelector(`.extra-days[data-user="${username}"]`)?.value || "";
+      const maxAccounts = document.querySelector(`.max-accounts[data-user="${username}"]`)?.value || "";
       try {
         await api("/api/users/update", {
           method: "POST",
-          body: JSON.stringify({ username, password: pass, role, extra_days: extra ? Number(extra) : "" }),
+          body: JSON.stringify({
+            username,
+            password: pass,
+            role,
+            extra_days: extra ? Number(extra) : "",
+            max_accounts: maxAccounts ? Number(maxAccounts) : "",
+          }),
         });
         toast("账户已更新");
         await loadUsers();
@@ -1209,10 +1305,82 @@
         toast(err.message, "err");
       }
     }
+    async function copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast("已复制");
+      } catch (err) {
+        toast("复制失败，请手动选择", "err");
+      }
+    }
+    function renderCards(cards, created) {
+      const createdCodes = new Set((created || []).map((item) => item.code));
+      if ($("cardList")) {
+        $("cardList").innerHTML = (cards || []).map((item) => {
+          const used = !!item.used;
+          return `<div class="user-card ${createdCodes.has(item.code) ? "card-fresh" : ""}">
+            <div class="account-head">
+              <div>
+                <strong class="card-code">${escapeHtml(item.code)}</strong>
+                <div class="account-id">${item.days} 天 · ${item.max_accounts} 个账号${item.note ? " · " + escapeHtml(item.note) : ""}</div>
+              </div>
+              <span class="ck-status ${used ? "ck-bad" : "ck-ok"}">${escapeHtml(item.status_label || "")}</span>
+            </div>
+            <div class="account-id">生成 ${escapeHtml(item.created_label || "-")}${used && item.used_label ? " · 使用 " + escapeHtml(item.used_label) : ""}</div>
+            <div class="account-actions">
+              <button class="btn-ghost" type="button" onclick="copyText('${escapeAttr(item.code)}')">复制</button>
+              ${used ? "" : `<button class="btn-run" type="button" onclick="removeCard('${escapeAttr(item.code)}')">删除</button>`}
+            </div>
+          </div>`;
+        }).join("");
+      }
+    }
+    async function loadCards() {
+      const data = await api("/api/cards");
+      renderCards(data.cards || []);
+    }
+    async function generateCards() {
+      try {
+        const data = await api("/api/cards", {
+          method: "POST",
+          body: JSON.stringify({
+            days: Number($("cardDays") && $("cardDays").value) || 1,
+            max_accounts: Number($("cardMaxAccounts") && $("cardMaxAccounts").value) || 1,
+            count: Number($("cardCount") && $("cardCount").value) || 1,
+            note: ($("cardNote") && $("cardNote").value) || "",
+          }),
+        });
+        const created = data.created || [];
+        const codes = created.map((item) => item.code).join("\n");
+        if ($("newCardCodes")) {
+          $("newCardCodes").textContent = codes;
+          $("newCardCodes").classList.toggle("hidden", !codes);
+        }
+        renderCards(data.cards || [], created);
+        if (codes) {
+          try { await navigator.clipboard.writeText(codes); } catch (e) {}
+          toast("已生成 " + created.length + " 张卡密，并复制到剪贴板");
+        }
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function removeCard(code) {
+      const ok = await ask("删除卡密", "确定删除 " + code + " 吗？未使用的卡密删除后作废。");
+      if (!ok) return;
+      try {
+        const data = await api("/api/cards/delete", { method: "POST", body: JSON.stringify({ code }) });
+        renderCards(data.cards || []);
+        toast("已删除卡密");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
     async function refreshAll() {
       await checkGithub();
       if (page === "logs") await loadLogs();
       if (page === "users") await loadUsers();
+      if (page === "cards") await loadCards();
     }
     async function boot() {
       await checkStatus();
