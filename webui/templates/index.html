@@ -4,101 +4,144 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DouYinSparkFlow 控制台</title>
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}" />
 </head>
 <body>
+  <div id="toasts" class="toast-wrap"></div>
+
   <div id="login" class="login-mask hidden">
     <form class="login-card" onsubmit="return doLogin(event)">
-      <h1>DouYinSparkFlow</h1>
-      <p>输入控制台密码进入</p>
+      <div class="spark-mark">✦</div>
+      <h1>SparkFlow</h1>
+      <p>续火花控制台，输入密码进入</p>
       <input id="password" type="password" placeholder="默认 sparkflow" autocomplete="current-password" />
-      <button type="submit">进入控制台</button>
+      <button class="btn-primary" type="submit">进入控制台</button>
       <div id="loginError" class="error"></div>
     </form>
   </div>
 
-  <header class="top">
-    <div>
-      <div class="brand">DouYinSparkFlow</div>
-      <div class="sub">可视化控制台 · 源码运行</div>
+  <div id="modal" class="modal-mask hidden">
+    <div class="modal-card">
+      <h3 id="modalTitle">确认操作</h3>
+      <p id="modalText" class="hint"></p>
+      <div class="modal-actions">
+        <button class="btn-ghost" id="modalCancel">取消</button>
+        <button class="btn-run" id="modalOk">确定</button>
+      </div>
     </div>
-    <div class="top-actions">
-      <span class="pill" id="versionPill">v{{ version }}</span>
-      <button class="ghost" onclick="checkStatus()">刷新状态</button>
-      <button class="primary" id="updateBtn" onclick="doUpdate()">从 GitHub 更新</button>
-    </div>
-  </header>
+  </div>
 
-  <main>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand-wrap">
+        <div class="spark-mark">✦</div>
+        <div>
+          <div class="brand">DouYin<span>SparkFlow</span></div>
+          <div class="sub">火花续航控制台</div>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="pill" id="versionPill">v{{ version }}</span>
+        <span class="status-dot" id="liveDot"><i></i><b id="runText">空闲</b></span>
+        <button class="btn-ghost" onclick="refreshAll()">刷新</button>
+        <button class="btn-primary" id="updateBtn" onclick="doUpdate()">从 GitHub 更新</button>
+      </div>
+    </header>
+
     <section class="cards">
-      <article>
+      <article class="card">
         <label>本地版本</label>
         <strong id="localVersion">-</strong>
       </article>
-      <article>
+      <article class="card">
         <label>GitHub 版本</label>
         <strong id="remoteVersion">-</strong>
       </article>
-      <article>
+      <article class="card">
         <label>定时发送</label>
         <strong id="cronText">-</strong>
       </article>
-      <article>
-        <label>当前状态</label>
-        <strong id="runText">-</strong>
+      <article class="card">
+        <label>账号数量</label>
+        <strong id="accountCount">-</strong>
       </article>
     </section>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>账号与任务</h2>
-        <div>
-          <button class="ghost" onclick="addAccount()">添加账号</button>
-          <button class="ghost" onclick="saveConfig()">保存配置</button>
-          <button class="danger" id="runBtn" onclick="runNow()">立即续火花</button>
-        </div>
-      </div>
-      <div class="grid two">
-        <label>每天发送时间
-          <div class="row">
-            <input id="cronHour" type="number" min="0" max="23" />
-            <span>:</span>
-            <input id="cronMinute" type="number" min="0" max="59" />
+    <div class="workspace">
+      <section class="panel">
+        <div class="panel-head">
+          <h2>任务配置</h2>
+          <div>
+            <button class="btn-ghost" onclick="addAccount()">添加账号</button>
+            <button class="btn-ghost" id="saveBtn" onclick="saveConfig()">保存配置</button>
+            <button class="btn-run" id="runBtn" onclick="runNow()">立即续火花</button>
           </div>
-        </label>
-        <label>控制台密码
-          <input id="webPassword" type="text" />
-        </label>
-        <label class="span-2">消息模板
-          <textarea id="messageTemplate" rows="3"></textarea>
-        </label>
-        <label class="span-2">GitHub 仓库
-          <input id="githubRepo" type="text" />
-        </label>
-      </div>
-      <div id="accounts"></div>
-    </section>
+        </div>
+        <div class="grid two">
+          <label>每天发送时间
+            <div class="row">
+              <input id="cronHour" type="number" min="0" max="23" />
+              <span>:</span>
+              <input id="cronMinute" type="number" min="0" max="59" />
+            </div>
+          </label>
+          <label>控制台密码
+            <input id="webPassword" type="text" />
+          </label>
+          <label class="span-2">消息模板
+            <textarea id="messageTemplate" rows="3"></textarea>
+          </label>
+          <label class="span-2">GitHub 仓库
+            <input id="githubRepo" type="text" />
+          </label>
+        </div>
+        <div id="accounts"></div>
+      </section>
 
-    <section class="panel">
-      <div class="panel-head">
-        <h2>运行日志</h2>
-        <button class="ghost" onclick="loadLogs()">刷新日志</button>
-      </div>
-      <pre id="logs">加载中...</pre>
-    </section>
-  </main>
+      <section class="panel">
+        <div class="panel-head">
+          <h2>运行日志</h2>
+          <button class="btn-ghost" onclick="loadLogs()">刷新日志</button>
+        </div>
+        <pre class="log-box" id="logs">还没有日志。保存配置后点「立即续火花」，这里会实时刷出结果。</pre>
+      </section>
+    </div>
+  </div>
 
   <script>
     const $ = (id) => document.getElementById(id);
+    let logTimer = null;
+
+    function toast(message, type = "ok") {
+      const el = document.createElement("div");
+      el.className = "toast " + type;
+      el.textContent = message;
+      $("toasts").appendChild(el);
+      setTimeout(() => el.remove(), 3200);
+    }
+
+    function ask(title, text) {
+      return new Promise((resolve) => {
+        $("modalTitle").textContent = title;
+        $("modalText").textContent = text;
+        $("modal").classList.remove("hidden");
+        const done = (ok) => {
+          $("modal").classList.add("hidden");
+          $("modalOk").onclick = null;
+          $("modalCancel").onclick = null;
+          resolve(ok);
+        };
+        $("modalOk").onclick = () => done(true);
+        $("modalCancel").onclick = () => done(false);
+      });
+    }
 
     function accountCard(data, index) {
-      const targets = (data.targets || []).join("\n");
-      const cookies = data.cookies || "";
       return `
         <div class="account" data-index="${index}">
           <div class="account-head">
             <strong>账号 ${index + 1}</strong>
-            <button class="ghost mini" onclick="removeAccount(${index})">删除</button>
+            <button class="btn-ghost mini" onclick="removeAccount(${index})">删除</button>
           </div>
           <div class="grid two">
             <label>用户名
@@ -108,34 +151,26 @@
               <input class="unique-id" value="${escapeAttr(data.unique_id || "")}" />
             </label>
             <label>目标好友（一行一个）
-              <textarea class="targets" rows="4">${escapeHtml(targets)}</textarea>
+              <textarea class="targets" rows="5">${escapeHtml((data.targets || []).join("\n"))}</textarea>
             </label>
             <label>Cookie JSON
-              <textarea class="cookies" rows="4" placeholder="从 Cookie-Editor 导出 JSON 后粘贴">${escapeHtml(cookies)}</textarea>
+              <textarea class="cookies" rows="5" placeholder="从 Cookie-Editor 导出 JSON 后粘贴">${escapeHtml(data.cookies || "")}</textarea>
             </label>
           </div>
         </div>`;
     }
 
     function escapeHtml(text) {
-      return String(text || "")
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
+      return String(text || "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
     }
     function escapeAttr(text) {
       return escapeHtml(text).replaceAll('"', "&quot;");
     }
 
     async function api(path, options = {}) {
-      const resp = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...options,
-      });
+      const resp = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
       const data = await resp.json().catch(() => ({}));
-      if (!resp.ok) {
-        throw new Error(data.detail || data.message || "请求失败");
-      }
+      if (!resp.ok) throw new Error(data.detail || data.message || "请求失败");
       return data;
     }
 
@@ -143,11 +178,9 @@
       event.preventDefault();
       $("loginError").textContent = "";
       try {
-        await api("/api/login", {
-          method: "POST",
-          body: JSON.stringify({ password: $("password").value }),
-        });
+        await api("/api/login", { method: "POST", body: JSON.stringify({ password: $("password").value }) });
         $("login").classList.add("hidden");
+        toast("已进入控制台");
         await boot();
       } catch (err) {
         $("loginError").textContent = err.message;
@@ -155,24 +188,31 @@
       return false;
     }
 
+    function setBusy(busy, text) {
+      $("liveDot").classList.toggle("busy", !!busy);
+      $("runText").textContent = text;
+      $("runBtn").disabled = !!busy;
+      $("runBtn").textContent = busy ? "发送中..." : "立即续火花";
+    }
+
     async function checkStatus() {
       const data = await api("/api/status");
       $("localVersion").textContent = "v" + data.local_version;
       $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未获取到";
       $("versionPill").textContent = "v" + data.local_version;
-      $("cronText").textContent = data.cron + " " + data.tz;
-      $("runText").textContent = data.running ? data.run_message : data.run_message || "空闲";
-      $("updateBtn").textContent = data.update_available ? "发现新版本，点击更新" : "从 GitHub 更新";
-      if (!data.is_git_repo) {
-        $("updateBtn").title = "当前不是 Git 仓库，服务器请先 clone 你的 GitHub 项目";
-      }
+      $("cronText").textContent = data.cron;
+      $("accountCount").textContent = String((data.accounts || []).length);
+      setBusy(data.running, data.run_message || (data.running ? "执行中" : "空闲"));
+      $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
+      if (data.running) startLogWatch();
+      else stopLogWatch();
       return data;
     }
 
     async function loadConfig() {
       const cfg = await api("/api/config");
       $("cronHour").value = cfg.cron_hour;
-      $("cronMinute").value = cfg.cron_minute;
+      $("cronMinute").value = String(cfg.cron_minute).padStart(2, "0");
       $("webPassword").value = cfg.web_password;
       $("messageTemplate").value = cfg.message_template;
       $("githubRepo").value = cfg.github_repo;
@@ -183,7 +223,6 @@
     function renderAccounts() {
       $("accounts").innerHTML = window.__accounts.map(accountCard).join("");
     }
-
     function collectAccounts() {
       return [...document.querySelectorAll(".account")].map((node) => ({
         username: node.querySelector(".username").value.trim(),
@@ -192,13 +231,11 @@
         cookies: node.querySelector(".cookies").value.trim(),
       }));
     }
-
     function addAccount() {
       window.__accounts = collectAccounts();
       window.__accounts.push({ username: "新账号", unique_id: "", targets: [], cookies: "" });
       renderAccounts();
     }
-
     function removeAccount(index) {
       window.__accounts = collectAccounts();
       window.__accounts.splice(index, 1);
@@ -206,7 +243,7 @@
       else renderAccounts();
     }
 
-    async function saveConfig() {
+    async function saveConfig(silent = false) {
       const body = {
         cron_hour: Number($("cronHour").value || 9),
         cron_minute: Number($("cronMinute").value || 0),
@@ -217,25 +254,36 @@
         github_repo: $("githubRepo").value,
         accounts: collectAccounts(),
       };
-      const data = await api("/api/config", { method: "POST", body: JSON.stringify(body) });
-      alert("配置已保存：" + data.path);
+      await api("/api/config", { method: "POST", body: JSON.stringify(body) });
+      if (!silent) toast("配置已保存");
       await checkStatus();
     }
 
     async function runNow() {
-      if (!confirm("现在就会给配置里的好友发消息，确定吗？")) return;
-      await saveConfig();
-      const data = await api("/api/run", { method: "POST", body: "{}" });
-      alert(data.message);
-      await loadLogs();
-      await checkStatus();
+      const ok = await ask("立即续火花", "现在就会给配置里的好友发消息，确定继续？");
+      if (!ok) return;
+      try {
+        await saveConfig(true);
+        const data = await api("/api/run", { method: "POST", body: "{}" });
+        toast(data.message || "任务已开始");
+        setBusy(true, "正在执行续火花任务");
+        startLogWatch();
+        await loadLogs();
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
 
     async function doUpdate() {
-      if (!confirm("将从 GitHub 拉取最新代码并覆盖本地源码，确定吗？")) return;
-      const data = await api("/api/update", { method: "POST", body: "{}" });
-      alert(data.message + "\n" + (data.log || ""));
-      location.reload();
+      const ok = await ask("从 GitHub 更新", "将覆盖服务器上的源码。配置文件不会被删。");
+      if (!ok) return;
+      try {
+        const data = await api("/api/update", { method: "POST", body: "{}" });
+        toast(data.message || "更新完成");
+        setTimeout(() => location.reload(), 1600);
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
 
     async function loadLogs() {
@@ -244,23 +292,41 @@
       $("logs").scrollTop = $("logs").scrollHeight;
     }
 
+    function startLogWatch() {
+      if (logTimer) return;
+      logTimer = setInterval(async () => {
+        try {
+          await loadLogs();
+          await checkStatus();
+        } catch (e) {}
+      }, 2000);
+    }
+    function stopLogWatch() {
+      if (!logTimer) return;
+      clearInterval(logTimer);
+      logTimer = null;
+    }
+
+    async function refreshAll() {
+      await checkStatus();
+      await loadLogs();
+      toast("状态已刷新");
+    }
+
     async function boot() {
       await checkStatus();
       await loadConfig();
       await loadLogs();
       setInterval(async () => {
         try { await checkStatus(); } catch (e) {}
-      }, 8000);
+      }, 5000);
     }
 
     (async () => {
       try {
         const me = await api("/api/me");
-        if (!me.authed) {
-          $("login").classList.remove("hidden");
-        } else {
-          await boot();
-        }
+        if (!me.authed) $("login").classList.remove("hidden");
+        else await boot();
       } catch (e) {
         $("login").classList.remove("hidden");
       }
