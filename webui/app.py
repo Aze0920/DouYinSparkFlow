@@ -256,7 +256,7 @@ def _refresh_remote_version():
 
 
 def remote_version_fast() -> str:
-    stale = time.time() - _remote_cache["ts"] > 20
+    stale = time.time() - _remote_cache["ts"] > 60
     if stale or not _remote_cache["version"]:
         threading.Thread(target=_refresh_remote_version, daemon=True).start()
     return _remote_cache["version"]
@@ -396,6 +396,39 @@ def status(request: Request):
         "running": _run_state["running"],
         "run_message": _run_state["message"],
         "accounts": parse_accounts(env),
+    }
+
+
+@app.post("/api/github/check")
+def github_check(request: Request):
+    require_auth(request)
+    logger.info("手动检测 GitHub 版本 origin=%s", origin_url())
+    version, sha = git_remote_version()
+    if not version:
+        version = fetch_remote_version()
+    if not sha:
+        sha = fetch_remote_sha()
+    if version:
+        _remote_cache["version"] = version
+    if sha:
+        _remote_cache["sha"] = sha
+    _remote_cache["ts"] = time.time()
+    local = read_version()
+    local_sha = local_git_sha()
+    update_available = bool(
+        (version and version != local) or (sha and local_sha and sha != local_sha)
+    )
+    if version:
+        message = f"发现新版本 v{version}" if update_available else f"GitHub 已是最新 v{version}"
+    else:
+        message = "没有获取到 GitHub 版本，请看运行日志"
+    logger.info("GitHub 检测结果 local=%s remote=%s available=%s", local, version, update_available)
+    return {
+        "ok": True,
+        "local_version": local,
+        "remote_version": version,
+        "update_available": update_available,
+        "message": message,
     }
 
 
