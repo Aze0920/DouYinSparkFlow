@@ -195,6 +195,8 @@
       $("runBtn").textContent = busy ? "发送中..." : "立即续火花";
     }
 
+    let pollBusy = false;
+
     async function checkStatus() {
       const data = await api("/api/status");
       $("localVersion").textContent = "v" + data.local_version;
@@ -204,8 +206,6 @@
       $("accountCount").textContent = String((data.accounts || []).length);
       setBusy(data.running, data.run_message || (data.running ? "执行中" : "空闲"));
       $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
-      if (data.running) startLogWatch();
-      else stopLogWatch();
       return data;
     }
 
@@ -260,17 +260,21 @@
     }
 
     async function runNow() {
+      toast("正在启动任务...");
       const ok = await ask("立即续火花", "现在就会给配置里的好友发消息，确定继续？");
       if (!ok) return;
       try {
+        $("runBtn").disabled = true;
+        $("runBtn").textContent = "发送中...";
         await saveConfig(true);
         const data = await api("/api/run", { method: "POST", body: "{}" });
         toast(data.message || "任务已开始");
         setBusy(true, "正在执行续火花任务");
-        startLogWatch();
         await loadLogs();
       } catch (err) {
         toast(err.message, "err");
+        $("runBtn").disabled = false;
+        $("runBtn").textContent = "立即续火花";
       }
     }
 
@@ -318,10 +322,13 @@
       await loadConfig();
       await loadLogs();
       setInterval(async () => {
+        if (pollBusy) return;
+        pollBusy = true;
         try {
           await checkStatus();
           await loadLogs();
         } catch (e) {}
+        pollBusy = false;
       }, 2000);
     }
 

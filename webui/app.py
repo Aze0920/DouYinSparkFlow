@@ -27,6 +27,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 _run_lock = threading.Lock()
 _run_state = {"running": False, "message": "空闲", "started_at": 0}
+_remote_cache = {"version": "", "ts": 0, "busy": False}
 
 
 def read_version() -> str:
@@ -66,13 +67,33 @@ def fetch_remote_version() -> str:
     ]
     for url in urls:
         try:
-            with httpx.Client(timeout=8.0, follow_redirects=True) as client:
+            with httpx.Client(timeout=2.5, follow_redirects=True) as client:
                 resp = client.get(url)
                 if resp.status_code == 200 and resp.text.strip():
                     return resp.text.strip().splitlines()[0].strip()
         except Exception:
             continue
     return ""
+
+
+def _refresh_remote_version():
+    if _remote_cache["busy"]:
+        return
+    _remote_cache["busy"] = True
+    try:
+        version = fetch_remote_version()
+        if version:
+            _remote_cache["version"] = version
+            _remote_cache["ts"] = time.time()
+    finally:
+        _remote_cache["busy"] = False
+
+
+def remote_version_fast() -> str:
+    stale = time.time() - _remote_cache["ts"] > 60
+    if stale or not _remote_cache["version"]:
+        threading.Thread(target=_refresh_remote_version, daemon=True).start()
+    return _remote_cache["version"]
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -106,7 +127,7 @@ def status(request: Request):
     require_auth(request)
     env = load_env()
     local = read_version()
-    remote = fetch_remote_version()
+    remote = remote_version_fast()
     return {
         "ok": True,
         "local_version": local,
