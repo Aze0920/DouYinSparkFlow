@@ -1,0 +1,20 @@
+services:
+  douyin-spark-flow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: douyin-spark-flow
+    restart: unless-stopped
+    shm_size: 1gb
+    ports:
+      - "${WEB_BIND_ADDRESS:-0.0.0.0}:${WEB_PORT:-8787}:8787"
+    environment:
+      GITHUB_ACTIONS: "true"
+      PYTHONUNBUFFERED: "1"
+      HEADLESS: "true"
+      WEB_PASSWORD: ${WEB_PASSWORD:-sparkflow}
+      GITHUB_REPO: ${GITHUB_REPO:-Aze0920/DouYinSparkFlow}
+    volumes:
+      - .:/app
+      - ${CONFIG_ENV_FILE:-./config/.env}:/app/.env
+      - ${LOGS_DIR:-./logs}:/app/logs

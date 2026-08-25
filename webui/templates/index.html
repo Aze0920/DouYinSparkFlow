@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>DouYinSparkFlow 控制台</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body>
+  <div id="login" class="login-mask hidden">
+    <form class="login-card" onsubmit="return doLogin(event)">
+      <h1>DouYinSparkFlow</h1>
+      <p>输入控制台密码进入</p>
+      <input id="password" type="password" placeholder="默认 sparkflow" autocomplete="current-password" />
+      <button type="submit">进入控制台</button>
+      <div id="loginError" class="error"></div>
+    </form>
+  </div>
+
+  <header class="top">
+    <div>
+      <div class="brand">DouYinSparkFlow</div>
+      <div class="sub">可视化控制台 · 源码运行</div>
+    </div>
+    <div class="top-actions">
+      <span class="pill" id="versionPill">v{{ version }}</span>
+      <button class="ghost" onclick="checkStatus()">刷新状态</button>
+      <button class="primary" id="updateBtn" onclick="doUpdate()">从 GitHub 更新</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="cards">
+      <article>
+        <label>本地版本</label>
+        <strong id="localVersion">-</strong>
+      </article>
+      <article>
+        <label>GitHub 版本</label>
+        <strong id="remoteVersion">-</strong>
+      </article>
+      <article>
+        <label>定时发送</label>
+        <strong id="cronText">-</strong>
+      </article>
+      <article>
+        <label>当前状态</label>
+        <strong id="runText">-</strong>
+      </article>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>账号与任务</h2>
+        <div>
+          <button class="ghost" onclick="addAccount()">添加账号</button>
+          <button class="ghost" onclick="saveConfig()">保存配置</button>
+          <button class="danger" id="runBtn" onclick="runNow()">立即续火花</button>
+        </div>
+      </div>
+      <div class="grid two">
+        <label>每天发送时间
+          <div class="row">
+            <input id="cronHour" type="number" min="0" max="23" />
+            <span>:</span>
+            <input id="cronMinute" type="number" min="0" max="59" />
+          </div>
+        </label>
+        <label>控制台密码
+          <input id="webPassword" type="text" />
+        </label>
+        <label class="span-2">消息模板
+          <textarea id="messageTemplate" rows="3"></textarea>
+        </label>
+        <label class="span-2">GitHub 仓库
+          <input id="githubRepo" type="text" />
+        </label>
+      </div>
+      <div id="accounts"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h2>运行日志</h2>
+        <button class="ghost" onclick="loadLogs()">刷新日志</button>
+      </div>
+      <pre id="logs">加载中...</pre>
+    </section>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+
+    function accountCard(data, index) {
+      const targets = (data.targets || []).join("\n");
+      const cookies = data.cookies || "";
+      return `
+        <div class="account" data-index="${index}">
+          <div class="account-head">
+            <strong>账号 ${index + 1}</strong>
+            <button class="ghost mini" onclick="removeAccount(${index})">删除</button>
+          </div>
+          <div class="grid two">
+            <label>用户名
+              <input class="username" value="${escapeAttr(data.username || "")}" />
+            </label>
+            <label>编号 / 抖音号
+              <input class="unique-id" value="${escapeAttr(data.unique_id || "")}" />
+            </label>
+            <label>目标好友（一行一个）
+              <textarea class="targets" rows="4">${escapeHtml(targets)}</textarea>
+            </label>
+            <label>Cookie JSON
+              <textarea class="cookies" rows="4" placeholder="从 Cookie-Editor 导出 JSON 后粘贴">${escapeHtml(cookies)}</textarea>
+            </label>
+          </div>
+        </div>`;
+    }
+
+    function escapeHtml(text) {
+      return String(text || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+    }
+    function escapeAttr(text) {
+      return escapeHtml(text).replaceAll('"', "&quot;");
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) {
+        throw new Error(data.detail || data.message || "请求失败");
+      }
+      return data;
+    }
+
+    async function doLogin(event) {
+      event.preventDefault();
+      $("loginError").textContent = "";
+      try {
+        await api("/api/login", {
+          method: "POST",
+          body: JSON.stringify({ password: $("password").value }),
+        });
+        $("login").classList.add("hidden");
+        await boot();
+      } catch (err) {
+        $("loginError").textContent = err.message;
+      }
+      return false;
+    }
+
+    async function checkStatus() {
+      const data = await api("/api/status");
+      $("localVersion").textContent = "v" + data.local_version;
+      $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未获取到";
+      $("versionPill").textContent = "v" + data.local_version;
+      $("cronText").textContent = data.cron + " " + data.tz;
+      $("runText").textContent = data.running ? data.run_message : data.run_message || "空闲";
+      $("updateBtn").textContent = data.update_available ? "发现新版本，点击更新" : "从 GitHub 更新";
+      if (!data.is_git_repo) {
+        $("updateBtn").title = "当前不是 Git 仓库，服务器请先 clone 你的 GitHub 项目";
+      }
+      return data;
+    }
+
+    async function loadConfig() {
+      const cfg = await api("/api/config");
+      $("cronHour").value = cfg.cron_hour;
+      $("cronMinute").value = cfg.cron_minute;
+      $("webPassword").value = cfg.web_password;
+      $("messageTemplate").value = cfg.message_template;
+      $("githubRepo").value = cfg.github_repo;
+      window.__accounts = cfg.accounts.length ? cfg.accounts : [{ username: "账号1", unique_id: "", targets: [], cookies: "" }];
+      renderAccounts();
+    }
+
+    function renderAccounts() {
+      $("accounts").innerHTML = window.__accounts.map(accountCard).join("");
+    }
+
+    function collectAccounts() {
+      return [...document.querySelectorAll(".account")].map((node) => ({
+        username: node.querySelector(".username").value.trim(),
+        unique_id: node.querySelector(".unique-id").value.trim(),
+        targets: node.querySelector(".targets").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
+        cookies: node.querySelector(".cookies").value.trim(),
+      }));
+    }
+
+    function addAccount() {
+      window.__accounts = collectAccounts();
+      window.__accounts.push({ username: "新账号", unique_id: "", targets: [], cookies: "" });
+      renderAccounts();
+    }
+
+    function removeAccount(index) {
+      window.__accounts = collectAccounts();
+      window.__accounts.splice(index, 1);
+      if (!window.__accounts.length) addAccount();
+      else renderAccounts();
+    }
+
+    async function saveConfig() {
+      const body = {
+        cron_hour: Number($("cronHour").value || 9),
+        cron_minute: Number($("cronMinute").value || 0),
+        cron_second: 0,
+        tz: "Asia/Shanghai",
+        message_template: $("messageTemplate").value,
+        web_password: $("webPassword").value,
+        github_repo: $("githubRepo").value,
+        accounts: collectAccounts(),
+      };
+      const data = await api("/api/config", { method: "POST", body: JSON.stringify(body) });
+      alert("配置已保存：" + data.path);
+      await checkStatus();
+    }
+
+    async function runNow() {
+      if (!confirm("现在就会给配置里的好友发消息，确定吗？")) return;
+      await saveConfig();
+      const data = await api("/api/run", { method: "POST", body: "{}" });
+      alert(data.message);
+      await loadLogs();
+      await checkStatus();
+    }
+
+    async function doUpdate() {
+      if (!confirm("将从 GitHub 拉取最新代码并覆盖本地源码，确定吗？")) return;
+      const data = await api("/api/update", { method: "POST", body: "{}" });
+      alert(data.message + "\n" + (data.log || ""));
+      location.reload();
+    }
+
+    async function loadLogs() {
+      const data = await api("/api/logs");
+      $("logs").textContent = data.text || "暂无日志";
+      $("logs").scrollTop = $("logs").scrollHeight;
+    }
+
+    async function boot() {
+      await checkStatus();
+      await loadConfig();
+      await loadLogs();
+      setInterval(async () => {
+        try { await checkStatus(); } catch (e) {}
+      }, 8000);
+    }
+
+    (async () => {
+      try {
+        const me = await api("/api/me");
+        if (!me.authed) {
+          $("login").classList.remove("hidden");
+        } else {
+          await boot();
+        }
+      } catch (e) {
+        $("login").classList.remove("hidden");
+      }
+    })();
+  </script>
+</body>
+</html>

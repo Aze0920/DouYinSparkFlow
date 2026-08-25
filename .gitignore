@@ -1,0 +1,9 @@
+.venv/
+**/__pycache__/
+.vscode/
+chrome/
+logs/
+.DS_Store
+usersData.json
+.env
+config/.env
