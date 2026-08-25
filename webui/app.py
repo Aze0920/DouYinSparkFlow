@@ -712,16 +712,46 @@ def unbind_pushplus(request: Request):
     return {"ok": True, **public_pushplus(saved)}
 
 
+@app.post("/api/notify/pushplus/token")
+def save_pushplus_token(request: Request, payload: dict | None = None):
+    user = require_auth(request)
+    payload = payload or {}
+    token = str(payload.get("token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="请粘贴 PushPlus 个人中心的用户token")
+    try:
+        send_pushplus("SparkFlow 测试推送", "token 已保存，以后续火花消息会发到这里", token=token)
+    except Exception as exc:
+        text = str(exc)
+        if "令牌" in text or "token" in text.lower():
+            raise HTTPException(
+                status_code=400,
+                detail="用户令牌不正确。请打开 pushplus.plus 登录后，在个人中心复制「用户token」再保存，不要填微信公众号 Token",
+            ) from exc
+        raise HTTPException(status_code=400, detail=text) from exc
+    name = user.get("username") or ""
+    cancel_pushplus_qr(name)
+    saved = set_user_pushplus(name, token)
+    logger.info("已保存 PushPlus token user=%s", name)
+    return {"ok": True, "message": "已保存，测试消息已发送", **public_pushplus(saved)}
+
+
 @app.post("/api/notify/pushplus/test")
 def test_pushplus_bind(request: Request):
     user = require_auth(request)
     token = user_pushplus_token(user.get("username") or "")
     if not token:
-        raise HTTPException(status_code=400, detail="请先扫码绑定 PushPlus")
+        raise HTTPException(status_code=400, detail="请先保存 PushPlus 用户token")
     try:
         send_pushplus("SparkFlow 测试推送", "绑定成功，以后续火花消息会发到这里", token=token)
     except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        text = str(exc)
+        if "令牌" in text or "token" in text.lower():
+            raise HTTPException(
+                status_code=400,
+                detail="用户令牌不正确。到 pushplus.plus 个人中心复制「用户token」粘贴保存，不要填公众号 Token",
+            ) from exc
+        raise HTTPException(status_code=400, detail=text) from exc
     return {"ok": True, "message": "测试消息已发送"}
 
 

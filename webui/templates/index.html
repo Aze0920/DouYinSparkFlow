@@ -156,22 +156,27 @@
             <h2>PushPlus</h2>
             <span class="ck-status" id="ppBindStatus">未绑定</span>
           </div>
-          <p class="sub">用微信扫这个码，关注的是 PushPlus 官方公众号，不是咱们自己的公众号。扫完后，续火花完成、失败、抖音掉线会发到你微信。管理员和普通用户都要各自绑一次。</p>
+          <p class="sub">打开 <a href="https://www.pushplus.plus" target="_blank" rel="noreferrer">pushplus.plus</a> 微信登录，进入个人中心复制 <b>用户token</b> 粘贴保存。也可以扫下面的码绑定。这和设置里的微信公众号不是一回事。</p>
+          <div class="grid two">
+            <label class="span-2">PushPlus 用户token
+              <input id="ppTokenInput" placeholder="在 pushplus.plus 个人中心复制，不要填公众号 Token" autocomplete="off" />
+            </label>
+            <label class="span-2">
+              <span class="pp-actions" style="margin-top:0">
+                <button class="btn-primary" type="button" onclick="savePushplusToken()">保存并测试</button>
+                <button class="btn-ghost" type="button" onclick="testPushplusBind()">发送测试</button>
+                <button class="btn-ghost" type="button" onclick="unbindPushplus()">解绑</button>
+              </span>
+            </label>
+          </div>
+          <p class="sub" id="ppBoundText"></p>
           <div id="ppUnbound" class="pp-bind-box">
             <img id="ppQrImage" class="qr-image hidden" alt="PushPlus 绑定二维码" referrerpolicy="no-referrer" />
             <div>
-              <div id="ppQrHint">正在生成二维码…</div>
+              <div id="ppQrHint">也可以扫码绑定。二维码过期就点刷新。</div>
               <div class="pp-actions">
                 <button class="btn-ghost" type="button" onclick="refreshPushplusQr()">刷新二维码</button>
               </div>
-            </div>
-          </div>
-          <div id="ppBound" class="hidden">
-            <p class="sub" id="ppBoundText">已绑定</p>
-            <div class="pp-actions">
-              <button class="btn-primary" type="button" onclick="testPushplusBind()">发送测试</button>
-              <button class="btn-ghost" type="button" onclick="refreshPushplusQr(true)">重新绑定</button>
-              <button class="btn-ghost" type="button" onclick="unbindPushplus()">解绑</button>
             </div>
           </div>
         </section>
@@ -261,9 +266,8 @@
         <section class="panel">
           <div class="panel-head">
             <h2>推送事件</h2>
-            <button class="btn-primary" type="button" onclick="return navTo(event, 'home')">去总览绑定 PushPlus</button>
           </div>
-          <p class="sub">PushPlus 绑定入口在「总览」，扫的是 PushPlus 官方码，不是自己的微信公众号。这里只勾选哪些事件要发。</p>
+          <p class="sub">控制哪些事件会推送给已绑定 PushPlus 的用户。PushPlus 在总览绑定。</p>
           <div class="grid two">
             <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
             <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
@@ -272,6 +276,33 @@
               <span class="row">
                 <button class="btn-primary" type="button" onclick="saveNotifySettings()">保存设置</button>
               </span>
+            </label>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>微信公众号（管理员配置）</h2>
+            <span class="ck-status" id="wxBindStatus">未绑定</span>
+          </div>
+          <p class="sub">这是咱们自己的服务号模板通道，给管理员配。和总览里的 PushPlus 不是同一个东西。不启用就不会发公众号模板。</p>
+          <div class="grid two">
+            <label class="check-line"><input id="wxEnabled" type="checkbox" /> 启用公众号推送</label>
+            <label>AppID<input id="wxAppId" placeholder="wx 开头的公众号 AppID" autocomplete="off" /></label>
+            <label>AppSecret<input id="wxAppSecret" type="password" placeholder="公众号 AppSecret" autocomplete="off" /></label>
+            <label>管理员 OpenID<input id="wxOpenId" placeholder="关注公众号后的 OpenID" autocomplete="off" /></label>
+            <label>Token<input id="wxToken" placeholder="服务器配置里的 Token，不是 PushPlus token" autocomplete="off" /></label>
+            <label>EncodingAESKey<input id="wxAesKey" placeholder="可选，安全模式才需要" autocomplete="off" /></label>
+            <label>完成模板 ID<input id="wxTplDone" placeholder="续火花完成" autocomplete="off" /></label>
+            <label>失败模板 ID<input id="wxTplFail" placeholder="续火花失败" autocomplete="off" /></label>
+            <label>掉线模板 ID<input id="wxTplOffline" placeholder="Cookie 失效 / 抖音掉线" autocomplete="off" /></label>
+            <label>模板字段
+              <select id="wxTplStyle">
+                <option value="thing">新版 thing1 / time2 / thing3</option>
+                <option value="keyword">旧版 first / keyword / remark</option>
+              </select>
+            </label>
+            <label class="span-2">
+              <button class="btn-ghost" type="button" onclick="testNotifySettings()">发送公众号测试</button>
             </label>
           </div>
         </section>
@@ -431,7 +462,7 @@
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "管理员永久有效。普通用户的天数和账号额度由卡密或这里指定"],
         cards: ["卡密管理", "一排一张卡密，生成后可复制发给用户"],
-        settings: ["设置", "勾选哪些事件发给 PushPlus"],
+        settings: ["设置", "推送事件和公众号模板"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
@@ -1503,24 +1534,44 @@
     function renderPushplusPanel(data) {
       data = data || {};
       const waiting = ppWaiting || !!data.waiting;
-      const saved = !!(data.bound || data.pushplus_bound);
-      const bound = saved && !waiting;
+      const bound = !!(data.bound || data.pushplus_bound);
       const mask = data.mask || data.pushplus_mask || "";
       if ($("ppBindStatus")) {
         $("ppBindStatus").textContent = bound ? "已绑定" : (waiting ? "等待扫码" : "未绑定");
         $("ppBindStatus").className = "ck-status " + (bound ? "ck-ok" : "ck-unknown");
       }
-      if ($("ppBound")) $("ppBound").classList.toggle("hidden", !bound);
-      if ($("ppUnbound")) $("ppUnbound").classList.toggle("hidden", bound);
       if ($("ppBoundText")) {
         $("ppBoundText").textContent = bound
-          ? ("已绑定" + (mask ? " · " + mask : "") + "。续火花消息会发到这个微信。")
-          : "";
+          ? ("当前已保存 token" + (mask ? " · " + mask : "") + "。若提示令牌不正确，到 pushplus.plus 个人中心重新复制用户token 保存。")
+          : "还没保存可用的 PushPlus 用户token。";
       }
       if ($("ppQrHint")) {
         $("ppQrHint").textContent = waiting
           ? "请用微信扫码。扫完会自动绑定到当前登录账号。"
-          : (bound ? "" : "点刷新生成二维码。");
+          : "也可以扫码绑定。二维码过期就点刷新。";
+      }
+    }
+    async function savePushplusToken() {
+      const token = (($("ppTokenInput") && $("ppTokenInput").value) || "").trim();
+      if (!token) {
+        toast("请粘贴 PushPlus 个人中心的用户token", "err");
+        return;
+      }
+      try {
+        const data = await api("/api/notify/pushplus/token", {
+          method: "POST",
+          body: JSON.stringify({ token }),
+        });
+        ppWaiting = false;
+        if (current) {
+          current.pushplus_bound = true;
+          current.pushplus_mask = data.mask || "";
+        }
+        if ($("ppTokenInput")) $("ppTokenInput").value = "";
+        renderPushplusPanel(data);
+        toast(data.message || "已保存并发送测试");
+      } catch (err) {
+        toast(err.message, "err");
       }
     }
     function showPushplusQrImage(url) {
