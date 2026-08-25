@@ -584,7 +584,7 @@ def _scan_verify_ui(page) -> dict[str, Any]:
 def _click_verify_method(page, method_id: str, label: str = "") -> bool:
     ident = str(method_id or "").strip()
     zh = _human_verify_label(ident, label)
-    keys = [k for k in (zh, label, ident, VERIFY_WAY_LABELS.get(ident, ""), "接收短信验证码", "发送短信验证") if k]
+    keys = [k for k in (zh, label, ident, VERIFY_WAY_LABELS.get(ident, ""), "接收短信验证码") if k]
     keys = list(dict.fromkeys(keys))
     click_js = """(keys) => {
       const nodes = [...document.querySelectorAll("button, [role=button], li, a, div, p, span")];
@@ -914,48 +914,26 @@ def _status() -> str:
 
 
 def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
-    methods = _uniq_methods((ui.get("methods") or []) + (sniff.get("methods") or []))
     account = str(ui.get("account") or sniff.get("account") or "")
-    step = str(ui.get("step") or "")
-    state_kind = str(_state.get("verify_kind") or "")
-    if step in {"sms", "uplink"}:
-        kind = step
-    elif state_kind in {"sms", "uplink"}:
-        kind = state_kind
-    else:
-        kind = ""
     uplink_from = str(ui.get("fromMobile") or sniff.get("uplink_from") or _state.get("verify_uplink_from") or "")
-    uplink_to = str(ui.get("sendTo") or sniff.get("uplink_to") or _state.get("verify_uplink_to") or "")
-    uplink_content = str(ui.get("smsContent") or sniff.get("uplink_content") or _state.get("verify_uplink_content") or "")
-    if step == "uplink":
-        kind = "uplink"
     error = str(ui.get("error") or "")
     echo = str(sniff.get("echo") or "")
     if any(k in echo for k in ("频繁", "失败", "稍后再试")):
         error = echo
-    need_code = kind == "sms"
-    if kind == "uplink":
-        message = "发送短信验证"
-    elif kind == "sms":
-        message = "接收短信验证码"
-    else:
-        kind = ""
-        message = "身份验证"
-    saved_methods = list(_state.get("verify_methods") or [])
     payload = {
         "status": "verify",
-        "message": message,
+        "message": "请输入短信验证码",
         "qr_base64": "",
         "qr_url": "",
-        "verify_need_code": need_code,
+        "verify_need_code": True,
         "verify_need_password": False,
         "verify_info": "",
-        "verify_methods": methods or saved_methods,
-        "verify_kind": kind,
-        "verify_uplink_from": uplink_from,
-        "verify_uplink_to": uplink_to if kind == "uplink" else "",
-        "verify_uplink_content": uplink_content if kind == "uplink" else "",
-        "verify_error": (error or str(_state.get("verify_error") or "")) if kind == "sms" else "",
+        "verify_methods": [],
+        "verify_kind": "sms",
+        "verify_uplink_from": uplink_from or account or str(_state.get("verify_uplink_from") or ""),
+        "verify_uplink_to": "",
+        "verify_uplink_content": "",
+        "verify_error": error or str(_state.get("verify_error") or ""),
         "verify_account": account or str(_state.get("verify_account") or ""),
     }
     with _lock:
@@ -1434,6 +1412,7 @@ def _worker(replace_index: int):
         missing_qr = 0
         had_qr = bool(qr_url)
         verify_gone = 0
+        sms_picked = False
         _capture_live_card(page)
         while time.time() < deadline and not _stop.is_set():
             while True:
@@ -1484,6 +1463,20 @@ def _worker(replace_index: int):
                         (ui.get("info") or "")[:180],
                     )
                 _publish_verify(ui, sniff)
+                step = str(ui.get("step") or "")
+                if step == "sms":
+                    sms_picked = True
+                elif not sms_picked:
+                    logger.info("身份验证自动选择接收短信验证码")
+                    if _click_verify_method(page, "mobile_sms_verify", "接收短信验证码"):
+                        sms_picked = True
+                        _set(
+                            verify_kind="sms",
+                            verify_need_code=True,
+                            verify_resend_at=time.time() + 60,
+                            message="请输入短信验证码",
+                        )
+                        time.sleep(1.0)
             elif _status() == "verify":
                 _publish_verify(ui, sniff)
                 in_verify = True
@@ -1553,7 +1546,7 @@ def _worker(replace_index: int):
                     missing_qr += 1
                     logger.info("二维码地址已消失 %s 次", missing_qr)
                 last_shot = now
-            if now - last_live >= 0.7:
+            if _status() != "verify" and now - last_live >= 0.7:
                 _capture_live_card(page)
                 last_live = now
             time.sleep(0.45)

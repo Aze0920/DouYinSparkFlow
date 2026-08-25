@@ -29,41 +29,14 @@
         <input id="liveProxyInput" class="live-proxy" autocomplete="off" />
       </div>
       <div id="qrVerify" class="dy-verify hidden">
-        <section id="dyStepChoose">
-          <div class="dy-title">身份验证</div>
-          <p class="dy-sub">为保障账号安全，请先完成身份验证，以确保为本人操作</p>
-          <div id="dyAccount" class="dy-account"></div>
-          <div id="qrVerifyMethods" class="dy-methods"></div>
-        </section>
-        <section id="dyStepSms" class="hidden">
-          <div class="dy-title">接收短信验证码</div>
-          <p class="dy-sub">短信已发送至 <b id="dySmsMobile"></b></p>
-          <div class="dy-code-row">
-            <input id="qrVerifyCode" placeholder="请输入验证码" autocomplete="one-time-code" />
-            <button class="dy-resend" type="button" onclick="resendQrVerify()">重新发送</button>
-          </div>
-          <div id="dySmsError" class="dy-error"></div>
-          <div class="dy-btn-row">
-            <button class="dy-cancel" type="button" onclick="closeQrLogin()">取消</button>
-            <button class="dy-primary" type="button" onclick="submitQrVerifyCode()">验证</button>
-          </div>
-          <button class="dy-link" type="button" onclick="backQrVerify()">无法验证通过？选择其他验证方式</button>
-        </section>
-        <section id="dyStepUplink" class="hidden">
-          <div class="dy-title">发送短信验证</div>
-          <p class="dy-sub">请使用手机号 <b id="qrUplinkFrom"></b> 发送短信验证</p>
-          <p class="dy-fee">发送可能按运营商标准收取 0.1 元/条</p>
-          <ol class="dy-steps">
-            <li>编辑短信内容：<b id="qrUplinkContent">-</b></li>
-            <li>发送至：<b id="qrUplinkTo">-</b></li>
-            <li>发送后回到本页面点击「我已发送」</li>
-          </ol>
-          <div class="dy-btn-row">
-            <button class="dy-cancel" type="button" onclick="closeQrLogin()">取消</button>
-            <button class="dy-primary" type="button" onclick="confirmQrSent()">我已发送</button>
-          </div>
-          <button class="dy-link" type="button" onclick="backQrVerify()">无法验证通过？选择其他验证方式</button>
-        </section>
+        <div class="dy-title">短信验证</div>
+        <p class="dy-sub">验证码已发送至 <b id="dySmsMobile">绑定手机</b>，请填写后点确定</p>
+        <div class="dy-code-row">
+          <input id="qrVerifyCode" placeholder="请输入短信验证码" autocomplete="one-time-code" onkeydown="if(event.key==='Enter'){event.preventDefault();submitQrVerifyCode();}" />
+          <button class="dy-resend" type="button" onclick="resendQrVerify()">重新发送</button>
+        </div>
+        <div id="dySmsError" class="dy-error"></div>
+        <button class="dy-primary" type="button" style="width:100%" onclick="submitQrVerifyCode()">确定</button>
       </div>
       <div class="modal-actions" id="qrLoginActions">
         <button class="btn-ghost" type="button" onclick="refreshQrLogin()">刷新二维码</button>
@@ -438,26 +411,15 @@
       const isVerify = data && data.status === "verify";
       if (isVerify) {
         if (img) img.classList.add("hidden");
+        if (shot) shot.classList.add("hidden");
+        loading.classList.add("hidden");
         if (title) {
           title.classList.remove("hidden");
-          title.textContent = data.verify_kind === "sms" ? "接收短信验证码" : (data.verify_kind === "uplink" ? "发送短信验证" : "身份验证");
+          title.textContent = "短信验证";
         }
         if (hint) {
           hint.classList.remove("hidden");
-          hint.textContent = "选验证方式、填验证码，点「验证」。也可以直接点上面这张抖音卡片。";
-        }
-        if (data.live_image && shot) {
-          const hash = data.live_hash || String(data.live_image.length);
-          if (shot.dataset.hash !== hash) {
-            shot.dataset.hash = hash;
-            shot.src = "data:image/png;base64," + data.live_image;
-          }
-          shot.classList.remove("hidden");
-          loading.classList.add("hidden");
-        } else if (shot) {
-          shot.classList.add("hidden");
-          loading.classList.remove("hidden");
-          loading.textContent = "正在打开身份验证…";
+          hint.textContent = "已自动选择短信验证，填写验证码后点确定";
         }
         return;
       }
@@ -501,7 +463,7 @@
       }
     }
     function tickSmsCountdown(left) {
-      const btn = document.querySelector("#dyStepSms .dy-resend");
+      const btn = document.querySelector("#qrVerify .dy-resend");
       if (!btn) return;
       const n = Number(left) || 0;
       if (n <= 0) {
@@ -517,89 +479,42 @@
       if (!panel) return;
       const isVerify = data.status === "verify";
       panel.classList.toggle("hidden", !isVerify);
-      if (!isVerify) {
-        lastVerifyKey = "";
-        return;
-      }
-      const kind = data.verify_kind || "";
-      const methods = Array.isArray(data.verify_methods) ? data.verify_methods : [];
-      $("dyStepChoose").classList.toggle("hidden", !!kind);
-      $("dyStepSms").classList.toggle("hidden", kind !== "sms");
-      $("dyStepUplink").classList.toggle("hidden", kind !== "uplink");
-      $("dyAccount").textContent = data.verify_account || "";
-      $("dySmsMobile").textContent = data.verify_uplink_from || "";
+      if (!isVerify) return;
+      $("dySmsMobile").textContent = data.verify_uplink_from || data.verify_account || "绑定手机";
       $("dySmsError").textContent = data.verify_error || "";
-      $("qrUplinkFrom").textContent = data.verify_uplink_from || "绑定手机号";
-      $("qrUplinkTo").textContent = data.verify_uplink_to || "正在读取发送号码…";
-      $("qrUplinkContent").textContent = data.verify_uplink_content || "正在读取短信内容…";
-      if (kind === "sms") tickSmsCountdown(data.verify_resend_left);
-      const key = JSON.stringify({ methods, kind, account: data.verify_account || "" });
-      if (key === lastVerifyKey) return;
-      lastVerifyKey = key;
-      const wrap = $("qrVerifyMethods");
-      wrap.innerHTML = methods.length ? methods.map((item) => {
-        const raw = item.label || item.id || "验证方式";
-        return `<button class="dy-method" type="button" data-id="${escapeAttr(item.id || raw)}" data-label="${escapeAttr(raw)}">${escapeHtml(raw)}</button>`;
-      }).join("") : '<p class="dy-sub">正在读取验证方式，也可以直接点上方卡片里的选项</p>';
-      wrap.onclick = (ev) => {
-        const btn = ev.target.closest("button[data-id]");
-        if (btn) chooseQrVerify(btn.getAttribute("data-id"), btn.getAttribute("data-label") || btn.textContent);
-      };
-    }
-    async function chooseQrVerify(methodId, label) {
-      try {
-        await api("/api/douyin/login/verify", {
-          method: "POST",
-          body: JSON.stringify({ action: "choose", id: methodId, label: label || "" }),
-        });
-      } catch (err) {
-        toast(err.message, "err");
-      }
+      tickSmsCountdown(data.verify_resend_left);
+      const box = $("qrVerifyCode");
+      if (box && document.activeElement !== box) box.focus();
     }
     async function submitQrVerifyCode() {
       const code = ($("qrVerifyCode").value || "").trim();
       if (!code) {
-        toast("请输入验证码", "err");
+        toast("请输入短信验证码", "err");
         return;
       }
-      const btn = document.querySelector("#dyStepSms .dy-primary");
+      const btn = document.querySelector("#qrVerify .dy-primary");
       if (btn) {
         btn.disabled = true;
-        btn.textContent = "验证中…";
+        btn.textContent = "提交中…";
       }
       try {
         await api("/api/douyin/login/verify", {
           method: "POST",
           body: JSON.stringify({ action: "code", code }),
         });
-        toast("正在把验证码提交给抖音");
+        toast("已提交验证码");
       } catch (err) {
         toast(err.message, "err");
       } finally {
         if (btn) {
           btn.disabled = false;
-          btn.textContent = "验证";
+          btn.textContent = "确定";
         }
       }
     }
     async function resendQrVerify() {
       try {
         await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "resend" }) });
-      } catch (err) {
-        toast(err.message, "err");
-      }
-    }
-    async function confirmQrSent() {
-      try {
-        await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "sent" }) });
-      } catch (err) {
-        toast(err.message, "err");
-      }
-    }
-    async function backQrVerify() {
-      lastVerifyKey = "";
-      try {
-        await api("/api/douyin/login/verify", { method: "POST", body: JSON.stringify({ action: "back" }) });
       } catch (err) {
         toast(err.message, "err");
       }
