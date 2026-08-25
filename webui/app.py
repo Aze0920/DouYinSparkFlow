@@ -22,6 +22,7 @@ from webui.qr_login import (
     choose_verify_method,
     live_page_action,
     qr_busy,
+    is_display_unique_id,
     snapshot as qr_snapshot,
     start_qr_login,
     submit_verify_code,
@@ -63,7 +64,7 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
 _run_lock = threading.Lock()
-_run_state = {"running": False, "message": "空闲", "started_at": 0}
+_run_state = {"running": False, "message": "空闲", "started_at": 0, "running_ids": []}
 _remote_cache = {"version": "", "sha": "", "ts": 0, "busy": False}
 _sched_last: dict[str, str] = {}
 _sched_boot = time.time()
@@ -434,6 +435,7 @@ def status(request: Request):
         "tz": env.get("TZ", "Asia/Shanghai"),
         "running": _run_state["running"],
         "run_message": _run_state["message"],
+        "running_ids": list(_run_state.get("running_ids") or []),
         "accounts": accounts,
     }
 
@@ -468,19 +470,27 @@ def github_check(request: Request):
     }
 
 
-def _task_from_account(account: dict, env: dict) -> dict:
+def _task_from_account(account: dict, env: dict, existing: dict | None = None) -> dict:
     unique_id = str(account.get("unique_id") or "").strip()
     targets = account.get("targets") or []
     if isinstance(targets, str):
         targets = [x.strip() for x in targets.replace("，", ",").split(",") if x.strip()]
-    hour, minute = account_cron(account, env)
-    return {
+    hour, minute = account_cron(account)
+    existing = existing or {}
+    source = str(account.get("cookie_source") or existing.get("cookie_source") or "").strip()
+    status = str(account.get("cookie_status") or existing.get("cookie_status") or "").strip()
+    row = {
         "username": str(account.get("username") or "账号").strip(),
         "unique_id": unique_id,
         "targets": targets,
         "cron_hour": hour,
         "cron_minute": minute,
     }
+    if source:
+        row["cookie_source"] = source
+    if status:
+        row["cookie_status"] = status
+    return row
 
 
 def _cookie_extra(account: dict) -> dict:
@@ -563,9 +573,7 @@ def save_config(request: Request, payload: dict):
 
     hour, minute = default_cron(env)
     if payload.get("cron_hour") is not None:
-        hour, minute = account_cron({"cron_hour": payload.get("cron_hour"), "cron_minute": payload.get("cron_minute")}, env)
-    elif tasks:
-        hour, minute = account_cron(tasks[0], env)
+        hour, minute = account_cron({"cron_hour": payload.get("cron_hour"), "cron_minute": payload.get("cron_minute")})
 
     data = {
         "PROXY_ADDRESS": payload.get("proxy_address") if payload.get("proxy_address") is not None else env.get("PROXY_ADDRESS") or "",
@@ -603,6 +611,7 @@ def save_account(request: Request, payload: dict):
     replaced = False
     for index, item in enumerate(tasks):
         if str(item.get("unique_id") or "").strip() == unique_id:
+            row = _task_from_account(payload, env, item)
             tasks[index] = {**item, **row}
             replaced = True
             break
@@ -643,17 +652,38 @@ def check_account_cookie(request: Request, payload: dict | None = None):
             status_code=409 if "稍后再试" in (result.get("message") or "") else 500,
             detail=result.get("message") or "检测失败",
         )
-    if result.get("unique_id") and result.get("unique_id") != unique_id:
+    got_uid = str(result.get("unique_id") or "").strip()
+    if got_uid and is_display_unique_id(got_uid) and got_uid != unique_id:
         result["mismatch"] = True
+        result["valid"] = False
+        result["cookie_status"] = "bad"
         result["message"] = (
-            f"Cookie 还能用，但属于「{result.get('username') or '其他账号'}」"
-            f"（{result['unique_id']}），不是当前这个号 {unique_id}"
+            f"Cookie 还能登录，但抖音号是 {got_uid}，不是当前这个号 {unique_id}。"
+            "请用这个号重新扫码或粘贴对应的 Cookie。"
         )
+    elif result.get("valid"):
+        result["mismatch"] = False
+        result["cookie_status"] = "ok"
+        result["message"] = result.get("message") or f"Cookie 正常 · {result.get('username') or unique_id}"
+    else:
+        result["cookie_status"] = "bad"
+
+    tasks = read_tasks(env)
+    for index, item in enumerate(tasks):
+        if str(item.get("unique_id") or "").strip() == unique_id:
+            item["cookie_status"] = result.get("cookie_status") or "bad"
+            got_name = str(result.get("username") or "").strip()
+            if result.get("cookie_status") == "ok" and got_name and got_name != "抖音账号":
+                item["username"] = got_name
+            tasks[index] = item
+            write_env({"TASKS": tasks})
+            break
     logger.info(
-        "检测账号 Cookie unique_id=%s valid=%s mismatch=%s",
+        "检测账号 Cookie unique_id=%s valid=%s mismatch=%s got=%s",
         unique_id,
         result.get("valid"),
         result.get("mismatch"),
+        got_uid,
     )
     return {**result, "ok": True}
 
@@ -673,8 +703,10 @@ def import_account_cookie(request: Request, payload: dict | None = None):
             status_code=409 if "稍后再试" in (result.get("message") or "") else 500,
             detail=result.get("message") or "导入失败",
         )
-    if not result.get("valid") or not result.get("unique_id"):
-        raise HTTPException(status_code=400, detail=result.get("message") or "Cookie 无效，没抓到账号资料")
+    if not result.get("valid") or not is_display_unique_id(result.get("unique_id")):
+        raise HTTPException(status_code=400, detail=result.get("message") or "Cookie 无效，没抓到抖音号")
+    result["cookie_source"] = "json"
+    result["cookie_status"] = "ok"
     logger.info("导入 Cookie 成功 username=%s unique_id=%s", result.get("username"), result.get("unique_id"))
     return {**result, "ok": True}
 
@@ -754,7 +786,21 @@ def _run_task(unique_ids=None):
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
         _run_state["running"] = True
-        _run_state["message"] = "正在执行续火花任务"
+        _run_state["running_ids"] = list(ids)
+        if ids:
+            names = []
+            for acc in parse_accounts(load_env()):
+                uid = str(acc.get("unique_id") or "").strip()
+                if uid in ids:
+                    names.append(str(acc.get("username") or uid))
+            _run_state["message"] = "正在续火花：" + "、".join(names or ids)
+        else:
+            _run_state["running_ids"] = [
+                str(acc.get("unique_id") or "").strip()
+                for acc in parse_accounts(load_env())
+                if str(acc.get("unique_id") or "").strip()
+            ]
+            _run_state["message"] = "正在执行续火花任务"
         _run_state["started_at"] = time.time()
         logger.info("开始执行续火花任务 ids=%s", ids or "全部")
         proc = subprocess.run(
@@ -780,6 +826,7 @@ def _run_task(unique_ids=None):
         logger.exception("续火花任务异常")
     finally:
         _run_state["running"] = False
+        _run_state["running_ids"] = []
         try:
             LOCK_FILE.unlink(missing_ok=True)
         except Exception:

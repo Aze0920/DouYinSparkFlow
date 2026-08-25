@@ -133,12 +133,11 @@ def default_cron(env: dict | None = None) -> tuple[int, int]:
 
 
 def account_cron(task: dict | None, env: dict | None = None) -> tuple[int, int]:
-    env = env or {}
-    hour, minute = default_cron(env)
     task = task or {}
-    if task.get("cron_hour") is not None:
-        hour = _clamp_hm(task.get("cron_hour"), minute)[0]
-    if task.get("cron_minute") is not None:
+    hour, minute = 9, 0
+    if task.get("cron_hour") is not None and str(task.get("cron_hour")) != "":
+        hour = _clamp_hm(task.get("cron_hour"), 0)[0]
+    if task.get("cron_minute") is not None and str(task.get("cron_minute")) != "":
         minute = _clamp_hm(hour, task.get("cron_minute"))[1]
     return hour, minute
 
@@ -174,6 +173,8 @@ def parse_accounts(env: dict) -> list:
                 "targets": task.get("targets") or [],
                 "cron_hour": hour,
                 "cron_minute": minute,
+                "cookie_source": str(task.get("cookie_source") or "").strip(),
+                "cookie_status": str(task.get("cookie_status") or "").strip(),
                 "cookies_set": cookies_ok,
                 "cookie_count": len(parsed) if cookies_ok else 0,
             }

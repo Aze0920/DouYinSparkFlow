@@ -5,6 +5,10 @@ from playwright.sync_api import sync_playwright
 from utils.config import DEBUG, get_environment, Environment
 
 PLAYWRIGHT_BROWSERS_PATH = "../chrome"
+BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+)
 
 
 def install_browser():
@@ -48,3 +52,16 @@ def get_browser(retried=False):
             return get_browser(retried=True)
         traceback.print_exc()
         raise
+
+
+def make_context(browser):
+    context = browser.new_context(
+        user_agent=BROWSER_UA,
+        locale="zh-CN",
+        viewport={"width": 1280, "height": 860},
+    )
+    context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
+    context.add_init_script(
+        "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
+    )
+    return context

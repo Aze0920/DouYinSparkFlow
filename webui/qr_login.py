@@ -1119,6 +1119,17 @@ def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
     _set(**payload)
 
 
+def is_display_unique_id(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"none", "null", "undefined", "0"}:
+        return False
+    if text.startswith("MS4wLjAB"):
+        return False
+    if re.fullmatch(r"[0-9a-fA-F]{16,64}", text):
+        return False
+    return True
+
+
 def _cookies_for_save(context) -> list[dict[str, Any]]:
     out = []
     for item in _all_cookie_list(context):
@@ -1158,11 +1169,17 @@ def _walk_user(obj: Any, found: dict[str, str] | None = None) -> dict[str, str]:
             or obj.get("display_id")
             or obj.get("short_id")
         )
-        if nick and not found["username"] and isinstance(nick, str) and nick not in ("douyin", "抖音"):
+        if (
+            nick
+            and not found["username"]
+            and isinstance(nick, str)
+            and nick not in ("douyin", "抖音")
+            and not re.fullmatch(r"[0-9a-fA-F]{16,64}", nick)
+        ):
             found["username"] = nick.strip()
-        if uid and not found["unique_id"] and isinstance(uid, (str, int)):
+        if uid and isinstance(uid, (str, int)) and is_display_unique_id(uid):
             text = str(uid).strip()
-            if text and text.lower() not in ("none", "null"):
+            if not found["unique_id"] or not is_display_unique_id(found["unique_id"]):
                 found["unique_id"] = text
         for value in obj.values():
             _walk_user(value, found)
@@ -1258,9 +1275,9 @@ def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
     ]
     for url, params in probes:
         got = _try_json(context, url, params)
-        if got.get("username") and not found["username"]:
+        if got.get("username") and not found["username"] and not re.fullmatch(r"[0-9a-fA-F]{16,64}", str(got.get("username") or "")):
             found["username"] = got["username"]
-        if got.get("unique_id") and not found["unique_id"]:
+        if got.get("unique_id") and is_display_unique_id(got.get("unique_id")) and not found["unique_id"]:
             found["unique_id"] = got["unique_id"]
         if found["username"] and found["unique_id"]:
             logger.info("已抓到账号资料 username=%s unique_id=%s", found["username"], found["unique_id"])
@@ -1278,23 +1295,21 @@ def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
                 logger.exception("打开资料页失败 %s", url)
                 continue
             got = _try_page_user(page)
-            if got.get("username") and not found["username"]:
+            if got.get("username") and not found["username"] and not re.fullmatch(r"[0-9a-fA-F]{16,64}", str(got.get("username") or "")):
                 found["username"] = got["username"]
-            if got.get("unique_id") and not found["unique_id"]:
+            if got.get("unique_id") and is_display_unique_id(got.get("unique_id")) and not found["unique_id"]:
                 found["unique_id"] = got["unique_id"]
             if found["username"] and found["unique_id"]:
                 break
 
     cookies = _cookie_map(context)
-    if not found["unique_id"]:
-        found["unique_id"] = (
-            cookies.get("uid_tt")
-            or cookies.get("uid_tt_ss")
-            or ""
-        )
+    if not is_display_unique_id(found["unique_id"]):
+        found["unique_id"] = ""
+    if found["username"] and not is_display_unique_id(found["username"]) and re.fullmatch(r"[0-9a-fA-F]{16,64}", found["username"] or ""):
+        found["username"] = ""
     if not found["username"]:
         found["username"] = found["unique_id"] or "抖音账号"
-    logger.info("最终账号资料 username=%s unique_id=%s", found["username"], found["unique_id"])
+    logger.info("最终账号资料 username=%s unique_id=%s cookie_uid_tt=%s", found["username"], found["unique_id"], (cookies.get("uid_tt") or "")[:8])
     return found
 
 

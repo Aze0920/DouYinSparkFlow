@@ -176,7 +176,17 @@ button { cursor: pointer; }
   grid-column: 1 / -1;
 }
 .account-id { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.account-head-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .account-head-actions { display: flex; gap: 6px; flex-shrink: 0; }
+.ck-status {
+  font-size: 13px;
+  font-weight: 700;
+  min-width: 42px;
+  text-align: right;
+}
+.ck-ok { color: var(--ok); }
+.ck-bad { color: var(--rose); }
+.ck-unknown { color: var(--muted); }
 .choice-stack { display: grid; gap: 10px; margin-top: 8px; }
 .choice-stack button { width: 100%; }
 .ck-card { width: min(560px, calc(100% - 24px)); }

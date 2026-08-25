@@ -1,10 +1,11 @@
 import traceback
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from utils.logger import setup_logger
+from utils.logger import LOG_FILE, setup_logger
 from utils.config import get_config, get_userData
 from utils import norm
 from core.msg_builder import build_message
-from core.browser import get_browser
+from core.browser import get_browser, make_context
 from playwright.sync_api import Response
 import time
 
@@ -15,6 +16,39 @@ CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
 CONVERSATION_LIST_SELECTOR = ".conversationConversationListwrapper"
 CHAT_EDITOR_SELECTOR = ".messageEditorimChatEditorContainer"
+CONVERSATION_LIST_SELECTORS = [
+    CONVERSATION_LIST_SELECTOR,
+    "[class*='ConversationListwrapper']",
+    "[class*='conversationListwrapper']",
+    "[class*='ConversationList']",
+    "[class*='conversation-list']",
+    "[class*='conversationList']",
+]
+CONVERSATION_ITEM_SELECTORS = [
+    CONVERSATION_ITEM_SELECTOR,
+    "[class*='ConversationItemwrapper']",
+    "[class*='conversationItemwrapper']",
+    "[class*='ConversationItem']",
+    "[class*='conversation-item']",
+    "[class*='conversationItem']",
+]
+CONVERSATION_TITLE_SELECTORS = [
+    CONVERSATION_TITLE_SELECTOR,
+    "[class*='ConversationItemtitle']",
+    "[class*='conversationItemtitle']",
+    "[class*='ItemTitle']",
+    "[class*='item-title']",
+    "[class*='nickName']",
+    "[class*='nickname']",
+]
+CHAT_EDITOR_SELECTORS = [
+    CHAT_EDITOR_SELECTOR,
+    "[class*='imChatEditor']",
+    "[class*='ChatEditor']",
+    "[class*='messageEditor']",
+    "[contenteditable='true']",
+]
+LOGIN_HINTS = ("扫码登录", "登录后免费畅享", "打开「抖音APP」", "验证码登录", "请使用抖音APP")
 
 
 def _make_info_handler(store: dict):
@@ -42,6 +76,163 @@ def _make_info_handler(store: dict):
     return handle_response
 
 
+def _iter_scopes(page):
+    yield page
+    try:
+        for frame in page.frames:
+            if frame is not page:
+                yield frame
+    except Exception:
+        return
+
+
+def _locator_count(locator) -> int:
+    try:
+        return locator.count()
+    except Exception:
+        return 0
+
+
+def _find_locator(page, selectors, min_count=1):
+    for scope in _iter_scopes(page):
+        for selector in selectors:
+            try:
+                loc = scope.locator(selector)
+            except Exception:
+                continue
+            if _locator_count(loc) >= min_count:
+                return loc, scope, selector
+    return None, page, ""
+
+
+def _wait_locator(page, selectors, timeout_ms=12000, min_count=1):
+    deadline = time.time() + max(timeout_ms, 500) / 1000
+    last = (None, page, "")
+    while time.time() < deadline:
+        last = _find_locator(page, selectors, min_count=min_count)
+        if last[0] is not None:
+            return last
+        time.sleep(0.35)
+    return last
+
+
+def _page_text(page) -> str:
+    chunks = []
+    for scope in _iter_scopes(page):
+        try:
+            chunks.append(scope.inner_text("body", timeout=1500) or "")
+        except Exception:
+            continue
+    return "\n".join(chunks)
+
+
+def _looks_like_login(page) -> bool:
+    text = _page_text(page)
+    return any(hint in text for hint in LOGIN_HINTS)
+
+
+def _item_title(element) -> str:
+    for selector in CONVERSATION_TITLE_SELECTORS:
+        loc = element.locator(selector)
+        if _locator_count(loc) > 0:
+            try:
+                return (loc.first.inner_text(timeout=1500) or "").strip()
+            except Exception:
+                continue
+    try:
+        return (element.inner_text(timeout=1500) or "").split("\n")[0].strip()
+    except Exception:
+        return ""
+
+
+def _dump_chat_debug(page, username: str):
+    logger.warning("账号 %s 当前页面 url=%s", username, getattr(page, "url", ""))
+    try:
+        logger.warning("账号 %s 页面文字: %s", username, _page_text(page).replace("\n", " ")[:400])
+    except Exception:
+        pass
+    try:
+        classes = page.evaluate(
+            """() => [...document.querySelectorAll('[class*="conversation"],[class*="Conversation"],[class*="im-"],[class*="messageEditor"]')]
+              .slice(0, 25)
+              .map((el) => String(el.className || '').slice(0, 120))"""
+        )
+        logger.warning("账号 %s 会话相关 class: %s", username, classes)
+    except Exception:
+        logger.debug("账号 %s 读取 class 失败", username, exc_info=True)
+    try:
+        safe = "".join(ch for ch in username if ch.isalnum() or ch in ("_", "-")) or "account"
+        path = Path(LOG_FILE).parent / f"chat-debug-{safe}.png"
+        page.screenshot(path=str(path), full_page=False)
+        logger.warning("账号 %s 已保存页面截图 %s", username, path)
+    except Exception:
+        logger.debug("账号 %s 保存截图失败", username, exc_info=True)
+
+
+def _scroll_list(scope, list_loc, item_loc) -> bool:
+    handle = None
+    try:
+        if list_loc is not None:
+            handle = list_loc.first.element_handle(timeout=2500)
+    except Exception:
+        handle = None
+    if handle is None and item_loc is not None:
+        try:
+            item_handle = item_loc.first.element_handle(timeout=2500)
+            handle = item_handle
+        except Exception:
+            handle = None
+    if handle is None:
+        return False
+    try:
+        before = scope.evaluate(
+            """(el) => {
+              let p = el;
+              while (p) {
+                const s = getComputedStyle(p);
+                if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && p.scrollHeight > p.clientHeight + 8) {
+                  return { top: p.scrollTop, found: true };
+                }
+                p = p.parentElement;
+              }
+              return { top: el.scrollTop || 0, found: false };
+            }""",
+            handle,
+        )
+        scope.evaluate(
+            """(el) => {
+              let p = el;
+              while (p) {
+                const s = getComputedStyle(p);
+                if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && p.scrollHeight > p.clientHeight + 8) {
+                  p.scrollTop += 800;
+                  return;
+                }
+                p = p.parentElement;
+              }
+              if (el.scrollTop !== undefined) el.scrollTop += 800;
+            }""",
+            handle,
+        )
+        after = scope.evaluate(
+            """(el) => {
+              let p = el;
+              while (p) {
+                const s = getComputedStyle(p);
+                if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && p.scrollHeight > p.clientHeight + 8) {
+                  return p.scrollTop;
+                }
+                p = p.parentElement;
+              }
+              return el.scrollTop || 0;
+            }""",
+            handle,
+        )
+        return bool(before) and after != (before.get("top") if isinstance(before, dict) else before)
+    except Exception:
+        return False
+
+
 def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
     for attempt in range(retries):
         try:
@@ -66,10 +257,7 @@ def checkTargetName(targetName, targets, user_id_dict):
     return None
 
 
-def scroll_and_select_user(page, username, targets, user_id_dict):
-    target_selector = CONVERSATION_ITEM_SELECTOR
-    scrollable_friends_selector = CONVERSATION_LIST_SELECTOR
-
+def scroll_and_select_user(page, username, targets, user_id_dict, item_loc, list_loc, scope):
     logger.debug(f"账号 {username} 开始查找目标好友列表")
     logger.debug(f"账号 {username} 目标好友列表: {targets}")
 
@@ -79,15 +267,13 @@ def scroll_and_select_user(page, username, targets, user_id_dict):
     MAX_EMPTY_SCROLLS = 6
 
     while True:
-        target_elements = page.locator(target_selector).all()
+        target_elements = item_loc.all() if item_loc is not None else []
         prev_found_count = len(found_targets)
 
         for element in target_elements:
             try:
-                span = element.locator(CONVERSATION_TITLE_SELECTOR)
-                targetName = span.inner_text()
-
-                if targetName in found_targets:
+                targetName = _item_title(element)
+                if not targetName or targetName in found_targets:
                     continue
                 found_targets.add(targetName)
 
@@ -124,38 +310,31 @@ def scroll_and_select_user(page, username, targets, user_id_dict):
                     )
                 break
 
-            scrollable_element = page.locator(scrollable_friends_selector).element_handle()
-            if not scrollable_element:
-                logger.error(f"账号 {username} 未找到滚动容器，退出")
-                break
-
-            scroll_top_before = page.evaluate("(element) => element.scrollTop", scrollable_element)
-            page.evaluate("(element) => element.scrollTop += 800", scrollable_element)
-            time.sleep(0.25)
-            scroll_top_after = page.evaluate("(element) => element.scrollTop", scrollable_element)
-            if scroll_top_before == scroll_top_after:
+            moved = _scroll_list(scope, list_loc, item_loc)
+            if not moved:
                 empty_scroll_count += 2
-                logger.debug(
-                    f"账号 {username} scrollTop 未变化 ({scroll_top_before})，可能已到底 (空滚动计数: {empty_scroll_count}/{MAX_EMPTY_SCROLLS})"
-                )
-            else:
-                logger.debug(
-                    f"账号 {username} 滚动好友列表 (scrollTop: {scroll_top_before} -> {scroll_top_after})"
-                )
+                logger.debug(f"账号 {username} 会话列表无法继续滚动 (空滚动计数: {empty_scroll_count}/{MAX_EMPTY_SCROLLS})")
             time.sleep(0.35)
+            item_loc, scope, item_sel = _find_locator(page, CONVERSATION_ITEM_SELECTORS)
+            list_loc, _, _ = _find_locator(page, CONVERSATION_LIST_SELECTORS)
+            if item_loc is None:
+                logger.warning("账号 %s 滚动后会话条目消失 selector=%s", username, item_sel)
+                break
 
 
 def _send_chat_message(page, message: str):
-    chat_input = page.locator(CHAT_EDITOR_SELECTOR)
-    page.wait_for_selector(CHAT_EDITOR_SELECTOR, timeout=config["browserTimeout"])
-    chat_input.click()
+    chat_input, _, selector = _wait_locator(page, CHAT_EDITOR_SELECTORS, timeout_ms=15000)
+    if chat_input is None:
+        raise RuntimeError("找不到聊天输入框，会话可能没打开")
+    logger.debug("使用输入框 selector=%s", selector)
+    chat_input.first.click()
     lines = message.split("\\n")
     for index, line in enumerate(lines):
         if line:
             page.keyboard.insert_text(line)
         if index != len(lines) - 1:
-            chat_input.press("Shift+Enter")
-    chat_input.press("Enter")
+            chat_input.first.press("Shift+Enter")
+    chat_input.first.press("Enter")
 
 
 def do_user_task(username, cookies, targets):
@@ -163,9 +342,9 @@ def do_user_task(username, cookies, targets):
     playwright, browser = get_browser()
     context = None
     try:
-        context = browser.new_context()
+        context = make_context(browser)
         context.set_default_navigation_timeout(config["browserTimeout"])
-        context.set_default_timeout(config["browserTimeout"])
+        context.set_default_timeout(8000)
         page = context.new_page()
         page.on("response", _make_info_handler(user_id_dict))
         context.add_cookies(cookies)
@@ -177,15 +356,24 @@ def do_user_task(username, cookies, targets):
             delay=2,
             url="https://www.douyin.com/chat",
         )
-        try:
-            page.wait_for_selector(CONVERSATION_LIST_SELECTOR, timeout=8000)
-            page.wait_for_selector(CONVERSATION_ITEM_SELECTOR, timeout=5000)
-        except Exception:
-            logger.warning("账号 %s 会话列表加载较慢，继续尝试发送", username)
-        time.sleep(0.4)
+        time.sleep(0.8)
+        if _looks_like_login(page):
+            _dump_chat_debug(page, username)
+            raise RuntimeError(f"账号 {username} 打开私信页失败：页面在要求登录，请点「检测」或重新登录后再续火花")
+
+        item_loc, scope, item_sel = _wait_locator(page, CONVERSATION_ITEM_SELECTORS, timeout_ms=15000)
+        list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
+        if item_loc is None:
+            _dump_chat_debug(page, username)
+            raise RuntimeError(
+                f"账号 {username} 打不开会话列表。不是扫码失败，是私信页没有出现好友列表，已截图到 logs/chat-debug-*.png"
+            )
+        logger.info("账号 %s 已找到会话列表 item=%s list=%s", username, item_sel, list_sel or "父级滚动")
 
         logger.debug(f"账号 {username} 开始发送消息")
-        for target_symbol, friend_name in scroll_and_select_user(page, username, targets, user_id_dict):
+        for target_symbol, friend_name in scroll_and_select_user(
+            page, username, targets, user_id_dict, item_loc, list_loc, scope
+        ):
             logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
             message = build_message()
             _send_chat_message(page, message)

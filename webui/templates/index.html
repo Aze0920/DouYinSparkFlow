@@ -290,27 +290,28 @@
       location.reload();
     }
 
-    function setBusy(busy, text) {
+    function setBusy(busy, text, runningIds) {
       $("liveDot").classList.toggle("busy", !!busy);
       $("runText").textContent = text;
-      ["runBtnHome"].forEach((id) => {
-        if ($(id)) {
-          $(id).disabled = !!busy;
-          $(id).textContent = busy ? "发送中..." : "立即续火花";
-        }
-      });
-      document.querySelectorAll(".btn-run-account").forEach((btn) => {
+      const ids = new Set((runningIds || []).map((x) => String(x || "").trim()).filter(Boolean));
+      const allBusy = !!busy && ids.size === 0;
+      document.querySelectorAll(".account").forEach((card) => {
+        const uid = ((card.querySelector(".unique-id") || {}).value || "").trim();
+        const btn = card.querySelector(".btn-run-account");
+        if (!btn) return;
+        if (!btn.dataset.label || btn.dataset.label === "发送中...") btn.dataset.label = "立即续火花";
+        const thisBusy = !!busy && (allBusy || ids.has(uid));
         btn.disabled = !!busy;
-        if (!btn.dataset.label) btn.dataset.label = btn.textContent;
-        btn.textContent = busy ? "发送中..." : (btn.dataset.label || "立即续火花");
+        btn.textContent = thisBusy ? "发送中..." : btn.dataset.label;
       });
     }
     async function applyStatus(data) {
+      window.__lastStatus = data;
       $("localVersion").textContent = "v" + data.local_version;
       $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未获取到";
       $("versionPill").textContent = "v" + data.local_version;
       $("accountCount").textContent = String((data.accounts || []).length);
-      setBusy(data.running, data.run_message || "空闲");
+      setBusy(data.running, data.run_message || "空闲", data.running_ids || []);
       $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
     }
     async function checkStatus() {
@@ -338,6 +339,7 @@
           cron: status.cron,
           running: status.running,
           run_message: status.run_message,
+          running_ids: status.running_ids || [],
         });
         if (!silent) toast(data.message, data.remote_version ? "ok" : "err");
         else if (data.update_available) toast(data.message);
@@ -361,27 +363,48 @@
       const mm = Number.isFinite(m) ? Math.min(59, Math.max(0, m)) : 0;
       return String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
     }
+    function cookieStatusMeta(data) {
+      const bound = !!(data.unique_id && (data.cookies_set || data.cookies || window.__accountCookies[data.unique_id]));
+      const status = data.cookie_status || "";
+      if (status === "ok") return { text: "正常", cls: "ck-ok" };
+      if (status === "bad") return { text: "异常", cls: "ck-bad" };
+      if (bound) return { text: "未检测", cls: "ck-unknown" };
+      return { text: "未登录", cls: "ck-unknown" };
+    }
+    function cookieSourceText(data) {
+      const bound = !!(data.unique_id && (data.cookies_set || data.cookies || window.__accountCookies[data.unique_id]));
+      if (data.cookie_source === "json") return "JSON Cookie";
+      if (data.cookie_source === "qr") return "扫码 Cookie";
+      return bound ? "已绑定 Cookie" : "未绑定 Cookie";
+    }
     function accountCard(data, index) {
       const name = data.username || "抖音账号";
       const uid = data.unique_id || "";
       const bound = !!(uid && (data.cookies_set || data.cookies || window.__accountCookies[uid]));
       const cron = formatCron(data.cron_hour, data.cron_minute);
       const admin = isAdmin();
+      const ck = cookieStatusMeta(data);
+      const source = cookieSourceText(data);
       return `<div class="account" data-index="${index}">
         <div class="account-head">
           <div>
             <strong>${escapeHtml(name)}</strong>
-            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${bound ? "已绑定 Cookie" : "未绑定 Cookie"}</div>
+            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${escapeHtml(source)}</div>
           </div>
-          <div class="account-head-actions admin-only ${admin ? "" : "hidden"}">
-            <button class="btn-ghost mini" type="button" onclick="checkAccount(${index})">检测</button>
-            <button class="btn-ghost mini" type="button" onclick="removeAccount(${index})">删除</button>
+          <div class="account-head-right">
+            <span class="ck-status ${ck.cls}">${ck.text}</span>
+            <div class="account-head-actions admin-only ${admin ? "" : "hidden"}">
+              <button class="btn-ghost mini" type="button" onclick="checkAccount(${index})">检测</button>
+              <button class="btn-ghost mini" type="button" onclick="removeAccount(${index})">删除</button>
+            </div>
           </div>
         </div>
         <input type="hidden" class="username" value="${escapeAttr(name)}" />
         <input type="hidden" class="unique-id" value="${escapeAttr(uid)}" />
+        <input type="hidden" class="cookie-source" value="${escapeAttr(data.cookie_source || "")}" />
+        <input type="hidden" class="cookie-status" value="${escapeAttr(data.cookie_status || "")}" />
         <label>每天发送时间
-          <input class="cron-time" type="time" value="${escapeAttr(cron)}" ${admin ? "" : "disabled"} />
+          <input class="cron-time" type="time" name="cron-${index}-${escapeAttr(uid)}" autocomplete="off" value="${escapeAttr(cron)}" ${admin ? "" : "disabled"} />
         </label>
         <label>目标好友（一行一个）
           <textarea class="targets" ${admin ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea>
@@ -389,19 +412,21 @@
         <div class="account-actions admin-only ${admin ? "" : "hidden"}">
           <button class="btn-ghost" type="button" onclick="saveAccount(${index})">保存</button>
           <button class="btn-ghost" type="button" onclick="openAddAccount(${index})">${bound ? "重新登录" : "扫码登录"}</button>
-          <button class="btn-run btn-run-account" type="button" onclick="runAccount(${index})">立即续火花</button>
+          <button class="btn-run btn-run-account" type="button" data-uid="${escapeAttr(uid)}" onclick="runAccount(${index})">立即续火花</button>
         </div>
       </div>`;
     }
     function renderAccounts() {
       $("accounts").innerHTML = (window.__accounts || []).map(accountCard).join("");
       $("noAccounts").classList.toggle("hidden", !!(window.__accounts && window.__accounts.length));
+      const st = window.__lastStatus;
+      if (st) setBusy(st.running, st.run_message || "空闲", st.running_ids || []);
     }
     async function loadConfig() {
       const cfg = await api("/api/config");
       $("messageTemplate").value = cfg.message_template;
       if ($("maxTaskThreads")) $("maxTaskThreads").value = String(cfg.max_task_threads || 10);
-      window.__defaultCron = formatCron(cfg.cron_hour, cfg.cron_minute);
+      window.__defaultCron = "09:00";
       window.__accountCookies = {};
       window.__accounts = cfg.accounts || [];
       window.__accounts.forEach((item) => {
@@ -411,13 +436,15 @@
     }
     function collectAccount(node) {
       const uniqueId = node.querySelector(".unique-id").value.trim();
-      const t = parseCronTime((node.querySelector(".cron-time") && node.querySelector(".cron-time").value) || window.__defaultCron || "9:00");
+      const t = parseCronTime((node.querySelector(".cron-time") && node.querySelector(".cron-time").value) || "09:00");
       return {
         username: node.querySelector(".username").value.trim(),
         unique_id: uniqueId,
         targets: node.querySelector(".targets").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
         cron_hour: t.hour,
         cron_minute: t.minute,
+        cookie_source: (node.querySelector(".cookie-source") && node.querySelector(".cookie-source").value) || "",
+        cookie_status: (node.querySelector(".cookie-status") && node.querySelector(".cookie-status").value) || "",
         cookies: window.__accountCookies[uniqueId] || "",
       };
     }
@@ -644,20 +671,22 @@
         cookies_set: true,
         cron_hour: 9,
         cron_minute: 0,
+        cookie_source: data.cookie_source || "qr",
+        cookie_status: "ok",
       };
       const idx = Number(data.replace_index);
       if (Number.isInteger(idx) && idx >= 0 && idx < window.__accounts.length) {
         next.targets = window.__accounts[idx].targets || [];
-        next.cron_hour = window.__accounts[idx].cron_hour;
-        next.cron_minute = window.__accounts[idx].cron_minute;
+        next.cron_hour = Number.isFinite(Number(window.__accounts[idx].cron_hour)) ? window.__accounts[idx].cron_hour : 9;
+        next.cron_minute = Number.isFinite(Number(window.__accounts[idx].cron_minute)) ? window.__accounts[idx].cron_minute : 0;
         const oldId = window.__accounts[idx].unique_id;
         if (oldId && oldId !== uniqueId) delete window.__accountCookies[oldId];
         window.__accounts[idx] = next;
       } else if (window.__accounts.some((item) => item.unique_id === uniqueId)) {
         const exist = window.__accounts.findIndex((item) => item.unique_id === uniqueId);
         next.targets = window.__accounts[exist].targets || [];
-        next.cron_hour = window.__accounts[exist].cron_hour;
-        next.cron_minute = window.__accounts[exist].cron_minute;
+        next.cron_hour = Number.isFinite(Number(window.__accounts[exist].cron_hour)) ? window.__accounts[exist].cron_hour : 9;
+        next.cron_minute = Number.isFinite(Number(window.__accounts[exist].cron_minute)) ? window.__accounts[exist].cron_minute : 0;
         window.__accounts[exist] = next;
       } else {
         window.__accounts.push(next);
@@ -789,6 +818,7 @@
           username: data.username,
           unique_id: data.unique_id,
           cookies: data.cookies,
+          cookie_source: "json",
           replace_index: qrReplaceIndex,
         });
       } catch (err) {
@@ -824,13 +854,15 @@
             cookies: item.cookies || window.__accountCookies[item.unique_id] || "",
           }),
         });
-        toast(data.message || (data.valid ? "Cookie 有效" : "Cookie 无效"), data.valid && !data.mismatch ? "ok" : "err");
-        if (data.valid && data.username && window.__accounts[index] && window.__accounts[index].username !== data.username && !data.mismatch) {
-          window.__accounts[index].username = data.username;
-          const nameInput = node.querySelector(".username");
-          if (nameInput) nameInput.value = data.username;
-          renderAccounts();
+        toast(data.message || (data.valid ? "Cookie 正常" : "Cookie 异常"), data.valid && !data.mismatch ? "ok" : "err");
+        window.__accounts = collectAccounts();
+        if (window.__accounts[index]) {
+          window.__accounts[index].cookie_status = data.cookie_status || (data.valid && !data.mismatch ? "ok" : "bad");
+          if (data.valid && data.username && data.username !== "抖音账号" && !data.mismatch) {
+            window.__accounts[index].username = data.username;
+          }
         }
+        renderAccounts();
       } catch (err) {
         toast(err.message, "err");
       } finally {

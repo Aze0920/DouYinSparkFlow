@@ -17,6 +17,7 @@ from webui.qr_login import (
     _has_session,
     _page_signals,
     extract_profile,
+    is_display_unique_id,
 )
 
 logger = setup_logger("app", "DEBUG")
@@ -147,13 +148,18 @@ def probe_cookies(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         login_wall = bool(signals.get("hasScan") or signals.get("hasEnjoy"))
         username = str(profile.get("username") or "").strip()
         unique_id = str(profile.get("unique_id") or "").strip()
+        if unique_id and not is_display_unique_id(unique_id):
+            unique_id = ""
         named = bool(username) and username not in {unique_id, "抖音账号"}
-        valid = bool((named or (has_session and unique_id)) and not login_wall)
+        valid = bool((named or has_session) and not login_wall)
         if login_wall and not named:
             valid = False
         saved = _cookies_for_save(context) or cookies
         if valid:
-            message = f"Cookie 有效 · {username or '已登录'} · 抖音号 {unique_id}"
+            message = (
+                f"Cookie 有效 · {username or '已登录'}"
+                + (f" · 抖音号 {unique_id}" if unique_id else "")
+            )
         elif login_wall:
             message = "Cookie 已失效，需要重新扫码或更换 JSON"
         elif not has_session:

@@ -9,6 +9,8 @@ class SelectorTests(unittest.TestCase):
         self.assertEqual(tasks.CONVERSATION_TITLE_SELECTOR, '.conversationConversationItemtitle')
         self.assertEqual(tasks.CONVERSATION_LIST_SELECTOR, '.conversationConversationListwrapper')
         self.assertEqual(tasks.CHAT_EDITOR_SELECTOR, '.messageEditorimChatEditorContainer')
+        self.assertIn(tasks.CONVERSATION_LIST_SELECTOR, tasks.CONVERSATION_LIST_SELECTORS)
+        self.assertIn(tasks.CONVERSATION_ITEM_SELECTOR, tasks.CONVERSATION_ITEM_SELECTORS)
 
 
 if __name__ == '__main__':
