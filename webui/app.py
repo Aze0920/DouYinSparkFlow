@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -52,14 +52,20 @@ from webui.cards import (
     public_card,
 )
 from webui.notify import (
+    cancel_pushplus_qr,
     load_notify,
+    migrate_legacy_pushplus,
     notify_event,
+    poll_pushplus_qr,
     public_notify,
+    public_pushplus,
+    pushplus_qr_image,
     save_notify,
     send_pushplus,
-    send_serverchan,
     send_wechat,
-    send_wxpusher,
+    set_user_pushplus,
+    start_pushplus_qr,
+    user_pushplus_token,
     verify_wechat_signature,
 )
 
@@ -111,6 +117,8 @@ async def log_api_calls(request: Request, call_next):
         "/cards",
         "/settings",
         "/api/wechat/callback",
+        "/api/notify/pushplus/poll",
+        "/api/notify/pushplus/qr-image",
     } or path.startswith("/static/")
     if not quiet:
         logger.info("请求 %s %s", request.method, path)
@@ -128,6 +136,10 @@ async def log_api_calls(request: Request, call_next):
 def on_startup():
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     logger.info("控制台启动 version=%s cwd=%s log=%s", read_version(), os.getcwd(), LOG_FILE)
+    try:
+        migrate_legacy_pushplus()
+    except Exception:
+        logger.exception("迁移旧 PushPlus 配置失败")
     threading.Thread(target=_scheduler_loop, daemon=True, name="spark-cron").start()
     logger.info("已启动按账号定时调度")
 
@@ -183,6 +195,30 @@ def _is_admin(user: dict | None) -> bool:
 
 def _account_owner(item: dict | None) -> str:
     return str((item or {}).get("owner") or "").strip()
+
+
+def _notify_account_owners(kind: str, title: str, unique_ids=None, extra: str = "") -> None:
+    wanted = {str(item).strip() for item in (unique_ids or []) if str(item).strip()}
+    grouped: dict[str, list[str]] = {}
+    for acc in parse_accounts(load_env()):
+        uid = str(acc.get("unique_id") or "").strip()
+        if not uid:
+            continue
+        if wanted and uid not in wanted:
+            continue
+        owner = _account_owner(acc)
+        if not owner:
+            continue
+        label = str(acc.get("username") or uid)
+        grouped.setdefault(owner, []).append(label)
+    if not grouped:
+        notify_event(kind, title, extra or "相关账号")
+        return
+    for owner, names in grouped.items():
+        body = "、".join(names)
+        if extra:
+            body = f"{body} {extra}".strip()
+        notify_event(kind, title, body, usernames=[owner])
 
 
 def _filter_accounts(user: dict | None, accounts: list) -> list:
@@ -609,12 +645,9 @@ def save_notify_settings(request: Request, payload: dict | None = None):
     admin = require_admin(request)
     data = save_notify(payload or {})
     logger.info(
-        "已保存推送设置 admin=%s wechat=%s wxpusher=%s pushplus=%s serverchan=%s",
+        "已保存推送设置 admin=%s wechat=%s",
         admin.get("username"),
         (data.get("wechat") or {}).get("enabled"),
-        (data.get("wxpusher") or {}).get("enabled"),
-        (data.get("pushplus") or {}).get("enabled"),
-        (data.get("serverchan") or {}).get("enabled"),
     )
     return {"ok": True, **public_notify(data)}
 
@@ -623,27 +656,73 @@ def save_notify_settings(request: Request, payload: dict | None = None):
 def test_notify_settings(request: Request):
     require_admin(request)
     cfg = load_notify()
-    jobs = [
-        ("WxPusher", cfg.get("wxpusher") or {}, lambda: send_wxpusher("SparkFlow 测试推送", "WxPusher 通道正常")),
-        ("PushPlus", cfg.get("pushplus") or {}, lambda: send_pushplus("SparkFlow 测试推送", "PushPlus 通道正常")),
-        ("Server酱", cfg.get("serverchan") or {}, lambda: send_serverchan("SparkFlow 测试推送", "Server酱通道正常")),
-        ("公众号", cfg.get("wechat") or {}, lambda: send_wechat("test", "SparkFlow 测试推送", "公众号消息通道正常")),
-    ]
-    notes = []
-    failed = []
-    for name, conf, sender in jobs:
-        if not conf.get("enabled"):
-            continue
-        try:
-            sender()
-            notes.append(name + " 已发送")
-        except Exception as exc:
-            failed.append(name + "：" + str(exc))
-    if not notes and not failed:
-        raise HTTPException(status_code=400, detail="请先启用至少一种推送通道")
-    if not notes:
-        raise HTTPException(status_code=400, detail="；".join(failed))
-    return {"ok": True, "message": "；".join(notes + failed)}
+    wechat = cfg.get("wechat") or {}
+    if not wechat.get("enabled"):
+        raise HTTPException(status_code=400, detail="公众号推送还没打开")
+    try:
+        send_wechat("test", "SparkFlow 测试推送", "公众号消息通道正常")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "message": "公众号已发送"}
+
+
+@app.get("/api/notify/pushplus")
+def get_pushplus_bind(request: Request):
+    user = require_auth(request)
+    return {"ok": True, **public_pushplus(user)}
+
+
+@app.post("/api/notify/pushplus/qr")
+def create_pushplus_qr(request: Request, payload: dict | None = None):
+    user = require_auth(request)
+    payload = payload or {}
+    try:
+        data = start_pushplus_qr(user.get("username") or "", force=bool(payload.get("force")))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {**public_pushplus(find_user(user.get("username") or "")), **data}
+
+
+@app.get("/api/notify/pushplus/qr-image")
+def get_pushplus_qr_image(request: Request):
+    user = require_auth(request)
+    raw = pushplus_qr_image(user.get("username") or "")
+    if not raw:
+        raise HTTPException(status_code=404, detail="二维码还没生成或已过期")
+    return Response(content=raw, media_type="image/png", headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/notify/pushplus/poll")
+def poll_pushplus_bind(request: Request):
+    user = require_auth(request)
+    try:
+        data = poll_pushplus_qr(user.get("username") or "")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return data
+
+
+@app.post("/api/notify/pushplus/unbind")
+def unbind_pushplus(request: Request):
+    user = require_auth(request)
+    name = user.get("username") or ""
+    cancel_pushplus_qr(name)
+    saved = set_user_pushplus(name, "")
+    logger.info("已解绑 PushPlus user=%s", name)
+    return {"ok": True, **public_pushplus(saved)}
+
+
+@app.post("/api/notify/pushplus/test")
+def test_pushplus_bind(request: Request):
+    user = require_auth(request)
+    token = user_pushplus_token(user.get("username") or "")
+    if not token:
+        raise HTTPException(status_code=400, detail="请先扫码绑定 PushPlus")
+    try:
+        send_pushplus("SparkFlow 测试推送", "绑定成功，以后续火花消息会发到这里", token=token)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "message": "测试消息已发送"}
 
 
 @app.api_route("/api/wechat/callback", methods=["GET", "POST"])
@@ -969,10 +1048,12 @@ def check_account_cookie(request: Request, payload: dict | None = None):
     tasks = read_tasks(env)
     old_status = ""
     account_name = unique_id
+    owner_name = ""
     for index, item in enumerate(tasks):
         if str(item.get("unique_id") or "").strip() == unique_id:
             old_status = str(item.get("cookie_status") or "").strip()
             account_name = str(item.get("username") or unique_id)
+            owner_name = _account_owner(item)
             item["cookie_status"] = result.get("cookie_status") or "bad"
             got_name = str(result.get("username") or "").strip()
             if result.get("cookie_status") == "ok" and got_name and got_name != "抖音账号":
@@ -982,7 +1063,12 @@ def check_account_cookie(request: Request, payload: dict | None = None):
             write_env({"TASKS": tasks})
             break
     if result.get("cookie_status") == "bad" and old_status != "bad":
-        notify_event("cookie_offline", "抖音账号掉线", f"{account_name} {unique_id}")
+        notify_event(
+            "cookie_offline",
+            "抖音账号掉线",
+            f"{account_name} {unique_id}",
+            usernames=[owner_name] if owner_name else None,
+        )
     logger.info(
         "检测账号 Cookie unique_id=%s valid=%s mismatch=%s got=%s",
         unique_id,
@@ -1128,17 +1214,16 @@ def _run_task(unique_ids=None):
             fh.write(f"\n----- 手动执行 exit={proc.returncode} -----\n")
             fh.write(extra[-8000:])
         _run_state["message"] = "执行完成" if proc.returncode == 0 else f"执行失败，退出码 {proc.returncode}"
-        names_text = "、".join(ids) if ids else "全部账号"
         if proc.returncode == 0:
             logger.info("续火花任务执行完成")
-            notify_event("task_done", "续火花完成", names_text)
+            _notify_account_owners("task_done", "续火花完成", ids or None)
         else:
             logger.error("续火花任务失败 exit=%s", proc.returncode)
-            notify_event("task_fail", "续火花失败", f"退出码 {proc.returncode}")
+            _notify_account_owners("task_fail", "续火花失败", ids or None, extra=f"退出码 {proc.returncode}")
     except Exception as exc:
         _run_state["message"] = f"执行异常：{exc}"
         logger.exception("续火花任务异常")
-        notify_event("task_fail", "续火花异常", str(exc))
+        _notify_account_owners("task_fail", "续火花异常", ids or None, extra=str(exc))
     finally:
         _run_state["running"] = False
         _run_state["running_ids"] = []

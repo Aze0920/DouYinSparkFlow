@@ -8,13 +8,24 @@ from pathlib import Path
 import httpx
 
 from utils.logger import setup_logger
+from webui.users import find_user, load_users, now_utc, save_users, to_iso
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTIFY_FILE = ROOT / "config" / "notify.json"
 logger = setup_logger("notify")
 
 EVENT_KEYS = ("task_done", "task_fail", "cookie_offline")
+PP_QR_TTL = 90
+PP_API = "https://www.pushplus.plus/api"
+PP_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://www.pushplus.plus/login.html",
+    "Origin": "https://www.pushplus.plus",
+}
+
 _token_cache = {"token": "", "expire": 0}
+_bind_lock = threading.Lock()
+_bind_sessions: dict[str, dict] = {}
 
 
 def default_notify() -> dict:
@@ -35,19 +46,6 @@ def default_notify() -> dict:
             "task_done": True,
             "task_fail": True,
             "cookie_offline": True,
-        },
-        "wxpusher": {
-            "enabled": False,
-            "app_token": "",
-            "uids": "",
-        },
-        "pushplus": {
-            "enabled": False,
-            "token": "",
-        },
-        "serverchan": {
-            "enabled": False,
-            "sendkey": "",
         },
     }
 
@@ -96,32 +94,12 @@ def save_notify(payload: dict) -> dict:
     if "enabled" in incoming:
         wechat["enabled"] = bool(incoming.get("enabled"))
     wechat["tpl_style"] = "keyword" if str(wechat.get("tpl_style") or "") == "keyword" else "thing"
-    wxpusher = dict(current.get("wxpusher") or {})
-    incoming_wp = payload.get("wxpusher") if isinstance(payload.get("wxpusher"), dict) else {}
-    if "enabled" in incoming_wp:
-        wxpusher["enabled"] = bool(incoming_wp.get("enabled"))
-    if "app_token" in incoming_wp:
-        wxpusher["app_token"] = str(incoming_wp.get("app_token") or "").strip()
-    if "uids" in incoming_wp:
-        wxpusher["uids"] = str(incoming_wp.get("uids") or "").strip()
-    pushplus = dict(current.get("pushplus") or {})
-    incoming_pp = payload.get("pushplus") if isinstance(payload.get("pushplus"), dict) else {}
-    if "enabled" in incoming_pp:
-        pushplus["enabled"] = bool(incoming_pp.get("enabled"))
-    if "token" in incoming_pp:
-        pushplus["token"] = str(incoming_pp.get("token") or "").strip()
-    serverchan = dict(current.get("serverchan") or {})
-    incoming_sc = payload.get("serverchan") if isinstance(payload.get("serverchan"), dict) else {}
-    if "enabled" in incoming_sc:
-        serverchan["enabled"] = bool(incoming_sc.get("enabled"))
-    if "sendkey" in incoming_sc:
-        serverchan["sendkey"] = str(incoming_sc.get("sendkey") or "").strip()
     events = dict(current.get("events") or {})
     incoming_events = payload.get("events") if isinstance(payload.get("events"), dict) else {}
     for key in EVENT_KEYS:
         if key in incoming_events:
             events[key] = bool(incoming_events.get(key))
-    data = {"wechat": wechat, "wxpusher": wxpusher, "pushplus": pushplus, "serverchan": serverchan, "events": events}
+    data = {"wechat": wechat, "events": events}
     NOTIFY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
 
@@ -131,23 +109,76 @@ def public_notify(data: dict | None = None) -> dict:
     wechat = dict(data.get("wechat") or {})
     secret = str(wechat.get("app_secret") or "")
     wechat["app_secret_set"] = bool(secret)
-    wxpusher = dict(data.get("wxpusher") or {})
-    wp_token = str(wxpusher.get("app_token") or "").strip()
-    wp_uids = str(wxpusher.get("uids") or "").strip()
-    pushplus = dict(data.get("pushplus") or {})
-    serverchan = dict(data.get("serverchan") or {})
     return {
         "wechat": wechat,
-        "wxpusher": wxpusher,
-        "pushplus": pushplus,
-        "serverchan": serverchan,
         "events": dict(data.get("events") or {}),
         "bound": bool(wechat.get("admin_openid")),
         "ready": bool(wechat.get("enabled") and wechat.get("app_id") and secret and wechat.get("admin_openid")),
-        "wxpusher_ready": bool(wxpusher.get("enabled") and wp_token and wp_uids),
-        "pushplus_ready": bool(pushplus.get("enabled") and str(pushplus.get("token") or "").strip()),
-        "serverchan_ready": bool(serverchan.get("enabled") and str(serverchan.get("sendkey") or "").strip()),
     }
+
+
+def mask_token(token: str) -> str:
+    raw = str(token or "").strip()
+    if len(raw) <= 4:
+        return "已绑定" if raw else ""
+    return "••••" + raw[-4:]
+
+
+def public_pushplus(user: dict | None) -> dict:
+    token = str((user or {}).get("pushplus_token") or "").strip()
+    return {
+        "bound": bool(token),
+        "mask": mask_token(token) if token else "",
+        "bound_at": str((user or {}).get("pushplus_bound_at") or ""),
+    }
+
+
+def user_pushplus_token(username: str) -> str:
+    user = find_user(username)
+    return str((user or {}).get("pushplus_token") or "").strip()
+
+
+def set_user_pushplus(username: str, token: str) -> dict | None:
+    name = str(username or "").strip()
+    users = load_users()
+    found = None
+    for item in users:
+        if item.get("username") != name:
+            continue
+        item["pushplus_token"] = str(token or "").strip()
+        item["pushplus_bound_at"] = to_iso(now_utc()) if item["pushplus_token"] else ""
+        found = item
+        break
+    if not found:
+        return None
+    save_users(users)
+    return found
+
+
+def migrate_legacy_pushplus() -> None:
+    cfg = load_notify()
+    legacy = str((cfg.get("pushplus") or {}).get("token") or "").strip()
+    if not legacy:
+        return
+    users = load_users()
+    changed = False
+    for item in users:
+        if item.get("role") != "admin":
+            continue
+        if str(item.get("pushplus_token") or "").strip():
+            continue
+        item["pushplus_token"] = legacy
+        item["pushplus_bound_at"] = to_iso(now_utc())
+        changed = True
+        logger.info("已把旧的全局 PushPlus token 迁到管理员 %s", item.get("username"))
+        break
+    if changed:
+        save_users(users)
+    leftover = dict(cfg)
+    leftover.pop("pushplus", None)
+    leftover.pop("wxpusher", None)
+    leftover.pop("serverchan", None)
+    NOTIFY_FILE.write_text(json.dumps(leftover, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def verify_wechat_signature(signature: str, timestamp: str, nonce: str) -> bool:
@@ -214,7 +245,7 @@ def send_wechat(kind: str, title: str, body: str = "") -> dict:
     if not app_id or not app_secret:
         raise RuntimeError("请先填写公众号 AppID 和 AppSecret")
     if not openid:
-        raise RuntimeError("请先填写管理员 OpenID，后续会改成扫码绑定")
+        raise RuntimeError("请先填写管理员 OpenID")
     tpl = _template_id(wechat, kind)
     if not tpl:
         raise RuntimeError("请先填写对应事件的模板消息 ID")
@@ -234,49 +265,10 @@ def send_wechat(kind: str, title: str, body: str = "") -> dict:
     return data
 
 
-def _parse_uids(raw) -> list[str]:
-    if isinstance(raw, list):
-        parts = raw
-    else:
-        text = str(raw or "").replace("，", ",").replace(";", ",").replace("\n", ",")
-        parts = text.split(",")
-    return [str(item).strip() for item in parts if str(item).strip()]
-
-
-def send_wxpusher(title: str, body: str = "") -> dict:
-    cfg = load_notify().get("wxpusher") or {}
-    if not cfg.get("enabled"):
-        raise RuntimeError("还没打开 WxPusher")
-    token = str(cfg.get("app_token") or "").strip()
-    uids = _parse_uids(cfg.get("uids"))
+def send_pushplus(title: str, body: str = "", token: str = "") -> dict:
+    token = str(token or "").strip()
     if not token:
-        raise RuntimeError("请填写 WxPusher appToken")
-    if not uids:
-        raise RuntimeError("请填写 WxPusher UID")
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    payload = {
-        "appToken": token,
-        "content": f"{title}\n{body or '-'}\n{now}",
-        "summary": (title or "SparkFlow")[:20],
-        "contentType": 1,
-        "uids": uids,
-    }
-    with httpx.Client(timeout=8.0) as client:
-        resp = client.post("https://wxpusher.zjiecode.com/api/send/message", json=payload)
-        data = resp.json()
-    if int(data.get("code") or 0) != 1000:
-        raise RuntimeError(data.get("msg") or "WxPusher 发送失败")
-    logger.info("WxPusher 推送成功 title=%s uids=%s", title, len(uids))
-    return data
-
-
-def send_pushplus(title: str, body: str = "") -> dict:
-    cfg = load_notify().get("pushplus") or {}
-    if not cfg.get("enabled"):
-        raise RuntimeError("还没打开 PushPlus")
-    token = str(cfg.get("token") or "").strip()
-    if not token:
-        raise RuntimeError("请填写 PushPlus token")
+        raise RuntimeError("还没绑定 PushPlus")
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = {
         "token": token,
@@ -293,56 +285,179 @@ def send_pushplus(title: str, body: str = "") -> dict:
     return data
 
 
-def _serverchan_sendkey(raw: str) -> str:
-    key = str(raw or "").strip()
-    for prefix in ("https://sctapi.ftqq.com/", "http://sctapi.ftqq.com/", "https://sc.ftqq.com/", "http://sc.ftqq.com/"):
-        if prefix in key:
-            key = key.split(prefix, 1)[1]
-    return key.replace(".send", "").strip("/")
-
-
-def send_serverchan(title: str, body: str = "") -> dict:
-    cfg = load_notify().get("serverchan") or {}
-    if not cfg.get("enabled"):
-        raise RuntimeError("还没打开 Server酱")
-    sendkey = _serverchan_sendkey(cfg.get("sendkey"))
-    if not sendkey:
-        raise RuntimeError("请填写 Server酱 SendKey")
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    payload = {"title": title or "SparkFlow", "desp": f"{body or '-'}\n\n{now}"}
-    url = f"https://sctapi.ftqq.com/{sendkey}.send"
-    if not sendkey.upper().startswith("SCT"):
-        url = f"https://sc.ftqq.com/{sendkey}.send"
-    with httpx.Client(timeout=8.0) as client:
-        resp = client.post(url, data=payload)
-        data = resp.json()
-    if int(data.get("code") or 0) != 0:
-        raise RuntimeError(data.get("message") or data.get("msg") or "Server酱 发送失败")
-    logger.info("Server酱 推送成功 title=%s", title)
-    return data
-
-
-def notify_event(kind: str, title: str, body: str = "") -> None:
+def notify_event(kind: str, title: str, body: str = "", usernames=None) -> None:
     cfg = load_notify()
     events = cfg.get("events") or {}
     if kind != "test" and not events.get(kind, True):
         return
-    channels = [
-        ("wxpusher", (cfg.get("wxpusher") or {}).get("enabled"), lambda: send_wxpusher(title, body)),
-        ("pushplus", (cfg.get("pushplus") or {}).get("enabled"), lambda: send_pushplus(title, body)),
-        ("serverchan", (cfg.get("serverchan") or {}).get("enabled"), lambda: send_serverchan(title, body)),
-        ("wechat", (cfg.get("wechat") or {}).get("enabled"), lambda: send_wechat(kind, title, body)),
-    ]
-    if not any(item[1] for item in channels):
+    names = []
+    seen = set()
+    for name in usernames or []:
+        item = str(name or "").strip()
+        if item and item not in seen:
+            seen.add(item)
+            names.append(item)
+    wechat_on = bool((cfg.get("wechat") or {}).get("enabled"))
+    targets = []
+    for name in names:
+        token = user_pushplus_token(name)
+        if token:
+            targets.append((name, token))
+    if not wechat_on and not targets:
         return
 
     def _run():
-        for name, enabled, sender in channels:
-            if not enabled:
-                continue
+        for name, token in targets:
             try:
-                sender()
+                send_pushplus(title, body, token=token)
             except Exception as exc:
-                logger.warning("%s 未发出 kind=%s: %s", name, kind, exc)
+                logger.warning("PushPlus 未发出 user=%s kind=%s: %s", name, kind, exc)
+        if wechat_on:
+            try:
+                send_wechat(kind, title, body)
+            except Exception as exc:
+                logger.warning("公众号未发出 kind=%s: %s", kind, exc)
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def _close_session(session: dict | None) -> None:
+    client = (session or {}).get("client")
+    if client is None:
+        return
+    try:
+        client.close()
+    except Exception:
+        pass
+
+
+def _session_alive(session: dict | None) -> bool:
+    if not session:
+        return False
+    return float(session.get("expire") or 0) > time.time()
+
+
+def _extract_token(payload) -> str:
+    if isinstance(payload, str):
+        text = payload.strip()
+        if text and text not in ("尚未登录", "二维码过期", "已过期"):
+            return text
+        return ""
+    if isinstance(payload, dict):
+        for key in ("token", "pushToken", "userToken"):
+            text = str(payload.get(key) or "").strip()
+            if text:
+                return text
+    return ""
+
+
+def start_pushplus_qr(username: str, force: bool = False) -> dict:
+    name = str(username or "").strip()
+    if not name:
+        raise RuntimeError("未登录")
+    with _bind_lock:
+        session = _bind_sessions.get(name)
+        if not force and _session_alive(session) and (session.get("qr_bytes") or session.get("qr_url")):
+            return {
+                "ok": True,
+                "waiting": True,
+                "bound": False,
+                "expire_in": max(0, int(session["expire"] - time.time())),
+                "qr_url": session.get("qr_url") or "",
+                "has_image": bool(session.get("qr_bytes")),
+            }
+        _close_session(session)
+        client = httpx.Client(timeout=10.0, headers=PP_HEADERS, follow_redirects=True)
+        try:
+            resp = client.get(f"{PP_API}/common/wechat/getQrcode")
+            data = resp.json()
+        except Exception as exc:
+            client.close()
+            raise RuntimeError("获取 PushPlus 二维码失败") from exc
+        if int(data.get("code") or 0) != 200:
+            client.close()
+            raise RuntimeError(data.get("msg") or "获取 PushPlus 二维码失败")
+        info = data.get("data") if isinstance(data.get("data"), dict) else {}
+        key = str(info.get("qrCode") or "").strip()
+        qr_url = str(info.get("qrCodeUrl") or "").strip()
+        if not key or not qr_url:
+            client.close()
+            raise RuntimeError("PushPlus 没有返回二维码")
+        qr_bytes = b""
+        try:
+            img = client.get(qr_url, headers={"Referer": "https://mp.weixin.qq.com/"})
+            if img.status_code == 200 and img.content:
+                qr_bytes = img.content
+        except Exception:
+            logger.warning("拉取 PushPlus 二维码图片失败 user=%s", name)
+        now = time.time()
+        _bind_sessions[name] = {
+            "client": client,
+            "key": key,
+            "qr_url": qr_url,
+            "qr_bytes": qr_bytes,
+            "created": now,
+            "expire": now + PP_QR_TTL,
+        }
+        logger.info("已生成 PushPlus 绑定二维码 user=%s ttl=%s", name, PP_QR_TTL)
+        return {
+            "ok": True,
+            "waiting": True,
+            "bound": False,
+            "expire_in": PP_QR_TTL,
+            "qr_url": qr_url,
+            "has_image": bool(qr_bytes),
+        }
+
+
+def pushplus_qr_image(username: str) -> bytes:
+    name = str(username or "").strip()
+    with _bind_lock:
+        session = _bind_sessions.get(name)
+        if not _session_alive(session):
+            return b""
+        return session.get("qr_bytes") or b""
+
+
+def poll_pushplus_qr(username: str) -> dict:
+    name = str(username or "").strip()
+    user = find_user(name)
+    bound = public_pushplus(user)
+    with _bind_lock:
+        session = _bind_sessions.get(name)
+        if bound.get("bound") and not session:
+            return {"ok": True, "waiting": False, **bound}
+        if not _session_alive(session):
+            if session:
+                _close_session(_bind_sessions.pop(name, None))
+            payload = {"ok": True, "waiting": False, "expired": True, **bound}
+            return payload
+        client = session["client"]
+        key = session["key"]
+        try:
+            resp = client.get(f"{PP_API}/common/wechat/confirmLogin", params={"key": key, "code": 1001})
+            data = resp.json()
+        except Exception as exc:
+            logger.warning("查询 PushPlus 扫码状态失败 user=%s: %s", name, exc)
+            return {"ok": True, "waiting": True, "expired": False, **bound}
+        code = int(data.get("code") or 0)
+        raw = data.get("data")
+        msg = str(data.get("msg") or "")
+        token = _extract_token(raw)
+        waiting_hints = ("尚未登录", "未登录", "等待", "未扫码")
+        if not token and (code != 200 or any(item in str(raw) for item in waiting_hints) or any(item in msg for item in waiting_hints)):
+            left = max(0, int(float(session.get("expire") or 0) - time.time()))
+            return {"ok": True, "waiting": True, "expired": left <= 0, "expire_in": left, **bound}
+        if not token:
+            return {"ok": True, "waiting": True, "expired": False, "message": msg or "还在等待扫码", **bound}
+    saved = set_user_pushplus(name, token)
+    with _bind_lock:
+        _close_session(_bind_sessions.pop(name, None))
+    logger.info("PushPlus 扫码绑定成功 user=%s", name)
+    return {"ok": True, "waiting": False, "bound": True, **public_pushplus(saved)}
+
+
+def cancel_pushplus_qr(username: str) -> None:
+    name = str(username or "").strip()
+    with _bind_lock:
+        _close_session(_bind_sessions.pop(name, None))

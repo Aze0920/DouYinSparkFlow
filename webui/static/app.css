@@ -266,7 +266,23 @@ body.spark-locked .spark-action {
 .choice-stack button { width: 100%; }
 .ck-card { width: min(560px, calc(100% - 24px)); }
 .ck-card textarea { width: 100%; min-height: 220px; font-family: Consolas, "Courier New", monospace; font-size: 12px; }
-.qr-card { width: min(440px, calc(100% - 24px)); text-align: center; }
+.pp-bind-box {
+  display: flex;
+  gap: 20px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.pp-bind-box .qr-image {
+  width: 196px;
+  height: 196px;
+}
+.pp-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
+.pp-actions button { width: auto; }
 .live-wrap {
   position: relative;
   min-height: 120px;

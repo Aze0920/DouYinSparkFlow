@@ -151,6 +151,30 @@
             <strong id="accountCount">-</strong>
           </article>
         </div>
+        <section class="panel" id="pushplusPanel">
+          <div class="panel-head">
+            <h2>微信推送</h2>
+            <span class="ck-status" id="ppBindStatus">未绑定</span>
+          </div>
+          <p class="sub">用微信扫码关注 PushPlus 后，续火花完成、失败、抖音掉线会发到你自己的微信。管理员和普通用户都要各自绑一次。</p>
+          <div id="ppUnbound" class="pp-bind-box">
+            <img id="ppQrImage" class="qr-image hidden" alt="PushPlus 绑定二维码" referrerpolicy="no-referrer" />
+            <div>
+              <div id="ppQrHint">正在生成二维码…</div>
+              <div class="pp-actions">
+                <button class="btn-ghost" type="button" onclick="refreshPushplusQr()">刷新二维码</button>
+              </div>
+            </div>
+          </div>
+          <div id="ppBound" class="hidden">
+            <p class="sub" id="ppBoundText">已绑定</p>
+            <div class="pp-actions">
+              <button class="btn-primary" type="button" onclick="testPushplusBind()">发送测试</button>
+              <button class="btn-ghost" type="button" onclick="refreshPushplusQr(true)">重新绑定</button>
+              <button class="btn-ghost" type="button" onclick="unbindPushplus()">解绑</button>
+            </div>
+          </div>
+        </section>
         <section class="panel">
           <div class="panel-head">
             <h2>抖音账号与发送策略</h2>
@@ -236,44 +260,9 @@
       <section id="page-settings" class="hidden">
         <section class="panel">
           <div class="panel-head">
-            <h2>WxPusher</h2>
-            <span class="ck-status" id="wpStatus">未配置</span>
-          </div>
-          <p class="sub">打开 <a href="https://wxpusher.zjiecode.com" target="_blank" rel="noreferrer">wxpusher.zjiecode.com</a> 注册应用，复制 appToken；微信扫码关注后复制 UID。微信公众号现在收不到推送，请下载 WxPusher App 接收。</p>
-          <div class="grid two">
-            <label class="check-line"><input id="wpEnabled" type="checkbox" /> 启用 WxPusher</label>
-            <label>appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
-            <label class="span-2">UID（多个用逗号或换行）
-              <textarea id="wpUids" rows="3" placeholder="UID_xxxx"></textarea>
-            </label>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>PushPlus</h2>
-            <span class="ck-status" id="ppStatus">未配置</span>
-          </div>
-          <p class="sub">打开 <a href="https://www.pushplus.plus" target="_blank" rel="noreferrer">pushplus.plus</a> 微信扫码登录，复制 token。一对一消息走他们的公众号，免费有条数限制。</p>
-          <div class="grid two">
-            <label class="check-line"><input id="ppEnabled" type="checkbox" /> 启用 PushPlus</label>
-            <label>token<input id="ppToken" placeholder="个人 token" autocomplete="off" /></label>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>Server酱</h2>
-            <span class="ck-status" id="scStatus">未配置</span>
-          </div>
-          <p class="sub">打开 <a href="https://sct.ftqq.com" target="_blank" rel="noreferrer">sct.ftqq.com</a> 微信登录，复制 SendKey（一般是 SCT 开头）。免费每天条数很少。</p>
-          <div class="grid two">
-            <label class="check-line"><input id="scEnabled" type="checkbox" /> 启用 Server酱</label>
-            <label>SendKey<input id="scSendKey" placeholder="SCT_ 或 SCKEY" autocomplete="off" /></label>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
             <h2>推送事件</h2>
           </div>
+          <p class="sub">控制哪些事件会推送。PushPlus 在总览扫码绑定；这里只管开哪些事件，以及可选的公众号模板。</p>
           <div class="grid two">
             <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
             <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
@@ -281,7 +270,6 @@
             <label class="span-2">
               <span class="row">
                 <button class="btn-primary" type="button" onclick="saveNotifySettings()">保存设置</button>
-                <button class="btn-ghost" type="button" onclick="testNotifySettings()">发送测试</button>
               </span>
             </label>
           </div>
@@ -308,6 +296,9 @@
                 <option value="keyword">旧版 first / keyword / remark</option>
               </select>
             </label>
+            <label class="span-2">
+              <button class="btn-ghost" type="button" onclick="testNotifySettings()">发送公众号测试</button>
+            </label>
           </div>
         </section>
       </section>
@@ -327,6 +318,8 @@
     let liveQuietUntil = 0;
     let lastVerifyKey = "";
     let githubCheckBusy = false;
+    let ppWaiting = false;
+    let ppPollBusy = false;
     window.__accountCookies = {};
 
     function toast(message, type = "ok") {
@@ -428,6 +421,7 @@
           ? (isAdmin() || current.permanent ? "不过期" : (current.remain_label || ""))
           : "";
       }
+      renderPushplusPanel(current || {});
     }
     function pagePath(name) {
       return { home: "/", logs: "/logs", users: "/users", cards: "/cards", settings: "/settings" }[name] || "/";
@@ -463,7 +457,7 @@
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "管理员永久有效。普通用户的天数和账号额度由卡密或这里指定"],
         cards: ["卡密管理", "一排一张卡密，生成后可复制发给用户"],
-        settings: ["设置", "WxPusher 推送任务完成、失败、抖音掉线"],
+        settings: ["设置", "推送事件和可选的公众号模板"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
@@ -477,6 +471,7 @@
       if (name === "users" && isAdmin()) loadUsers();
       if (name === "cards" && isAdmin()) loadCards();
       if (name === "settings" && isAdmin()) loadNotifySettings();
+      if (name === "home") ensurePushplusQr();
     }
     window.addEventListener("popstate", () => {
       showPage(pathToPage(location.pathname), { skipHistory: true });
@@ -1470,7 +1465,6 @@
     }
     function fillNotifySettings(data) {
       const wx = data.wechat || {};
-      const wp = data.wxpusher || {};
       const events = data.events || {};
       if ($("wxAppId")) $("wxAppId").value = wx.app_id || "";
       if ($("wxAppSecret")) $("wxAppSecret").value = wx.app_secret || "";
@@ -1482,28 +1476,9 @@
       if ($("wxTplOffline")) $("wxTplOffline").value = wx.tpl_cookie_offline || "";
       if ($("wxTplStyle")) $("wxTplStyle").value = wx.tpl_style === "keyword" ? "keyword" : "thing";
       if ($("wxEnabled")) $("wxEnabled").checked = !!wx.enabled;
-      if ($("wpEnabled")) $("wpEnabled").checked = !!wp.enabled;
-      if ($("wpAppToken")) $("wpAppToken").value = wp.app_token || "";
-      if ($("wpUids")) $("wpUids").value = wp.uids || "";
-      if ($("ppEnabled")) $("ppEnabled").checked = !!(data.pushplus || {}).enabled;
-      if ($("ppToken")) $("ppToken").value = (data.pushplus || {}).token || "";
-      if ($("scEnabled")) $("scEnabled").checked = !!(data.serverchan || {}).enabled;
-      if ($("scSendKey")) $("scSendKey").value = (data.serverchan || {}).sendkey || "";
       if ($("wxEventDone")) $("wxEventDone").checked = events.task_done !== false;
       if ($("wxEventFail")) $("wxEventFail").checked = events.task_fail !== false;
       if ($("wxEventOffline")) $("wxEventOffline").checked = events.cookie_offline !== false;
-      if ($("wpStatus")) {
-        $("wpStatus").textContent = data.wxpusher_ready ? "可推送" : "未配置";
-        $("wpStatus").className = "ck-status " + (data.wxpusher_ready ? "ck-ok" : "ck-unknown");
-      }
-      if ($("ppStatus")) {
-        $("ppStatus").textContent = data.pushplus_ready ? "可推送" : "未配置";
-        $("ppStatus").className = "ck-status " + (data.pushplus_ready ? "ck-ok" : "ck-unknown");
-      }
-      if ($("scStatus")) {
-        $("scStatus").textContent = data.serverchan_ready ? "可推送" : "未配置";
-        $("scStatus").className = "ck-status " + (data.serverchan_ready ? "ck-ok" : "ck-unknown");
-      }
       if ($("wxBindStatus")) {
         $("wxBindStatus").textContent = data.ready ? "可推送" : (data.bound ? "已填 OpenID" : "未绑定");
         $("wxBindStatus").className = "ck-status " + (data.ready ? "ck-ok" : "ck-unknown");
@@ -1518,19 +1493,6 @@
         const data = await api("/api/settings/notify", {
           method: "POST",
           body: JSON.stringify({
-            wxpusher: {
-              enabled: !!( $("wpEnabled") && $("wpEnabled").checked ),
-              app_token: ($("wpAppToken") && $("wpAppToken").value) || "",
-              uids: ($("wpUids") && $("wpUids").value) || "",
-            },
-            pushplus: {
-              enabled: !!( $("ppEnabled") && $("ppEnabled").checked ),
-              token: ($("ppToken") && $("ppToken").value) || "",
-            },
-            serverchan: {
-              enabled: !!( $("scEnabled") && $("scEnabled").checked ),
-              sendkey: ($("scSendKey") && $("scSendKey").value) || "",
-            },
             wechat: {
               enabled: !!( $("wxEnabled") && $("wxEnabled").checked ),
               app_id: ($("wxAppId") && $("wxAppId").value) || "",
@@ -1564,6 +1526,130 @@
         toast(err.message, "err");
       }
     }
+    function renderPushplusPanel(data) {
+      data = data || {};
+      const waiting = ppWaiting || !!data.waiting;
+      const saved = !!(data.bound || data.pushplus_bound);
+      const bound = saved && !waiting;
+      const mask = data.mask || data.pushplus_mask || "";
+      if ($("ppBindStatus")) {
+        $("ppBindStatus").textContent = bound ? "已绑定" : (waiting ? "等待扫码" : "未绑定");
+        $("ppBindStatus").className = "ck-status " + (bound ? "ck-ok" : "ck-unknown");
+      }
+      if ($("ppBound")) $("ppBound").classList.toggle("hidden", !bound);
+      if ($("ppUnbound")) $("ppUnbound").classList.toggle("hidden", bound);
+      if ($("ppBoundText")) {
+        $("ppBoundText").textContent = bound
+          ? ("已绑定" + (mask ? " · " + mask : "") + "。续火花消息会发到这个微信。")
+          : "";
+      }
+      if ($("ppQrHint")) {
+        $("ppQrHint").textContent = waiting
+          ? "请用微信扫码。扫完会自动绑定到当前登录账号。"
+          : (bound ? "" : "点刷新生成二维码。");
+      }
+    }
+    function showPushplusQrImage(url) {
+      const img = $("ppQrImage");
+      if (!img) return;
+      if (url) window.__ppQrUrl = url;
+      img.classList.remove("hidden");
+      img.onerror = () => {
+        if (window.__ppQrUrl && img.src.indexOf("qr-image") >= 0) img.src = window.__ppQrUrl;
+      };
+      img.src = "/api/notify/pushplus/qr-image?t=" + Date.now();
+    }
+    async function ensurePushplusQr() {
+      if (!current) return;
+      if (current.pushplus_bound && !ppWaiting) {
+        renderPushplusPanel({ bound: true, mask: current.pushplus_mask, waiting: false });
+        return;
+      }
+      try {
+        const data = await api("/api/notify/pushplus/qr", { method: "POST", body: "{}" });
+        ppWaiting = !!data.waiting;
+        if (current && data.bound) {
+          current.pushplus_bound = true;
+          current.pushplus_mask = data.mask || current.pushplus_mask;
+        }
+        renderPushplusPanel(data);
+        if (ppWaiting) showPushplusQrImage(data.qr_url);
+      } catch (err) {
+        if ($("ppQrHint")) $("ppQrHint").textContent = err.message || "二维码生成失败";
+        toast(err.message, "err");
+      }
+    }
+    async function refreshPushplusQr() {
+      ppWaiting = true;
+      try {
+        const data = await api("/api/notify/pushplus/qr", {
+          method: "POST",
+          body: JSON.stringify({ force: true }),
+        });
+        ppWaiting = !!data.waiting;
+        renderPushplusPanel({ ...data, waiting: true });
+        showPushplusQrImage(data.qr_url);
+        toast("请用微信扫码绑定");
+      } catch (err) {
+        ppWaiting = false;
+        toast(err.message, "err");
+      }
+    }
+    async function pollPushplusBind() {
+      if (ppPollBusy || !ppWaiting || page !== "home") return;
+      ppPollBusy = true;
+      try {
+        const data = await api("/api/notify/pushplus/poll");
+        if (data.expired) {
+          ppWaiting = false;
+          if (data.bound || (current && current.pushplus_bound)) {
+            if (current) current.pushplus_bound = true;
+            renderPushplusPanel({ bound: true, mask: data.mask || (current && current.pushplus_mask) || "", waiting: false });
+            toast("二维码已过期，仍使用原来的绑定", "err");
+          } else if ($("ppQrHint")) {
+            $("ppQrHint").textContent = "二维码已过期，请点刷新。";
+          }
+        } else if (data.bound && !data.waiting) {
+          ppWaiting = false;
+          if (current) {
+            current.pushplus_bound = true;
+            current.pushplus_mask = data.mask || "";
+          }
+          renderPushplusPanel(data);
+          toast("PushPlus 已绑定");
+        } else {
+          renderPushplusPanel(data);
+        }
+      } catch (e) {
+      } finally {
+        ppPollBusy = false;
+      }
+    }
+    async function testPushplusBind() {
+      try {
+        const data = await api("/api/notify/pushplus/test", { method: "POST", body: "{}" });
+        toast(data.message || "测试消息已发送");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function unbindPushplus() {
+      const ok = await ask("解绑微信推送", "解绑后不会再给你发续火花消息。确定解绑吗？");
+      if (!ok) return;
+      try {
+        const data = await api("/api/notify/pushplus/unbind", { method: "POST", body: "{}" });
+        ppWaiting = false;
+        if (current) {
+          current.pushplus_bound = false;
+          current.pushplus_mask = "";
+        }
+        renderPushplusPanel(data);
+        toast("已解绑");
+        await ensurePushplusQr();
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
     async function boot() {
       await checkStatus();
       await loadConfig();
@@ -1574,6 +1660,7 @@
         try {
           await checkStatus();
           if (page === "logs") await loadLogs();
+          if (page === "home") await pollPushplusBind();
         } catch (e) {}
         pollBusy = false;
       }, 2000);
