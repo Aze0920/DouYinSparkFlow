@@ -256,32 +256,36 @@ VERIFY_WAY_LABELS = {
     "question": "安全问题",
 }
 VERIFY_SCAN_JS = """() => {
+  const empty = {
+    visible: false, methods: [], account: "", needCode: false, needPassword: false,
+    info: "", sendTo: "", smsContent: "", fromMobile: "", error: "", step: "", needGetCode: false,
+  };
   const bodyText = (document.body && document.body.innerText) || "";
   const isGate = bodyText.includes("身份验证") && (
     bodyText.includes("为保障账号安全") || bodyText.includes("确保为本人操作")
   );
-  const isCode = /请输入验证码|短信已发送至|验证码发送太频繁/.test(bodyText);
-  const isUplink = /我已发送|编辑短信内容/.test(bodyText) || /发送至[:：]\\s*\\d{8,}/.test(bodyText);
-  const visible = isGate || isCode || isUplink;
-  const empty = {
-    visible: false, methods: [], account: "", needCode: false, needPassword: false,
-    info: "", sendTo: "", smsContent: "", fromMobile: "", error: "", step: "",
-  };
-  if (!visible) return empty;
-  const step = isUplink ? "uplink" : (isCode ? "sms" : "choose");
+  if (!isGate && !/我已发送|编辑短信内容|短信已发送至/.test(bodyText)) return empty;
   let dialog = null;
-  let best = 1e9;
-  for (const el of document.querySelectorAll("div")) {
-    const t = el.innerText || "";
-    if (t.length < 16 || t.length > 1800) continue;
-    const hit = (step === "choose" && t.includes("身份验证"))
-      || (step === "sms" && (t.includes("请输入验证码") || t.includes("短信已发送至")))
-      || (step === "uplink" && (t.includes("我已发送") || t.includes("编辑短信内容")));
-    if (!hit) continue;
-    if (t.length < best) { best = t.length; dialog = el; }
+  let best = 1e12;
+  for (const el of document.querySelectorAll("div, section, article, [role=dialog]")) {
+    const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
+    if (t.length < 18 || t.length > 900) continue;
+    const mfa = t.includes("身份验证") && (
+      t.includes("为保障账号安全") || t.includes("确保为本人操作")
+      || t.includes("请输入验证码") || t.includes("接收短信验证码") || t.includes("我已发送")
+    );
+    if (!mfa) continue;
+    let score = t.length;
+    if (t.includes("扫码登录") || t.includes("打开「抖音APP」") || t.includes("验证码登录")) score += 8000;
+    if (t.includes("接收短信验证码") || t.includes("请输入验证码") || t.includes("发送短信验证")) score -= 120;
+    if (score < best) { best = score; dialog = el; }
   }
   const root = dialog || document.body;
-  const text = (root.innerText || "") + "\\n" + bodyText;
+  const text = (root.innerText || "");
+  const compact = text.replace(/\\s+/g, " ").trim();
+  const isUplink = /我已发送|编辑短信内容/.test(compact);
+  const isCode = /请输入验证码|短信已发送至|验证码发送太频繁/.test(compact);
+  const step = isUplink ? "uplink" : (isCode ? "sms" : "choose");
   const methods = [];
   const seen = new Set();
   const allow = /接收短信验证码|发送短信验证|邮箱验证|密码验证|人脸验证/;
@@ -289,44 +293,53 @@ VERIFY_SCAN_JS = """() => {
   if (step === "choose") {
     for (const el of root.querySelectorAll("button, [role=button], li, a, div, p, span")) {
       const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
-      if (!t || t.length > 40 || seen.has(t)) continue;
+      if (!t || t.length > 22 || seen.has(t)) continue;
       if (deny.test(t) && !allow.test(t)) continue;
       if (!allow.test(t)) continue;
       seen.add(t);
       methods.push({ id: t, label: t });
     }
   }
+  const junkAcc = /验证|短信|保障|账号安全|本人操作|读屏|扫码|登录|聊天|协议|隐私|畅享|如何/;
   const lines = text.split(/\\n+/).map((s) => s.trim()).filter(Boolean);
   let account = "";
   const head = lines.findIndex((l) => l.includes("身份验证"));
   if (head >= 0) {
-    for (let i = head + 1; i < Math.min(lines.length, head + 10); i++) {
+    for (let i = head + 1; i < Math.min(lines.length, head + 12); i++) {
       const line = lines[i];
-      if (!line || line.length > 16) continue;
-      if (/验证|短信|保障|账号安全|本人操作/.test(line)) continue;
+      if (!line || line.length > 16 || junkAcc.test(line)) continue;
       account = line;
       break;
     }
   }
-  const sendTo = (text.match(/发送至[:：]?\\s*(\\d{8,})/) || text.match(/(1069\\d{6,})/) || [])[1] || "";
-  const smsContent = (text.match(/编辑短信内容[:：]?\\s*(\\S+)/) || text.match(/短信内容[:：]?\\s*(\\S+)/) || [])[1] || "";
-  const fromMobile = (text.match(/(1[3-9][0-9\\*]{9})/) || [])[1] || "";
-  const err = (text.match(/验证码发送太频繁[^\\n]*|验证码错误[^\\n]*|验证失败[^\\n]*|验证码不正确[^\\n]*|请稍后再试|发送失败[^\\n]*/) || [])[0] || "";
+  const sendTo = (compact.match(/发送至[:：]?\\s*(\\d{8,})/) || compact.match(/(1069\\d{6,})/) || [])[1] || "";
+  const smsContent = (compact.match(/编辑短信内容[:：]?\\s*(\\S+)/) || compact.match(/短信内容[:：]?\\s*(\\S+)/) || [])[1] || "";
+  const fromMobile = (compact.match(/(1[3-9][0-9\\*]{9})/) || [])[1] || "";
+  const err = (compact.match(/验证码发送太频繁[^ ]*|验证码错误[^ ]*|验证失败[^ ]*|验证码不正确[^ ]*|请稍后再试|发送失败[^ ]*/) || [])[0] || "";
+  const needGetCode = [...root.querySelectorAll("button, [role=button], span, div, a")].some((el) => {
+    const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
+    if (t !== "获取验证码") return false;
+    let n = el;
+    for (let i = 0; i < 6 && n; i++) {
+      const ctx = (n.innerText || "").replace(/\\s+/g, " ");
+      if (/验证码登录|密码登录/.test(ctx) && !/身份验证|请输入验证码/.test(ctx)) return false;
+      n = n.parentElement;
+    }
+    return true;
+  });
   return {
     visible: true,
     methods,
     account,
     needCode: step === "sms",
     needPassword: false,
-    info: text.replace(/\\s+/g, " ").trim().slice(0, 600),
+    info: compact.slice(0, 400),
     sendTo: (sendTo || "").replace(/[:：]/g, ""),
     smsContent: (smsContent || "").replace(/[:：]/g, ""),
     fromMobile,
     error: err,
     step,
-    needGetCode: [...document.querySelectorAll("button, [role=button], span, div, a")].some((el) => {
-      return (el.innerText || "").replace(/\\s+/g, " ").trim() === "获取验证码";
-    }),
+    needGetCode,
   };
 }"""
 
@@ -339,6 +352,16 @@ def _interesting_url(url: str) -> bool:
 def _extract_mobile(text: str) -> str:
     found = re.search(r"1[3-9][\d*]{9}", str(text or ""))
     return found.group(0) if found else ""
+
+
+def _clean_verify_account(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw or len(raw) > 16:
+        return ""
+    junk = ("开启读屏", "读屏标签", "抖音聊天", "扫码登录", "如何扫码", "验证码登录", "密码登录", "获取验证码", "用户协议", "身份验证")
+    if any(item in raw for item in junk):
+        return ""
+    return raw
 
 
 def _human_verify_label(way: str = "", name: str = "", mobile: str = "") -> str:
@@ -493,6 +516,9 @@ def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
     nick = data.get("nickname") or data.get("screen_name") or data.get("name")
     if isinstance(nick, str) and nick.strip() and nick not in ("douyin", "抖音"):
         bag["account"] = nick.strip()
+    flow = data.get("account_flow") or data.get("flow")
+    if isinstance(flow, str) and flow.strip():
+        bag["account_flow"] = flow.strip()
     echo = data.get("description") or data.get("message") or data.get("msg") or data.get("toast") or data.get("error_message")
     if isinstance(echo, str) and echo.strip():
         bag["echo"] = echo.strip()
@@ -648,6 +674,14 @@ def _click_verify_method(page, method_id: str, label: str = "") -> bool:
                 return True
             except Exception:
                 continue
+        try:
+            loc = scope.locator("div, section, [role=dialog]").filter(has_text="身份验证").get_by_text("接收短信验证码", exact=True)
+            if loc.count():
+                loc.first.click(timeout=2000)
+                logger.info("已在身份验证卡片点击接收短信验证码")
+                return True
+        except Exception:
+            continue
     logger.warning("没有点到验证方式 id=%s keys=%s", ident, keys)
     return False
 
@@ -669,11 +703,31 @@ def _click_get_sms_code(page) -> bool:
         }
         return true;
       };
+      const inLoginForm = (el) => {
+        let n = el;
+        for (let i = 0; i < 8 && n && n !== document.body; i++) {
+          const ctx = (n.innerText || "").replace(/\\s+/g, " ").trim();
+          if (ctx.length > 400) break;
+          if (/验证码登录|密码登录/.test(ctx)) return true;
+          n = n.parentElement;
+        }
+        return false;
+      };
+      const inVerify = (el) => {
+        let n = el;
+        for (let i = 0; i < 10 && n && n !== document.body; i++) {
+          const ctx = (n.innerText || "").replace(/\\s+/g, " ").trim();
+          if (ctx.length > 900) break;
+          if (ctx.includes("身份验证") && /请输入验证码|短信已发送/.test(ctx)) return true;
+          n = n.parentElement;
+        }
+        return false;
+      };
       for (const want of labels) {
         let best = null;
         for (const el of nodes) {
           const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
-          if (t !== want || !visible(el) || !isLeaf(el, t)) continue;
+          if (t !== want || !visible(el) || !isLeaf(el, t) || inLoginForm(el) || !inVerify(el)) continue;
           best = el;
           break;
         }
@@ -688,21 +742,19 @@ def _click_get_sms_code(page) -> bool:
         try:
             clicked = scope.evaluate(click_js, labels)
             if clicked:
-                logger.info("已点击获取验证码 -> %s", clicked)
+                logger.info("已点击身份验证「获取验证码」 -> %s", clicked)
                 return True
         except Exception:
             continue
-        for text in labels:
-            try:
-                loc = scope.get_by_text(text, exact=True)
-                if loc.count() == 0:
-                    continue
+        try:
+            loc = scope.locator("div, section, [role=dialog]").filter(has_text="身份验证").get_by_text("获取验证码", exact=True)
+            if loc.count():
                 loc.first.click(timeout=2000)
-                logger.info("已精确点击获取验证码 %s", text)
+                logger.info("已精确点击身份验证「获取验证码」")
                 return True
-            except Exception:
-                continue
-    logger.warning("没有点到「获取验证码」，短信不会发出")
+        except Exception:
+            continue
+    logger.warning("没有点到身份验证里的「获取验证码」，短信不会发出")
     return False
 
 
@@ -997,7 +1049,7 @@ def _status() -> str:
 
 
 def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
-    account = str(ui.get("account") or sniff.get("account") or "")
+    account = _clean_verify_account(ui.get("account")) or _clean_verify_account(sniff.get("account")) or ""
     uplink_from = str(ui.get("fromMobile") or sniff.get("uplink_from") or _state.get("verify_uplink_from") or "")
     error = str(ui.get("error") or "")
     echo = str(sniff.get("echo") or "")
@@ -1360,12 +1412,25 @@ def _check_qr(context, fp: str, token: str) -> dict[str, Any]:
     params["token"] = token
     try:
         resp = _http_get(context, SSO + "/check_qrconnect/", params)
-        payload = resp.json() or {}
-        data = payload.get("data") or {}
-        logger.debug("check_qrconnect HTTP %s status=%s", getattr(resp, "status", "?"), data.get("status"))
+        status = int(getattr(resp, "status", 0) or 0)
+        try:
+            body = (resp.text() or "").strip()
+        except Exception:
+            body = ""
+        if not body:
+            logger.debug("check_qrconnect HTTP %s 空响应，改信页面抓包", status)
+            return {}
+        if body[0] not in "{[":
+            logger.debug("check_qrconnect HTTP %s 非 JSON: %s", status, body[:120])
+            return {}
+        payload = json.loads(body)
+        data = payload.get("data") if isinstance(payload, dict) else {}
+        if not isinstance(data, dict):
+            return {}
+        logger.debug("check_qrconnect HTTP %s status=%s", status, data.get("status"))
         return data
     except Exception:
-        logger.exception("check_qrconnect 失败")
+        logger.debug("check_qrconnect 解析失败", exc_info=True)
         return {}
 
 
@@ -1539,14 +1604,16 @@ def _worker(replace_index: int):
                 token = str(sniff.get("token") or "")
 
             ui = _scan_verify_ui(page)
-            in_verify = bool(ui.get("visible"))
+            in_verify = bool(ui.get("visible")) or str(sniff.get("account_flow") or "") == "verify"
             if in_verify:
                 deadline = max(deadline, time.time() + 240)
                 if _status() != "verify":
                     logger.info(
-                        "已进入身份验证 methods=%s account=%s info=%s",
+                        "已进入身份验证 step=%s methods=%s account=%s needGetCode=%s info=%s",
+                        ui.get("step"),
                         ui.get("methods"),
                         ui.get("account"),
+                        ui.get("needGetCode"),
                         (ui.get("info") or "")[:180],
                     )
                 _publish_verify(ui, sniff)
@@ -1554,8 +1621,24 @@ def _worker(replace_index: int):
                 info = str(ui.get("info") or "")
                 need_get = bool(ui.get("needGetCode"))
                 now_sms = time.time()
+                still_choose = step not in ("sms", "uplink") and (
+                    step in ("", "choose")
+                    or ("接收短信验证码" in info and "请输入验证码" not in info and "短信已发送" not in info)
+                )
                 if sms_code_clicked:
                     pass
+                elif still_choose:
+                    sms_method_clicked = False
+                    if now_sms - last_sms_try >= 1.6:
+                        last_sms_try = now_sms
+                        logger.info("身份验证自动选择接收短信验证码 step=%s needGetCode=%s info=%s", step, need_get, info[:180])
+                        if "人脸" in info and "接收短信验证码" not in info:
+                            switched = _click_exact_text(page, ["选择其他验证方式", "其他验证方式", "更换验证方式"])
+                            logger.info("已尝试离开人脸验证 switched=%s", bool(switched))
+                            time.sleep(0.9)
+                        if _click_verify_method(page, "mobile_sms_verify", "接收短信验证码"):
+                            sms_method_clicked = True
+                            time.sleep(1.1)
                 elif need_get:
                     sms_method_clicked = True
                     sms_form_seen_at = 0.0
@@ -1583,16 +1666,6 @@ def _worker(replace_index: int):
                             verify_resend_at=time.time() + 60,
                             message="请填写收到的验证码后点确定",
                         )
-                elif now_sms - last_sms_try >= 1.6:
-                    last_sms_try = now_sms
-                    logger.info("身份验证自动选择接收短信验证码 step=%s info=%s", step, info[:180])
-                    if "人脸" in info:
-                        switched = _click_exact_text(page, ["选择其他验证方式", "其他验证方式", "更换验证方式"])
-                        logger.info("已尝试离开人脸验证 switched=%s", bool(switched))
-                        time.sleep(0.9)
-                    if _click_verify_method(page, "mobile_sms_verify", "接收短信验证码"):
-                        sms_method_clicked = True
-                        time.sleep(1.1)
             elif _status() == "verify":
                 _publish_verify(ui, sniff)
                 in_verify = True
@@ -1636,7 +1709,7 @@ def _worker(replace_index: int):
                 logger.info("身份验证完成，已拿到登录 Cookie")
                 _set(status="scanned", message="验证通过，正在抓取账号信息…")
                 break
-            if in_verify and not ui.get("visible"):
+            if in_verify and not ui.get("visible") and str(sniff.get("account_flow") or "") != "verify":
                 verify_gone += 1
                 if verify_gone >= 4:
                     logger.info("身份验证弹窗已关闭，刷新页面拿 Cookie")
