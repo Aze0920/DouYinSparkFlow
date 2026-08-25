@@ -30,12 +30,16 @@ from webui.qr_login import (
 )
 from webui.users import (
     admin_count,
+    extend_user,
     find_user,
     load_users,
     make_token,
+    make_user,
     parse_token,
     public_user,
     save_users,
+    user_can_spark,
+    valid_username,
     verify_user,
     _hash_password,
 )
@@ -137,6 +141,13 @@ def require_admin(request: Request):
     user = require_auth(request)
     if user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="需要管理员权限")
+    return user
+
+
+def require_spark(request: Request):
+    user = require_auth(request)
+    if not user_can_spark(user):
+        raise HTTPException(status_code=403, detail="试用已到期，无法续火花")
     return user
 
 
@@ -327,6 +338,28 @@ def login(payload: dict):
     return resp
 
 
+@app.post("/api/register")
+def register(payload: dict):
+    username = str(payload.get("username") or "").strip()
+    password = str(payload.get("password") or "")
+    if not valid_username(username):
+        raise HTTPException(status_code=400, detail="用户名用 2-24 位字母、数字、下划线或短横线")
+    if len(password) < 4:
+        raise HTTPException(status_code=400, detail="密码至少 4 位")
+    if username.lower() == "admin":
+        raise HTTPException(status_code=400, detail="不能注册管理员用户名")
+    if find_user(username):
+        raise HTTPException(status_code=400, detail="用户名已存在")
+    users = load_users()
+    user = make_user(username, password, role="user")
+    users.append(user)
+    save_users(users)
+    logger.info("前台注册账号 user=%s expires=%s", username, user.get("expires_at"))
+    resp = JSONResponse({"ok": True, "user": public_user(user)})
+    resp.set_cookie("dsf_auth", make_token(user["username"]), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 14)
+    return resp
+
+
 @app.post("/api/logout")
 def logout():
     resp = JSONResponse({"ok": True})
@@ -348,25 +381,26 @@ def create_user(request: Request, payload: dict):
     role = str(payload.get("role") or "user").strip() or "user"
     if role not in ("admin", "user"):
         raise HTTPException(status_code=400, detail="角色只能是 admin 或 user")
-    if not username or not password:
-        raise HTTPException(status_code=400, detail="用户名和密码都要填")
+    if not valid_username(username):
+        raise HTTPException(status_code=400, detail="用户名用 2-24 位字母、数字、下划线或短横线")
+    if len(password) < 4:
+        raise HTTPException(status_code=400, detail="密码至少 4 位")
     if find_user(username):
         raise HTTPException(status_code=400, detail="用户名已存在")
+    days = payload.get("days")
+    try:
+        days_n = 1 if days in (None, "") else max(1, int(days))
+    except (TypeError, ValueError):
+        days_n = 1
     users = load_users()
-    users.append(
-        {
-            "username": username,
-            "password_hash": _hash_password(username, password),
-            "role": role,
-        }
-    )
+    users.append(make_user(username, password, role=role, days=None if role == "admin" else days_n))
     save_users(users)
     return {"ok": True, "users": [public_user(u) for u in users]}
 
 
 @app.post("/api/users/update")
 def update_user(request: Request, payload: dict):
-    admin = require_admin(request)
+    require_admin(request)
     username = str(payload.get("username") or "").strip()
     user = find_user(username)
     if not user:
@@ -374,6 +408,7 @@ def update_user(request: Request, payload: dict):
     users = load_users()
     role = payload.get("role")
     password = payload.get("password")
+    extra_days = payload.get("extra_days")
     for item in users:
         if item.get("username") != username:
             continue
@@ -381,8 +416,20 @@ def update_user(request: Request, payload: dict):
             if item.get("role") == "admin" and role != "admin" and admin_count(users) <= 1:
                 raise HTTPException(status_code=400, detail="至少保留一个管理员")
             item["role"] = role
+            if role == "admin":
+                item["permanent"] = True
+                item["expires_at"] = None
+            else:
+                item["permanent"] = False
+                if not item.get("expires_at"):
+                    extend_user(item, 1)
         if password:
             item["password_hash"] = _hash_password(username, str(password))
+        if extra_days not in (None, "", 0, "0") and item.get("role") != "admin":
+            try:
+                extend_user(item, int(extra_days))
+            except (TypeError, ValueError):
+                raise HTTPException(status_code=400, detail="延长天数必须是数字")
         break
     save_users(users)
     return {"ok": True, "users": [public_user(u) for u in users]}
@@ -407,7 +454,7 @@ def delete_user(request: Request, payload: dict):
 
 @app.get("/api/status")
 def status(request: Request):
-    require_auth(request)
+    user = require_auth(request)
     env = load_env()
     local = read_version()
     remote = remote_version_fast()
@@ -437,6 +484,7 @@ def status(request: Request):
         "run_message": _run_state["message"],
         "running_ids": list(_run_state.get("running_ids") or []),
         "accounts": accounts,
+        "me": public_user(user),
     }
 
 
@@ -557,7 +605,7 @@ def get_config(request: Request):
 
 @app.post("/api/config")
 def save_config(request: Request, payload: dict):
-    require_admin(request)
+    require_spark(request)
     env = load_env()
     extra = {}
     if "accounts" in payload:
@@ -601,7 +649,7 @@ def save_config(request: Request, payload: dict):
 
 @app.post("/api/account")
 def save_account(request: Request, payload: dict):
-    require_admin(request)
+    require_spark(request)
     env = load_env()
     unique_id = str(payload.get("unique_id") or "").strip()
     if not unique_id:
@@ -632,7 +680,7 @@ def _deny_if_browser_busy():
 
 @app.post("/api/account/check")
 def check_account_cookie(request: Request, payload: dict | None = None):
-    require_admin(request)
+    require_spark(request)
     _deny_if_browser_busy()
     payload = payload or {}
     unique_id = str(payload.get("unique_id") or "").strip()
@@ -690,7 +738,7 @@ def check_account_cookie(request: Request, payload: dict | None = None):
 
 @app.post("/api/account/import-cookie")
 def import_account_cookie(request: Request, payload: dict | None = None):
-    require_admin(request)
+    require_spark(request)
     _deny_if_browser_busy()
     payload = payload or {}
     try:
@@ -835,7 +883,7 @@ def _run_task(unique_ids=None):
 
 @app.post("/api/douyin/login/start")
 def douyin_login_start(request: Request, payload: dict | None = None):
-    require_admin(request)
+    require_spark(request)
     if _run_state["running"]:
         logger.warning("扫码登录被拒绝：任务正在运行")
         raise HTTPException(status_code=409, detail="续火花任务正在跑，请等它结束后再扫码")
@@ -851,20 +899,20 @@ def douyin_login_start(request: Request, payload: dict | None = None):
 
 @app.get("/api/douyin/login/status")
 def douyin_login_status(request: Request):
-    require_admin(request)
+    require_spark(request)
     return {"ok": True, **qr_snapshot(include_cookies=True)}
 
 
 @app.post("/api/douyin/login/cancel")
 def douyin_login_cancel(request: Request):
-    require_admin(request)
+    require_spark(request)
     logger.info("取消抖音扫码登录")
     return {"ok": True, **cancel_qr_login()}
 
 
 @app.post("/api/douyin/login/verify")
 def douyin_login_verify(request: Request, payload: dict | None = None):
-    require_admin(request)
+    require_spark(request)
     payload = payload or {}
     action = str(payload.get("action") or payload.get("type") or "").strip()
     if action == "choose":
@@ -881,7 +929,7 @@ def douyin_login_verify(request: Request, payload: dict | None = None):
 
 @app.post("/api/douyin/login/live")
 def douyin_login_live(request: Request, payload: dict | None = None):
-    require_admin(request)
+    require_spark(request)
     payload = payload or {}
     action = str(payload.get("action") or payload.get("type") or "").strip()
     result = live_page_action(action, payload)
@@ -892,7 +940,7 @@ def douyin_login_live(request: Request, payload: dict | None = None):
 
 @app.post("/api/run")
 def run_now(request: Request, payload: dict | None = None):
-    require_auth(request)
+    require_spark(request)
     if _run_state["running"]:
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
     if not _run_lock.acquire(blocking=False):

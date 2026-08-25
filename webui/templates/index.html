@@ -73,16 +73,27 @@
     <section class="login-visual">
       <div class="spark-mark">✦</div>
       <h2>把火花续在自己手里</h2>
-      <p>管理员可以添加和控制台账号。默认账号 admin / admin，登录后请尽快改密码。</p>
+      <p>管理员永久有效。也可以自己注册账号，试用 24 小时后续火花会停用。</p>
     </section>
     <section class="login-box">
-      <form class="login-card" onsubmit="return doLogin(event)">
+      <form class="login-card" id="loginForm" onsubmit="return doLogin(event)">
         <h1>登录控制台</h1>
         <p>使用管理员或普通账号进入</p>
         <input id="loginUser" placeholder="用户名，默认 admin" autocomplete="username" />
         <input id="loginPass" type="password" placeholder="密码，默认 admin" autocomplete="current-password" />
         <button class="btn-primary" type="submit">进入系统</button>
+        <button class="btn-ghost" type="button" onclick="showRegisterForm()">没有账号？注册试用 1 天</button>
         <div id="loginError" class="error"></div>
+      </form>
+      <form class="login-card hidden" id="registerForm" onsubmit="return doRegister(event)">
+        <h1>注册账号</h1>
+        <p>注册后立刻开始计时，24 小时内可续火花，到期后按钮会禁止点击。</p>
+        <input id="regUser" placeholder="用户名" autocomplete="username" />
+        <input id="regPass" type="password" placeholder="密码，至少 4 位" autocomplete="new-password" />
+        <input id="regPass2" type="password" placeholder="再输入一次密码" autocomplete="new-password" />
+        <button class="btn-primary" type="submit">注册并进入</button>
+        <button class="btn-ghost" type="button" onclick="showLoginForm()">已有账号？去登录</button>
+        <div id="registerError" class="error"></div>
       </form>
     </section>
   </div>
@@ -131,20 +142,21 @@
         <section class="panel">
           <div class="panel-head">
             <h2>抖音账号与发送策略</h2>
-            <div class="admin-only hidden">
-              <button class="btn-ghost" onclick="openAddAccount()">添加账号</button>
-              <button class="btn-ghost" onclick="saveGlobalSettings()">保存模板</button>
+            <div>
+              <button class="btn-ghost spark-action" type="button" onclick="openAddAccount()">添加账号</button>
+              <button class="btn-ghost spark-action" type="button" onclick="saveGlobalSettings()">保存模板</button>
             </div>
           </div>
           <div class="grid two">
             <label>同时处理账号数
-              <input id="maxTaskThreads" type="number" min="1" max="32" value="10" title="一个账号一条线程，给多个好友发也在同一线程。最多 32。" />
+              <input id="maxTaskThreads" class="spark-action" type="number" min="1" max="32" value="10" title="一个账号一条线程，给多个好友发也在同一线程。最多 32。" />
             </label>
             <label class="span-2">消息模板
-              <textarea id="messageTemplate" rows="3"></textarea>
+              <textarea id="messageTemplate" class="spark-action" rows="3"></textarea>
             </label>
           </div>
           <p class="sub">模板和并发数是全局的。每个账号自己选每天几点发、自己保存、自己点续火花。窗口够宽时一排会自动排多张卡片。</p>
+          <p class="sub hidden" id="expiredBanner">试用已到期，续火花按钮已禁用。如需继续使用请联系管理员。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码登录，也可以只粘贴 Cookie JSON，昵称和抖音号会自动抓取。</p>
           <div id="accounts" class="accounts-grid"></div>
         </section>
@@ -168,18 +180,20 @@
           <div class="panel-head">
             <h2>控制台用户</h2>
           </div>
+          <p class="sub">管理员永久有效。前台注册和这里添加的普通用户默认试用 1 天，到期后不能续火花。</p>
           <div class="grid two">
             <label>用户名<input id="newUsername" placeholder="例如 operator1" /></label>
             <label>密码<input id="newPassword" type="password" placeholder="登录密码" /></label>
             <label>角色
-              <select id="newRole">
+              <select id="newRole" onchange="toggleNewUserDays()">
                 <option value="user">普通用户</option>
-                <option value="admin">管理员</option>
+                <option value="admin">管理员（永久）</option>
               </select>
             </label>
-            <label>&nbsp;<button class="btn-primary" onclick="createUser()">添加账户</button></label>
+            <label>试用天数<input id="newDays" type="number" min="1" max="365" value="1" /></label>
+            <label class="span-2">&nbsp;<button class="btn-primary" onclick="createUser()">添加账户</button></label>
           </div>
-          <div id="userList"></div>
+          <div id="userList" class="users-grid"></div>
         </section>
       </section>
     </main>
@@ -242,9 +256,27 @@
     function isAdmin() {
       return current && current.role === "admin";
     }
+    function canSpark() {
+      if (!current) return false;
+      if (current.role === "admin" || current.permanent) return true;
+      return !current.expired && current.can_spark !== false;
+    }
+    function applySparkLock() {
+      const ok = canSpark();
+      document.body.classList.toggle("spark-locked", !ok);
+      document.querySelectorAll(".spark-action").forEach((el) => {
+        el.disabled = !ok;
+        el.title = ok ? "" : "试用已到期，无法操作";
+      });
+      if ($("expiredBanner")) $("expiredBanner").classList.toggle("hidden", ok);
+    }
     function applyRole() {
       document.querySelectorAll(".admin-only").forEach((el) => el.classList.toggle("hidden", !isAdmin()));
-      $("whoami").textContent = current ? `${current.username} · ${current.role === "admin" ? "管理员" : "普通用户"}` : "";
+      const tag = current
+        ? `${current.username} · ${current.role === "admin" ? "管理员 · 永久" : (current.remain_label || "普通用户")}`
+        : "";
+      $("whoami").textContent = tag;
+      applySparkLock();
     }
     function showPage(name) {
       page = name;
@@ -258,7 +290,7 @@
         home: ["总览", "查看版本、状态和账号数量"],
         tasks: ["任务配置", "每个账号一张卡片，独立定时、独立保存、独立续火花"],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
-        users: ["用户管理", "管理员可以添加、改密和管理其他控制台账号"],
+        users: ["用户管理", "每个用户一张卡片。管理员永久有效，普通用户默认试用 1 天"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
@@ -285,6 +317,41 @@
       }
       return false;
     }
+    function showRegisterForm() {
+      $("loginForm").classList.add("hidden");
+      $("registerForm").classList.remove("hidden");
+      $("registerError").textContent = "";
+    }
+    function showLoginForm() {
+      $("registerForm").classList.add("hidden");
+      $("loginForm").classList.remove("hidden");
+      $("loginError").textContent = "";
+    }
+    async function doRegister(event) {
+      event.preventDefault();
+      $("registerError").textContent = "";
+      const username = $("regUser").value.trim();
+      const password = $("regPass").value;
+      if (password !== $("regPass2").value) {
+        $("registerError").textContent = "两次密码不一致";
+        return false;
+      }
+      try {
+        const data = await api("/api/register", {
+          method: "POST",
+          body: JSON.stringify({ username, password }),
+        });
+        current = data.user;
+        $("loginPage").classList.add("hidden");
+        $("app").classList.remove("hidden");
+        applyRole();
+        await boot();
+        toast("已注册，试用 24 小时");
+      } catch (err) {
+        $("registerError").textContent = err.message;
+      }
+      return false;
+    }
     async function doLogout() {
       await api("/api/logout", { method: "POST", body: "{}" });
       location.reload();
@@ -301,7 +368,7 @@
         if (!btn) return;
         if (!btn.dataset.label || btn.dataset.label === "发送中...") btn.dataset.label = "立即续火花";
         const thisBusy = !!busy && (allBusy || ids.has(uid));
-        btn.disabled = !!busy;
+        btn.disabled = !!busy || !canSpark();
         btn.textContent = thisBusy ? "发送中..." : btn.dataset.label;
       });
     }
@@ -312,6 +379,10 @@
       $("versionPill").textContent = "v" + data.local_version;
       $("accountCount").textContent = String((data.accounts || []).length);
       setBusy(data.running, data.run_message || "空闲", data.running_ids || []);
+      if (data.me) {
+        current = Object.assign(current || {}, data.me);
+        applyRole();
+      }
       $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
     }
     async function checkStatus() {
@@ -382,7 +453,7 @@
       const uid = data.unique_id || "";
       const bound = !!(uid && (data.cookies_set || data.cookies || window.__accountCookies[uid]));
       const cron = formatCron(data.cron_hour, data.cron_minute);
-      const admin = isAdmin();
+      const operate = canSpark();
       const ck = cookieStatusMeta(data);
       const source = cookieSourceText(data);
       return `<div class="account" data-index="${index}">
@@ -393,9 +464,9 @@
           </div>
           <div class="account-head-right">
             <span class="ck-status ${ck.cls}">${ck.text}</span>
-            <div class="account-head-actions admin-only ${admin ? "" : "hidden"}">
-              <button class="btn-ghost mini" type="button" onclick="checkAccount(${index})">检测</button>
-              <button class="btn-ghost mini" type="button" onclick="removeAccount(${index})">删除</button>
+            <div class="account-head-actions">
+              <button class="btn-ghost mini spark-action" type="button" onclick="checkAccount(${index})" ${operate ? "" : "disabled"}>检测</button>
+              <button class="btn-ghost mini spark-action" type="button" onclick="removeAccount(${index})" ${operate ? "" : "disabled"}>删除</button>
             </div>
           </div>
         </div>
@@ -404,15 +475,15 @@
         <input type="hidden" class="cookie-source" value="${escapeAttr(data.cookie_source || "")}" />
         <input type="hidden" class="cookie-status" value="${escapeAttr(data.cookie_status || "")}" />
         <label>每天发送时间
-          <input class="cron-time" type="time" name="cron-${index}-${escapeAttr(uid)}" autocomplete="off" value="${escapeAttr(cron)}" ${admin ? "" : "disabled"} />
+          <input class="cron-time spark-action" type="time" name="cron-${index}-${escapeAttr(uid)}" autocomplete="off" value="${escapeAttr(cron)}" ${operate ? "" : "disabled"} />
         </label>
         <label>目标好友（一行一个）
-          <textarea class="targets" ${admin ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea>
+          <textarea class="targets spark-action" ${operate ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea>
         </label>
-        <div class="account-actions admin-only ${admin ? "" : "hidden"}">
-          <button class="btn-ghost" type="button" onclick="saveAccount(${index})">保存</button>
-          <button class="btn-ghost" type="button" onclick="openAddAccount(${index})">${bound ? "重新登录" : "扫码登录"}</button>
-          <button class="btn-run btn-run-account" type="button" data-uid="${escapeAttr(uid)}" onclick="runAccount(${index})">立即续火花</button>
+        <div class="account-actions">
+          <button class="btn-ghost spark-action" type="button" onclick="saveAccount(${index})" ${operate ? "" : "disabled"}>保存</button>
+          <button class="btn-ghost spark-action" type="button" onclick="openAddAccount(${index})" ${operate ? "" : "disabled"}>${bound ? "重新登录" : "扫码登录"}</button>
+          <button class="btn-run btn-run-account spark-action" type="button" data-uid="${escapeAttr(uid)}" onclick="runAccount(${index})" ${operate ? "" : "disabled"}>立即续火花</button>
         </div>
       </div>`;
     }
@@ -421,6 +492,7 @@
       $("noAccounts").classList.toggle("hidden", !!(window.__accounts && window.__accounts.length));
       const st = window.__lastStatus;
       if (st) setBusy(st.running, st.run_message || "空闲", st.running_ids || []);
+      applySparkLock();
     }
     async function loadConfig() {
       const cfg = await api("/api/config");
@@ -452,6 +524,7 @@
       return [...document.querySelectorAll(".account")].map(collectAccount).filter((item) => item.unique_id);
     }
     async function removeAccount(index) {
+      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
       window.__accounts = collectAccounts();
       const removed = window.__accounts.splice(index, 1)[0];
       if (removed && removed.unique_id) delete window.__accountCookies[removed.unique_id];
@@ -734,7 +807,7 @@
       }
     }
     async function startQrLogin(index) {
-      if (!isAdmin()) return;
+      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
       closeAddAccount();
       closeCkModal();
       qrApplying = false;
@@ -770,7 +843,7 @@
       } catch (e) {}
     }
     function openAddAccount(index = -1) {
-      if (!isAdmin()) return;
+      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
       window.__addReplaceIndex = Number.isInteger(index) ? index : -1;
       if ($("addAccountTitle")) {
         $("addAccountTitle").textContent = window.__addReplaceIndex >= 0 ? "更新登录" : "添加账号";
@@ -795,7 +868,7 @@
       $("ckModal").classList.add("hidden");
     }
     async function submitCookieJson() {
-      if (!isAdmin()) return;
+      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
       const raw = ($("ckJson").value || "").trim();
       if (!raw) {
         toast("请先粘贴 Cookie JSON", "err");
@@ -831,7 +904,7 @@
       }
     }
     async function checkAccount(index) {
-      if (!isAdmin()) return;
+      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
       const node = document.querySelectorAll(".account")[index];
       if (!node) return;
       const item = collectAccount(node);
@@ -896,6 +969,7 @@
       await checkStatus();
     }
     async function saveGlobalSettings() {
+      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return; }
       try {
         await saveConfig(false, false);
       } catch (err) {
@@ -903,6 +977,7 @@
       }
     }
     async function saveAccount(index, silent = false) {
+      if (!canSpark()) { toast("试用已到期，无法操作", "err"); return false; }
       const node = document.querySelectorAll(".account")[index];
       if (!node) return;
       const item = collectAccount(node);
@@ -925,6 +1000,7 @@
       }
     }
     async function runAccount(index) {
+      if (!canSpark()) { toast("试用已到期，无法续火花", "err"); return; }
       const node = document.querySelectorAll(".account")[index];
       if (!node) return;
       const item = collectAccount(node);
@@ -935,7 +1011,7 @@
       const ok = await ask("立即续火花", `现在用「${item.username || "这个账号"}」给目标好友发消息？`);
       if (!ok) return;
       try {
-        if (isAdmin()) {
+        if (canSpark()) {
           const saved = await saveAccount(index, true);
           if (!saved) return;
         }
@@ -955,7 +1031,7 @@
       const ok = await ask("立即续火花", "现在会给所有账号的目标好友发消息，确定继续？");
       if (!ok) return;
       try {
-        if (isAdmin()) await saveConfig(true, true);
+        if (canSpark()) await saveConfig(true, true);
         const data = await api("/api/run", { method: "POST", body: "{}" });
         toast(data.message || "任务已开始");
         showPage("logs");
@@ -1026,24 +1102,38 @@
     }
     async function loadUsers() {
       const data = await api("/api/users");
-      $("userList").innerHTML = data.users.map((u) => `
-        <div class="user-card">
+      $("userList").innerHTML = data.users.map((u) => {
+        const admin = u.role === "admin";
+        const statusCls = admin || !u.expired ? "ck-ok" : "ck-bad";
+        return `<div class="user-card">
           <div class="account-head">
-            <strong>${escapeHtml(u.username)}</strong>
-            <span class="pill">${u.role === "admin" ? "管理员" : "普通用户"}</span>
+            <div>
+              <strong>${escapeHtml(u.username)}</strong>
+              <div class="account-id">注册 ${escapeHtml(u.created_label || "-")} · 到期 ${escapeHtml(u.expires_label || "-")}</div>
+            </div>
+            <div class="account-head-right">
+              <span class="pill">${admin ? "管理员" : "普通用户"}</span>
+              <span class="ck-status ${statusCls}">${escapeHtml(u.remain_label || "")}</span>
+            </div>
           </div>
-          <div class="grid two">
-            <label>重置密码<input data-user="${escapeAttr(u.username)}" class="reset-pass" type="password" placeholder="留空则不改" /></label>
-            <label>角色
-              <select data-user="${escapeAttr(u.username)}" class="reset-role">
-                <option value="user" ${u.role === "user" ? "selected" : ""}>普通用户</option>
-                <option value="admin" ${u.role === "admin" ? "selected" : ""}>管理员</option>
-              </select>
-            </label>
-            <button class="btn-ghost" onclick="saveUser('${escapeAttr(u.username)}')">保存这个账户</button>
-            <button class="btn-run" onclick="removeUser('${escapeAttr(u.username)}')">删除账户</button>
+          <label>重置密码<input data-user="${escapeAttr(u.username)}" class="reset-pass" type="password" placeholder="留空则不改" /></label>
+          <label>角色
+            <select data-user="${escapeAttr(u.username)}" class="reset-role">
+              <option value="user" ${u.role === "user" ? "selected" : ""}>普通用户</option>
+              <option value="admin" ${admin ? "selected" : ""}>管理员（永久）</option>
+            </select>
+          </label>
+          ${admin ? "" : `<label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="1" max="365" placeholder="例如 1" /></label>`}
+          <div class="account-actions">
+            <button class="btn-ghost" type="button" onclick="saveUser('${escapeAttr(u.username)}')">保存</button>
+            <button class="btn-run" type="button" onclick="removeUser('${escapeAttr(u.username)}')">删除</button>
           </div>
-        </div>`).join("");
+        </div>`;
+      }).join("");
+    }
+    function toggleNewUserDays() {
+      const admin = $("newRole") && $("newRole").value === "admin";
+      if ($("newDays")) $("newDays").disabled = !!admin;
     }
     async function createUser() {
       try {
@@ -1053,6 +1143,7 @@
             username: $("newUsername").value,
             password: $("newPassword").value,
             role: $("newRole").value,
+            days: Number($("newDays") && $("newDays").value) || 1,
           }),
         });
         toast("已添加账户");
@@ -1066,8 +1157,12 @@
     async function saveUser(username) {
       const pass = document.querySelector(`.reset-pass[data-user="${username}"]`)?.value || "";
       const role = document.querySelector(`.reset-role[data-user="${username}"]`)?.value || "user";
+      const extra = document.querySelector(`.extra-days[data-user="${username}"]`)?.value || "";
       try {
-        await api("/api/users/update", { method: "POST", body: JSON.stringify({ username, password: pass, role }) });
+        await api("/api/users/update", {
+          method: "POST",
+          body: JSON.stringify({ username, password: pass, role, extra_days: extra ? Number(extra) : "" }),
+        });
         toast("账户已更新");
         await loadUsers();
       } catch (err) {
