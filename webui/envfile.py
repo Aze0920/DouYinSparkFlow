@@ -51,6 +51,24 @@ def write_env(data: dict, extra: dict | None = None) -> Path:
     if extra:
         current.update(extra)
     current.update({k: v for k, v in data.items() if v is not None})
+    tasks_raw = current.get("TASKS")
+    tasks_obj = tasks_raw
+    if isinstance(tasks_raw, str):
+        try:
+            tasks_obj = json.loads(tasks_raw)
+        except json.JSONDecodeError:
+            tasks_obj = []
+    if isinstance(tasks_obj, list):
+        valid_cookie_keys = {
+            cookie_key(str(item.get("unique_id") or ""))
+            for item in tasks_obj
+            if item and item.get("unique_id")
+        }
+        current = {
+            key: value
+            for key, value in current.items()
+            if not key.startswith("COOKIES_") or key in valid_cookie_keys
+        }
 
     ordered_keys = [
         "PROXY_ADDRESS",

@@ -146,6 +146,17 @@ button { cursor: pointer; }
 .btn-ghost { background: transparent; }
 .mini { padding: 6px 10px; font-size: 12px; }
 .account, .user-card { padding: 16px; margin-top: 12px; }
+.account-id { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.qr-card { width: min(440px, calc(100% - 24px)); text-align: center; }
+.qr-box { min-height: 240px; display: grid; place-items: center; margin: 8px 0 4px; }
+.qr-image {
+  width: 228px;
+  height: 228px;
+  object-fit: contain;
+  background: #fff;
+  padding: 10px;
+  border-radius: 16px;
+}
 .log-box {
   height: min(52vh, 520px);
   min-height: 240px;

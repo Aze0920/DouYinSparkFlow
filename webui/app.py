@@ -14,6 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from webui.envfile import cookie_key, env_path, load_env, parse_accounts, write_env
+from webui.qr_login import cancel_qr_login, snapshot as qr_snapshot, start_qr_login
 from webui.users import (
     admin_count,
     find_user,
@@ -378,6 +379,31 @@ def _run_task():
             LOCK_FILE.unlink(missing_ok=True)
         except Exception:
             pass
+
+
+@app.post("/api/douyin/login/start")
+def douyin_login_start(request: Request, payload: dict | None = None):
+    require_admin(request)
+    if _run_state["running"]:
+        raise HTTPException(status_code=409, detail="续火花任务正在跑，请等它结束后再扫码")
+    payload = payload or {}
+    try:
+        replace_index = int(payload.get("replace_index", -1))
+    except (TypeError, ValueError):
+        replace_index = -1
+    return {"ok": True, **start_qr_login(replace_index)}
+
+
+@app.get("/api/douyin/login/status")
+def douyin_login_status(request: Request):
+    require_admin(request)
+    return {"ok": True, **qr_snapshot(include_cookies=True)}
+
+
+@app.post("/api/douyin/login/cancel")
+def douyin_login_cancel(request: Request):
+    require_admin(request)
+    return {"ok": True, **cancel_qr_login()}
 
 
 @app.post("/api/run")

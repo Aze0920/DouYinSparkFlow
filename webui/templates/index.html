@@ -18,6 +18,20 @@
       </div>
     </div>
   </div>
+  <div id="qrModal" class="modal-mask hidden">
+    <div class="modal-card qr-card">
+      <h3>抖音扫码登录</h3>
+      <p id="qrHint" class="sub">打开抖音 App，扫一扫确认登录</p>
+      <div id="qrBox" class="qr-box">
+        <div id="qrLoading">正在生成二维码…</div>
+        <img id="qrImage" class="qr-image hidden" alt="登录二维码" />
+      </div>
+      <div class="modal-actions">
+        <button class="btn-ghost" type="button" onclick="refreshQrLogin()">刷新二维码</button>
+        <button class="btn-ghost" type="button" onclick="closeQrLogin()">取消</button>
+      </div>
+    </div>
+  </div>
 
   <div id="loginPage" class="login-page hidden">
     <section class="login-visual">
@@ -90,7 +104,7 @@
           <div class="panel-head">
             <h2>抖音账号与发送策略</h2>
             <div class="admin-only hidden">
-              <button class="btn-ghost" onclick="addAccount()">添加账号</button>
+              <button class="btn-ghost" onclick="startQrLogin(-1)">添加账号</button>
               <button class="btn-ghost" onclick="saveConfig()">保存配置</button>
               <button class="btn-run" id="runBtn" onclick="runNow()">立即续火花</button>
             </div>
@@ -103,6 +117,7 @@
               <textarea id="messageTemplate" rows="3"></textarea>
             </label>
           </div>
+          <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，用抖音 App 扫码后会自动抓取用户名、抖音号和 Cookie，你只需要填写目标好友。</p>
           <div id="accounts"></div>
         </section>
       </section>
@@ -144,6 +159,10 @@
     let current = null;
     let pollBusy = false;
     let page = "home";
+    let qrTimer = null;
+    let qrReplaceIndex = -1;
+    let qrApplying = false;
+    window.__accountCookies = {};
 
     function toast(message, type = "ok") {
       const el = document.createElement("div");
@@ -194,7 +213,7 @@
       });
       const titles = {
         home: ["总览", "查看版本、状态和快捷操作"],
-        tasks: ["任务配置", "管理抖音账号、好友和发送模板"],
+        tasks: ["任务配置", "扫码登录抖音账号后，只需填写目标好友"],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "管理员可以添加、改密和管理其他控制台账号"],
       };
@@ -250,43 +269,174 @@
       return data;
     }
     function accountCard(data, index) {
+      const name = data.username || "抖音账号";
+      const uid = data.unique_id || "";
+      const bound = !!(uid && (data.cookies_set || data.cookies || window.__accountCookies[uid]));
       return `<div class="account">
-        <div class="account-head"><strong>账号 ${index + 1}</strong>
-          <button class="btn-ghost mini admin-only ${isAdmin() ? "" : "hidden"}" onclick="removeAccount(${index})">删除</button>
+        <div class="account-head">
+          <div>
+            <strong>${escapeHtml(name)}</strong>
+            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未扫码登录"} · ${bound ? "已绑定 Cookie" : "未绑定 Cookie"}</div>
+          </div>
+          <div class="row">
+            <button class="btn-ghost mini admin-only ${isAdmin() ? "" : "hidden"}" onclick="startQrLogin(${index})">${bound ? "重新扫码" : "扫码登录"}</button>
+            <button class="btn-ghost mini admin-only ${isAdmin() ? "" : "hidden"}" onclick="removeAccount(${index})">删除</button>
+          </div>
         </div>
-        <div class="grid two">
-          <label>用户名<input class="username" value="${escapeAttr(data.username || "")}" ${isAdmin() ? "" : "disabled"} /></label>
-          <label>编号 / 抖音号<input class="unique-id" value="${escapeAttr(data.unique_id || "")}" ${isAdmin() ? "" : "disabled"} /></label>
-          <label>目标好友（一行一个）<textarea class="targets" ${isAdmin() ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea></label>
-          <label>Cookie JSON<textarea class="cookies" ${isAdmin() ? "" : "disabled"}>${escapeHtml(data.cookies || "")}</textarea></label>
-        </div>
+        <input type="hidden" class="username" value="${escapeAttr(name)}" />
+        <input type="hidden" class="unique-id" value="${escapeAttr(uid)}" />
+        <label>目标好友（一行一个）
+          <textarea class="targets" ${isAdmin() ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea>
+        </label>
       </div>`;
+    }
+    function renderAccounts() {
+      $("accounts").innerHTML = (window.__accounts || []).map(accountCard).join("");
+      $("noAccounts").classList.toggle("hidden", !!(window.__accounts && window.__accounts.length));
     }
     async function loadConfig() {
       const cfg = await api("/api/config");
       $("cronTime").value = String(cfg.cron_hour) + ":" + String(cfg.cron_minute).padStart(2, "0");
       $("messageTemplate").value = cfg.message_template;
-      window.__accounts = cfg.accounts.length ? cfg.accounts : [{ username: "账号1", unique_id: "", targets: [], cookies: "" }];
-      $("accounts").innerHTML = window.__accounts.map(accountCard).join("");
+      window.__accountCookies = {};
+      window.__accounts = cfg.accounts || [];
+      window.__accounts.forEach((item) => {
+        if (item.unique_id && item.cookies) window.__accountCookies[item.unique_id] = item.cookies;
+      });
+      renderAccounts();
     }
     function collectAccounts() {
-      return [...document.querySelectorAll(".account")].map((node) => ({
-        username: node.querySelector(".username").value.trim(),
-        unique_id: node.querySelector(".unique-id").value.trim(),
-        targets: node.querySelector(".targets").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
-        cookies: node.querySelector(".cookies").value.trim(),
-      }));
-    }
-    function addAccount() {
-      window.__accounts = collectAccounts();
-      window.__accounts.push({ username: "新账号", unique_id: "", targets: [], cookies: "" });
-      $("accounts").innerHTML = window.__accounts.map(accountCard).join("");
+      return [...document.querySelectorAll(".account")].map((node) => {
+        const uniqueId = node.querySelector(".unique-id").value.trim();
+        return {
+          username: node.querySelector(".username").value.trim(),
+          unique_id: uniqueId,
+          targets: node.querySelector(".targets").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
+          cookies: window.__accountCookies[uniqueId] || "",
+        };
+      }).filter((item) => item.unique_id);
     }
     function removeAccount(index) {
       window.__accounts = collectAccounts();
-      window.__accounts.splice(index, 1);
-      if (!window.__accounts.length) addAccount();
-      else $("accounts").innerHTML = window.__accounts.map(accountCard).join("");
+      const removed = window.__accounts.splice(index, 1)[0];
+      if (removed && removed.unique_id) delete window.__accountCookies[removed.unique_id];
+      renderAccounts();
+    }
+    function stopQrPoll() {
+      if (qrTimer) {
+        clearInterval(qrTimer);
+        qrTimer = null;
+      }
+    }
+    function showQrImage(b64, url) {
+      const img = $("qrImage");
+      const loading = $("qrLoading");
+      const src = b64
+        ? (b64.startsWith("data:") ? b64 : "data:image/png;base64," + b64)
+        : (url ? ("https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=" + encodeURIComponent(url)) : "");
+      if (src) {
+        img.src = src;
+        img.classList.remove("hidden");
+        loading.classList.add("hidden");
+      } else {
+        img.classList.add("hidden");
+        loading.classList.remove("hidden");
+      }
+    }
+    async function applyQrSuccess(data) {
+      if (qrApplying) return;
+      qrApplying = true;
+      stopQrPoll();
+      const cookies = Array.isArray(data.cookies) ? JSON.stringify(data.cookies) : (data.cookies || "");
+      const uniqueId = String(data.unique_id || "").trim();
+      if (!uniqueId) {
+        qrApplying = false;
+        toast("登录成功，但没有读到抖音号，请刷新二维码重试", "err");
+        return;
+      }
+      window.__accounts = collectAccounts();
+      const next = {
+        username: data.username || uniqueId,
+        unique_id: uniqueId,
+        targets: [],
+        cookies,
+        cookies_set: true,
+      };
+      const idx = Number(data.replace_index);
+      if (Number.isInteger(idx) && idx >= 0 && idx < window.__accounts.length) {
+        next.targets = window.__accounts[idx].targets || [];
+        const oldId = window.__accounts[idx].unique_id;
+        if (oldId && oldId !== uniqueId) delete window.__accountCookies[oldId];
+        window.__accounts[idx] = next;
+      } else if (window.__accounts.some((item) => item.unique_id === uniqueId)) {
+        const exist = window.__accounts.findIndex((item) => item.unique_id === uniqueId);
+        next.targets = window.__accounts[exist].targets || [];
+        window.__accounts[exist] = next;
+      } else {
+        window.__accounts.push(next);
+      }
+      window.__accountCookies[uniqueId] = cookies;
+      renderAccounts();
+      $("qrModal").classList.add("hidden");
+      try {
+        await saveConfig(true);
+        toast("已登录 " + next.username + "，请填写目标好友");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function pollQrLogin() {
+      try {
+        const data = await api("/api/douyin/login/status");
+        $("qrHint").textContent = data.message || "请用抖音扫码";
+        if (data.status === "loading") {
+          $("qrLoading").textContent = data.message || "正在生成二维码…";
+          showQrImage("");
+        } else if (data.qr_base64 || data.qr_url) {
+          showQrImage(data.qr_base64, data.qr_url);
+        }
+        if (data.status === "success") {
+          await applyQrSuccess(data);
+        } else if (data.status === "expired" || data.status === "error") {
+          stopQrPoll();
+          $("qrLoading").textContent = data.message || "二维码已失效";
+          if (!data.qr_base64 && !data.qr_url) showQrImage("");
+        }
+      } catch (err) {
+        stopQrPoll();
+        $("qrHint").textContent = err.message;
+      }
+    }
+    async function startQrLogin(index) {
+      if (!isAdmin()) return;
+      qrApplying = false;
+      qrReplaceIndex = index;
+      stopQrPoll();
+      $("qrHint").textContent = "打开抖音 App，扫一扫确认登录";
+      $("qrLoading").textContent = "正在生成二维码…";
+      showQrImage("");
+      $("qrModal").classList.remove("hidden");
+      try {
+        await api("/api/douyin/login/start", {
+          method: "POST",
+          body: JSON.stringify({ replace_index: index }),
+        });
+        await pollQrLogin();
+        qrTimer = setInterval(pollQrLogin, 1500);
+      } catch (err) {
+        $("qrHint").textContent = err.message;
+        toast(err.message, "err");
+      }
+    }
+    async function refreshQrLogin() {
+      await startQrLogin(qrReplaceIndex);
+    }
+    async function closeQrLogin() {
+      stopQrPoll();
+      $("qrModal").classList.add("hidden");
+      try {
+        await api("/api/douyin/login/cancel", { method: "POST", body: "{}" });
+      } catch (e) {}
     }
     function parseCronTime(text) {
       const raw = String(text || "9:00").replace("：", ":").trim();
