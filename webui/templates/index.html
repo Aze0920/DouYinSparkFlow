@@ -239,13 +239,35 @@
             <h2>WxPusher</h2>
             <span class="ck-status" id="wpStatus">未配置</span>
           </div>
-          <p class="sub">先用这条把推送跑通。打开 <a href="https://wxpusher.zjiecode.com" target="_blank" rel="noreferrer">wxpusher.zjiecode.com</a> 注册应用，复制 appToken；微信扫码关注后复制 UID。不用配公众号登录。</p>
+          <p class="sub">打开 <a href="https://wxpusher.zjiecode.com" target="_blank" rel="noreferrer">wxpusher.zjiecode.com</a> 注册应用，复制 appToken；微信扫码关注后复制 UID。微信公众号现在收不到推送，请下载 WxPusher App 接收。</p>
           <div class="grid two">
             <label class="check-line"><input id="wpEnabled" type="checkbox" /> 启用 WxPusher</label>
             <label>appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
             <label class="span-2">UID（多个用逗号或换行）
               <textarea id="wpUids" rows="3" placeholder="UID_xxxx"></textarea>
             </label>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>PushPlus</h2>
+            <span class="ck-status" id="ppStatus">未配置</span>
+          </div>
+          <p class="sub">打开 <a href="https://www.pushplus.plus" target="_blank" rel="noreferrer">pushplus.plus</a> 微信扫码登录，复制 token。一对一消息走他们的公众号，免费有条数限制。</p>
+          <div class="grid two">
+            <label class="check-line"><input id="ppEnabled" type="checkbox" /> 启用 PushPlus</label>
+            <label>token<input id="ppToken" placeholder="个人 token" autocomplete="off" /></label>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Server酱</h2>
+            <span class="ck-status" id="scStatus">未配置</span>
+          </div>
+          <p class="sub">打开 <a href="https://sct.ftqq.com" target="_blank" rel="noreferrer">sct.ftqq.com</a> 微信登录，复制 SendKey（一般是 SCT 开头）。免费每天条数很少。</p>
+          <div class="grid two">
+            <label class="check-line"><input id="scEnabled" type="checkbox" /> 启用 Server酱</label>
+            <label>SendKey<input id="scSendKey" placeholder="SCT_ 或 SCKEY" autocomplete="off" /></label>
           </div>
         </section>
         <section class="panel">
@@ -1463,12 +1485,24 @@
       if ($("wpEnabled")) $("wpEnabled").checked = !!wp.enabled;
       if ($("wpAppToken")) $("wpAppToken").value = wp.app_token || "";
       if ($("wpUids")) $("wpUids").value = wp.uids || "";
+      if ($("ppEnabled")) $("ppEnabled").checked = !!(data.pushplus || {}).enabled;
+      if ($("ppToken")) $("ppToken").value = (data.pushplus || {}).token || "";
+      if ($("scEnabled")) $("scEnabled").checked = !!(data.serverchan || {}).enabled;
+      if ($("scSendKey")) $("scSendKey").value = (data.serverchan || {}).sendkey || "";
       if ($("wxEventDone")) $("wxEventDone").checked = events.task_done !== false;
       if ($("wxEventFail")) $("wxEventFail").checked = events.task_fail !== false;
       if ($("wxEventOffline")) $("wxEventOffline").checked = events.cookie_offline !== false;
       if ($("wpStatus")) {
         $("wpStatus").textContent = data.wxpusher_ready ? "可推送" : "未配置";
         $("wpStatus").className = "ck-status " + (data.wxpusher_ready ? "ck-ok" : "ck-unknown");
+      }
+      if ($("ppStatus")) {
+        $("ppStatus").textContent = data.pushplus_ready ? "可推送" : "未配置";
+        $("ppStatus").className = "ck-status " + (data.pushplus_ready ? "ck-ok" : "ck-unknown");
+      }
+      if ($("scStatus")) {
+        $("scStatus").textContent = data.serverchan_ready ? "可推送" : "未配置";
+        $("scStatus").className = "ck-status " + (data.serverchan_ready ? "ck-ok" : "ck-unknown");
       }
       if ($("wxBindStatus")) {
         $("wxBindStatus").textContent = data.ready ? "可推送" : (data.bound ? "已填 OpenID" : "未绑定");
@@ -1488,6 +1522,14 @@
               enabled: !!( $("wpEnabled") && $("wpEnabled").checked ),
               app_token: ($("wpAppToken") && $("wpAppToken").value) || "",
               uids: ($("wpUids") && $("wpUids").value) || "",
+            },
+            pushplus: {
+              enabled: !!( $("ppEnabled") && $("ppEnabled").checked ),
+              token: ($("ppToken") && $("ppToken").value) || "",
+            },
+            serverchan: {
+              enabled: !!( $("scEnabled") && $("scEnabled").checked ),
+              sendkey: ($("scSendKey") && $("scSendKey").value) || "",
             },
             wechat: {
               enabled: !!( $("wxEnabled") && $("wxEnabled").checked ),

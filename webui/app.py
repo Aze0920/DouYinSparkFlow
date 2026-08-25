@@ -51,7 +51,17 @@ from webui.cards import (
     list_public_cards,
     public_card,
 )
-from webui.notify import load_notify, notify_event, public_notify, save_notify, send_wechat, send_wxpusher, verify_wechat_signature
+from webui.notify import (
+    load_notify,
+    notify_event,
+    public_notify,
+    save_notify,
+    send_pushplus,
+    send_serverchan,
+    send_wechat,
+    send_wxpusher,
+    verify_wechat_signature,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
@@ -599,10 +609,12 @@ def save_notify_settings(request: Request, payload: dict | None = None):
     admin = require_admin(request)
     data = save_notify(payload or {})
     logger.info(
-        "已保存推送设置 admin=%s wechat=%s wxpusher=%s",
+        "已保存推送设置 admin=%s wechat=%s wxpusher=%s pushplus=%s serverchan=%s",
         admin.get("username"),
         (data.get("wechat") or {}).get("enabled"),
         (data.get("wxpusher") or {}).get("enabled"),
+        (data.get("pushplus") or {}).get("enabled"),
+        (data.get("serverchan") or {}).get("enabled"),
     )
     return {"ok": True, **public_notify(data)}
 
@@ -611,28 +623,27 @@ def save_notify_settings(request: Request, payload: dict | None = None):
 def test_notify_settings(request: Request):
     require_admin(request)
     cfg = load_notify()
-    wxpusher = cfg.get("wxpusher") or {}
-    wechat = cfg.get("wechat") or {}
+    jobs = [
+        ("WxPusher", cfg.get("wxpusher") or {}, lambda: send_wxpusher("SparkFlow 测试推送", "WxPusher 通道正常")),
+        ("PushPlus", cfg.get("pushplus") or {}, lambda: send_pushplus("SparkFlow 测试推送", "PushPlus 通道正常")),
+        ("Server酱", cfg.get("serverchan") or {}, lambda: send_serverchan("SparkFlow 测试推送", "Server酱通道正常")),
+        ("公众号", cfg.get("wechat") or {}, lambda: send_wechat("test", "SparkFlow 测试推送", "公众号消息通道正常")),
+    ]
     notes = []
     failed = []
-    if wxpusher.get("enabled"):
+    for name, conf, sender in jobs:
+        if not conf.get("enabled"):
+            continue
         try:
-            send_wxpusher("SparkFlow 测试推送", "WxPusher 通道正常")
-            notes.append("WxPusher 已发送")
+            sender()
+            notes.append(name + " 已发送")
         except Exception as exc:
-            failed.append("WxPusher：" + str(exc))
-    if wechat.get("enabled"):
-        try:
-            send_wechat("test", "SparkFlow 测试推送", "公众号消息通道正常")
-            notes.append("公众号已发送")
-        except Exception as exc:
-            failed.append("公众号：" + str(exc))
+            failed.append(name + "：" + str(exc))
     if not notes and not failed:
-        raise HTTPException(status_code=400, detail="请先启用 WxPusher 或公众号推送")
+        raise HTTPException(status_code=400, detail="请先启用至少一种推送通道")
     if not notes:
         raise HTTPException(status_code=400, detail="；".join(failed))
-    message = "；".join(notes + failed)
-    return {"ok": True, "message": message}
+    return {"ok": True, "message": "；".join(notes + failed)}
 
 
 @app.api_route("/api/wechat/callback", methods=["GET", "POST"])
