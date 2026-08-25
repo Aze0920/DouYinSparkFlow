@@ -179,8 +179,15 @@ button { cursor: pointer; }
   cursor: pointer;
 }
 .qr-verify-methods .verify-btn:hover { border-color: var(--gold); }
-.qr-verify-form { display: grid; gap: 8px; }
-.qr-verify-form input { width: 100%; }
+.qr-verify-uplink {
+  text-align: left;
+  background: #171b26;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+.qr-verify-uplink p { margin: 6px 0; }
+.qr-verify-uplink b { color: var(--gold); word-break: break-all; }
 .log-box {
   height: min(52vh, 520px);
   min-height: 240px;

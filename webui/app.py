@@ -630,9 +630,10 @@ def douyin_login_verify(request: Request, payload: dict | None = None):
     payload = payload or {}
     action = str(payload.get("action") or payload.get("type") or "").strip()
     if action == "choose":
-        method_id = str(payload.get("id") or payload.get("method") or payload.get("label") or "")
-        logger.info("面板选择身份验证方式 %s", method_id)
-        return {"ok": True, **choose_verify_method(method_id)}
+        method_id = str(payload.get("id") or payload.get("method") or "")
+        label = str(payload.get("label") or "")
+        logger.info("面板选择身份验证方式 id=%s label=%s", method_id, label)
+        return {"ok": True, **choose_verify_method(method_id, label)}
     if action in {"code", "submit"}:
         return {"ok": True, **submit_verify_code(str(payload.get("code") or ""), str(payload.get("password") or ""))}
     raise HTTPException(status_code=400, detail="未知验证动作")

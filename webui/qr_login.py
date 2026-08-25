@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import json
 import random
+import re
 import string
 import threading
 import time
@@ -43,6 +44,10 @@ _state: dict[str, Any] = {
     "verify_need_code": False,
     "verify_need_password": False,
     "verify_info": "",
+    "verify_kind": "",
+    "verify_uplink_from": "",
+    "verify_uplink_to": "",
+    "verify_uplink_content": "",
 }
 
 
@@ -70,6 +75,10 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "verify_need_code": bool(_state.get("verify_need_code")),
             "verify_need_password": bool(_state.get("verify_need_password")),
             "verify_info": _state.get("verify_info") or "",
+            "verify_kind": _state.get("verify_kind") or "",
+            "verify_uplink_from": _state.get("verify_uplink_from") or "",
+            "verify_uplink_to": _state.get("verify_uplink_to") or "",
+            "verify_uplink_content": _state.get("verify_uplink_content") or "",
         }
         if include_cookies and data["status"] == "success":
             data["cookies"] = _state.get("cookies") or []
@@ -197,11 +206,16 @@ VERIFY_WAY_LABELS = {
     "sms": "接收短信验证码",
     "sms_verify": "接收短信验证码",
     "mobile_sms": "接收短信验证码",
+    "mobile_sms_verify": "接收短信验证码",
     "receive_sms": "接收短信验证码",
+    "down_sms": "接收短信验证码",
     "uplink_sms": "发送短信验证",
     "uplink_sms_verify": "发送短信验证",
+    "mobile_up_sms_verify": "发送短信验证",
+    "mobile_uplink_sms_verify": "发送短信验证",
     "send_sms": "发送短信验证",
     "sms_uplink": "发送短信验证",
+    "up_sms": "发送短信验证",
     "email": "邮箱验证",
     "email_verify": "邮箱验证",
     "pwd": "密码验证",
@@ -215,45 +229,51 @@ VERIFY_WAY_LABELS = {
 }
 VERIFY_SCAN_JS = """() => {
   const bodyText = (document.body && document.body.innerText) || "";
-  const visible = bodyText.includes("身份验证") && (
+  const isGate = bodyText.includes("身份验证") && (
     bodyText.includes("为保障账号安全") ||
-    bodyText.includes("确保为本人操作") ||
-    bodyText.includes("接收短信") ||
-    bodyText.includes("发送短信")
+    bodyText.includes("确保为本人操作")
   );
+  const isCode = /请输入验证码|验证码已发送|填写验证码|短信验证码/.test(bodyText);
+  const isUplink = /发送至|短信内容|请使用.*发送短信|发送短信验证/.test(bodyText);
+  const visible = isGate || isCode || isUplink;
   if (!visible) {
-    return { visible: false, methods: [], account: "", needCode: false, needPassword: false, info: "" };
+    return {
+      visible: false, methods: [], account: "", needCode: false, needPassword: false,
+      info: "", sendTo: "", smsContent: "", fromMobile: "",
+    };
   }
   let dialog = null;
   let best = 1e9;
   for (const el of document.querySelectorAll("div")) {
     const t = el.innerText || "";
-    if (!t.includes("身份验证") || t.length < 24 || t.length > 1600) continue;
+    if (t.length < 20 || t.length > 2000) continue;
+    if (!(t.includes("身份验证") || t.includes("验证码") || t.includes("发送至") || t.includes("短信内容"))) continue;
     if (t.length < best) {
       best = t.length;
       dialog = el;
     }
   }
   const root = dialog || document.body;
+  const text = root.innerText || "";
   const skipRe = /身份验证|为保障|账号安全|本人操作|请先完成|返回|关闭/;
   const methods = [];
   const seen = new Set();
   const push = (label) => {
     const t = String(label || "").replace(/\\s+/g, " ").trim();
-    if (!t || t.length > 36 || seen.has(t) || skipRe.test(t)) return;
+    if (!t || t.length > 40 || seen.has(t) || skipRe.test(t)) return;
     seen.add(t);
     methods.push({ id: t, label: t });
   };
   for (const el of root.querySelectorAll("button, [role=button], li, a, div, p, span")) {
     const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
-    if (!t || t.length < 2 || t.length > 36) continue;
+    if (!t || t.length < 2 || t.length > 40) continue;
     if (el.querySelectorAll("button, [role=button]").length) continue;
     const style = window.getComputedStyle(el);
     const clickable = el.tagName === "BUTTON" || el.getAttribute("role") === "button" || style.cursor === "pointer";
     const looksLike = /验证|短信|邮箱|密码|人脸|语音|认证/.test(t);
     if (clickable || looksLike) push(t);
   }
-  const lines = (root.innerText || "").split(/\\n+/).map((s) => s.trim()).filter(Boolean);
+  const lines = text.split(/\\n+/).map((s) => s.trim()).filter(Boolean);
   const head = lines.findIndex((l) => l.includes("身份验证"));
   let account = "";
   if (head >= 0) {
@@ -264,13 +284,11 @@ VERIFY_SCAN_JS = """() => {
       break;
     }
   }
-  if (!methods.length) {
-    for (const line of lines) {
-      if (/验证|短信|邮箱|密码|人脸|语音/.test(line) && line.length <= 24) push(line);
-    }
-  }
+  const sendTo = (text.match(/发送至[:：]?\\s*([0-9]{5,})/) || text.match(/(106[0-9]{6,})/) || [])[1] || "";
+  const smsContent = (text.match(/短信内容[:：]?\\s*([A-Za-z0-9]+)/) || text.match(/发送内容[:：]?\\s*([A-Za-z0-9]+)/) || [])[1] || "";
+  const fromMobile = (text.match(/(1[3-9][0-9\\*]{9})/) || [])[1] || "";
   const inputs = [...root.querySelectorAll("input")];
-  const needCode = inputs.some((el) => /验证码|code/i.test((el.placeholder || "") + (el.name || "")));
+  const needCode = isCode || inputs.some((el) => /验证码|code/i.test((el.placeholder || "") + (el.name || "")));
   const needPassword = inputs.some((el) => (el.type || "") === "password");
   return {
     visible: true,
@@ -278,7 +296,10 @@ VERIFY_SCAN_JS = """() => {
     account,
     needCode,
     needPassword,
-    info: (root.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 500),
+    info: text.replace(/\\s+/g, " ").trim().slice(0, 800),
+    sendTo,
+    smsContent,
+    fromMobile,
   };
 }"""
 
@@ -288,16 +309,60 @@ def _interesting_url(url: str) -> bool:
     return any(hint in text for hint in SNIFF_URL_HINTS)
 
 
+def _extract_mobile(text: str) -> str:
+    found = re.search(r"1[3-9][\d*]{9}", str(text or ""))
+    return found.group(0) if found else ""
+
+
+def _human_verify_label(way: str = "", name: str = "", mobile: str = "") -> str:
+    ident = str(way or "").strip()
+    raw = str(name or ident).strip()
+    mapped = VERIFY_WAY_LABELS.get(ident) or VERIFY_WAY_LABELS.get(ident.lower())
+    if not mapped and re.fullmatch(r"[a-zA-Z0-9_]+", raw or ""):
+        mapped = VERIFY_WAY_LABELS.get(raw.lower())
+    if mapped:
+        label = mapped
+    elif re.fullmatch(r"[a-zA-Z0-9_]+", raw or ""):
+        label = "短信验证"
+    else:
+        label = raw or "验证方式"
+    phone = mobile or _extract_mobile(raw) or _extract_mobile(ident)
+    if phone and phone not in label:
+        label = f"{label}（{phone}）"
+    return label
+
+
+def _method_kind(text: str) -> str:
+    blob = str(text or "").lower()
+    if "up" in blob and "sms" in blob:
+        return "uplink"
+    if "发送短信" in blob and "验证码" not in blob:
+        return "uplink"
+    if "sms" in blob or "短信" in blob:
+        return "sms"
+    if "email" in blob or "邮箱" in blob:
+        return "email"
+    if "pwd" in blob or "password" in blob or "密码" in blob:
+        return "password"
+    return ""
+
+
 def _uniq_methods(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     out = []
     seen = set()
     for item in rows or []:
-        label = str(item.get("label") or item.get("id") or "").strip()
-        ident = str(item.get("id") or label).strip()
-        if not label or label in seen:
+        ident = str(item.get("id") or item.get("label") or "").strip()
+        raw_label = str(item.get("label") or ident).strip()
+        way = ident if re.fullmatch(r"[a-zA-Z0-9_]+", ident or "") else ""
+        if not way and re.fullmatch(r"[a-zA-Z0-9_]+", raw_label or ""):
+            way = raw_label
+        label = _human_verify_label(way, raw_label)
+        kind = _method_kind(way + " " + label)
+        key = way.lower() or label
+        if not label or key in seen:
             continue
-        seen.add(label)
-        out.append({"id": ident, "label": label})
+        seen.add(key)
+        out.append({"id": way or label, "label": label, "kind": kind})
     return out
 
 
@@ -310,11 +375,8 @@ def _collect_methods_from_obj(obj: Any, acc: list[dict[str, str]], depth: int = 
         mobile = obj.get("mobile") or obj.get("phone") or obj.get("mask_mobile")
         if way or (isinstance(name, str) and any(k in name for k in ("验证", "短信", "邮箱", "密码", "人脸"))):
             ident = str(way or name or "")
-            label = str(name or VERIFY_WAY_LABELS.get(str(way), "") or way or "")
-            if mobile:
-                label = f"{label}（{mobile}）" if label else str(mobile)
-            if label:
-                acc.append({"id": ident or label, "label": label})
+            label = _human_verify_label(str(way or ""), str(name or ""), str(mobile or ""))
+            acc.append({"id": ident or label, "label": label})
         for key in (
             "verify_ways",
             "verify_way_list",
@@ -332,6 +394,37 @@ def _collect_methods_from_obj(obj: Any, acc: list[dict[str, str]], depth: int = 
     elif isinstance(obj, list):
         for item in obj:
             _collect_methods_from_obj(item, acc, depth + 1)
+
+
+def _collect_verify_detail(obj: Any, bag: dict[str, Any], depth: int = 0):
+    if depth > 8 or obj is None:
+        return
+    if isinstance(obj, list):
+        for item in obj:
+            _collect_verify_detail(item, bag, depth + 1)
+        return
+    if not isinstance(obj, dict):
+        return
+    for key, value in obj.items():
+        if value in (None, "", [], {}):
+            continue
+        low = str(key).lower()
+        text = str(value)
+        if low in {"sms_content", "up_sms_content", "uplink_content", "uplink_sms_content", "message_content", "code_content", "sms_code_content"}:
+            bag["uplink_content"] = text
+        elif low in {"dst", "dst_num", "dst_mobile", "sp_number", "sms_port", "port", "target_number", "up_sms_mobile", "send_to", "receive_number"}:
+            bag["uplink_to"] = re.sub(r"\D", "", text) or text
+        elif low in {"mask_mobile", "mobile_mask", "from_mobile"}:
+            bag["uplink_from"] = text
+        elif low == "mobile" and (text.startswith("106") or "*" in text):
+            if text.startswith("106"):
+                bag["uplink_to"] = re.sub(r"\D", "", text) or text
+            else:
+                bag["uplink_from"] = bag.get("uplink_from") or text
+        elif low in {"need_code", "need_sms_code"} and value in (True, 1, "1", "true"):
+            bag["need_code"] = True
+        if isinstance(value, (dict, list)):
+            _collect_verify_detail(value, bag, depth + 1)
 
 
 def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
@@ -372,6 +465,7 @@ def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
     if methods:
         bag["methods"] = _uniq_methods((bag.get("methods") or []) + methods)
         logger.info("抓包验证方式 %s", bag["methods"])
+    _collect_verify_detail(payload, bag)
 
 
 def _attach_sniffer(page, bag: dict[str, Any]):
@@ -417,6 +511,9 @@ def _scan_verify_ui(page) -> dict[str, Any]:
         "needCode": False,
         "needPassword": False,
         "info": "",
+        "sendTo": "",
+        "smsContent": "",
+        "fromMobile": "",
     }
     for scope in _iter_scopes(page):
         try:
@@ -433,41 +530,55 @@ def _scan_verify_ui(page) -> dict[str, Any]:
             merged["account"] = str(part.get("account") or "")
         if part.get("info") and not merged["info"]:
             merged["info"] = str(part.get("info") or "")
+        if part.get("sendTo") and not merged["sendTo"]:
+            merged["sendTo"] = str(part.get("sendTo") or "")
+        if part.get("smsContent") and not merged["smsContent"]:
+            merged["smsContent"] = str(part.get("smsContent") or "")
+        if part.get("fromMobile") and not merged["fromMobile"]:
+            merged["fromMobile"] = str(part.get("fromMobile") or "")
         merged["methods"].extend(part.get("methods") or [])
     merged["methods"] = _uniq_methods(merged["methods"])
     return merged
 
 
-def _click_verify_method(page, method_id: str) -> bool:
-    label = str(method_id or "").strip()
-    if not label:
-        return False
-    click_js = """(label) => {
-      const want = String(label || "").replace(/\\s+/g, " ").trim();
+def _click_verify_method(page, method_id: str, label: str = "") -> bool:
+    ident = str(method_id or "").strip()
+    zh = _human_verify_label(ident, label)
+    keys = [k for k in (zh, label, ident, VERIFY_WAY_LABELS.get(ident, ""), "接收短信验证码", "发送短信验证") if k]
+    keys = list(dict.fromkeys(keys))
+    click_js = """(keys) => {
       const nodes = [...document.querySelectorAll("button, [role=button], li, a, div, p, span")];
-      const hit = nodes.find((el) => (el.innerText || "").replace(/\\s+/g, " ").trim() === want)
-        || nodes.find((el) => (el.innerText || "").replace(/\\s+/g, " ").trim().includes(want));
-      if (!hit) return false;
-      hit.click();
-      return true;
+      for (const want of keys) {
+        const target = String(want || "").replace(/\\s+/g, " ").trim();
+        if (!target) continue;
+        const hit = nodes.find((el) => {
+          const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
+          return t === target || t.includes(target) || target.includes(t);
+        });
+        if (hit) {
+          hit.click();
+          return (hit.innerText || "").replace(/\\s+/g, " ").trim();
+        }
+      }
+      return "";
     }"""
     for scope in _iter_scopes(page):
         try:
-            if scope.evaluate(click_js, label):
-                logger.info("已点击验证方式 %s", label)
+            clicked = scope.evaluate(click_js, keys)
+            if clicked:
+                logger.info("已点击验证方式 %s -> %s", ident, clicked)
                 return True
         except Exception:
             continue
-        try:
-            loc = scope.get_by_text(label, exact=True)
-            if loc.count() == 0:
-                loc = scope.get_by_text(label, exact=False)
-            loc.first.click(timeout=2500)
-            logger.info("已点击验证方式 %s", label)
-            return True
-        except Exception:
-            continue
-    logger.warning("没有点到验证方式 %s", label)
+        for text in keys:
+            try:
+                loc = scope.get_by_text(text, exact=False)
+                loc.first.click(timeout=2000)
+                logger.info("已点击验证方式 %s", text)
+                return True
+            except Exception:
+                continue
+    logger.warning("没有点到验证方式 id=%s keys=%s", ident, keys)
     return False
 
 
@@ -549,15 +660,48 @@ def _status() -> str:
 def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
     methods = _uniq_methods((ui.get("methods") or []) + (sniff.get("methods") or []))
     account = str(ui.get("account") or sniff.get("account") or "")
-    info = str(ui.get("info") or sniff.get("echo") or "").strip()
+    info = str(sniff.get("echo") or ui.get("info") or "").strip()
+    kind = str(_state.get("verify_kind") or "")
+    if not kind:
+        for item in methods:
+            if item.get("kind"):
+                kind = str(item.get("kind") or "")
+                break
+    uplink_from = str(ui.get("fromMobile") or sniff.get("uplink_from") or _state.get("verify_uplink_from") or "")
+    uplink_to = str(ui.get("sendTo") or sniff.get("uplink_to") or _state.get("verify_uplink_to") or "")
+    uplink_content = str(ui.get("smsContent") or sniff.get("uplink_content") or _state.get("verify_uplink_content") or "")
+    if uplink_to or uplink_content:
+        kind = "uplink"
+    need_code = bool(
+        ui.get("needCode")
+        or sniff.get("need_code")
+        or kind == "sms"
+        or _state.get("verify_need_code")
+    )
+    if kind == "uplink":
+        need_code = False
+        message = "请用手机发送短信完成验证"
+        if uplink_to and uplink_content:
+            message = f"请用 {uplink_from or '本机号码'} 发送「{uplink_content}」到 {uplink_to}"
+        elif uplink_content:
+            message = f"请按页面说明发送短信，内容：{uplink_content}"
+    elif need_code:
+        kind = kind or "sms"
+        message = sniff.get("echo") or "验证码已发送，请在下方输入"
+    else:
+        message = "请选择身份验证方式"
     payload = {
         "status": "verify",
-        "message": info or "请选择身份验证方式",
+        "message": message,
         "qr_base64": "",
-        "verify_need_code": bool(ui.get("needCode")),
-        "verify_need_password": bool(ui.get("needPassword")),
+        "verify_need_code": need_code,
+        "verify_need_password": bool(ui.get("needPassword") or kind == "password"),
         "verify_info": info,
         "verify_methods": methods,
+        "verify_kind": kind,
+        "verify_uplink_from": uplink_from,
+        "verify_uplink_to": uplink_to,
+        "verify_uplink_content": uplink_content,
     }
     if account:
         payload["verify_account"] = account
@@ -959,6 +1103,10 @@ def _worker(replace_index: int):
             verify_need_code=False,
             verify_need_password=False,
             verify_info="",
+            verify_kind="",
+            verify_uplink_from="",
+            verify_uplink_to="",
+            verify_uplink_content="",
         )
         logger.info("扫码线程启动 replace_index=%s", replace_index)
         logger.info("正在启动浏览器")
@@ -1031,8 +1179,8 @@ def _worker(replace_index: int):
             if cmd:
                 action = str(cmd.get("type") or "")
                 if action == "choose":
-                    _click_verify_method(page, str(cmd.get("id") or ""))
-                    time.sleep(0.8)
+                    _click_verify_method(page, str(cmd.get("id") or ""), str(cmd.get("label") or ""))
+                    time.sleep(1.6)
                     deadline = max(deadline, time.time() + 180)
                 elif action == "code":
                     _fill_verify_code(page, str(cmd.get("code") or ""), str(cmd.get("password") or ""))
@@ -1208,6 +1356,10 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
         verify_need_code=False,
         verify_need_password=False,
         verify_info="",
+        verify_kind="",
+        verify_uplink_from="",
+        verify_uplink_to="",
+        verify_uplink_content="",
     )
     _thread = threading.Thread(target=_worker, args=(replace_index,), daemon=True)
     _thread.start()
@@ -1229,16 +1381,33 @@ def cancel_qr_login() -> dict[str, Any]:
         verify_need_code=False,
         verify_need_password=False,
         verify_info="",
+        verify_kind="",
+        verify_uplink_from="",
+        verify_uplink_to="",
+        verify_uplink_content="",
     )
     return snapshot()
 
 
-def choose_verify_method(method_id: str) -> dict[str, Any]:
+def choose_verify_method(method_id: str, label: str = "") -> dict[str, Any]:
     ident = str(method_id or "").strip()
-    logger.info("用户选择身份验证方式 %s", ident)
-    if ident:
-        _push_command({"type": "choose", "id": ident})
-        _set(message=f"已选择「{ident}」，正在打开验证…")
+    zh = _human_verify_label(ident, label)
+    kind = _method_kind(ident + " " + zh)
+    logger.info("用户选择身份验证方式 id=%s label=%s kind=%s", ident, zh, kind)
+    extra = {
+        "message": f"已选择「{zh}」",
+        "verify_kind": kind,
+        "status": "verify",
+    }
+    if kind == "sms":
+        extra["verify_need_code"] = True
+        extra["message"] = f"已选择「{zh}」，验证码会发到该手机，请在下方输入"
+    elif kind == "uplink":
+        extra["verify_need_code"] = False
+        extra["message"] = f"已选择「{zh}」，请按下面显示的号码和内容发送短信"
+    if ident or zh:
+        _push_command({"type": "choose", "id": ident or zh, "label": zh})
+        _set(**extra)
     return snapshot()
 
 

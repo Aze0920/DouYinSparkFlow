@@ -31,10 +31,16 @@
         <div id="qrVerifyAccount" class="qr-verify-account"></div>
         <div id="qrVerifyInfo" class="sub"></div>
         <div id="qrVerifyMethods" class="qr-verify-methods"></div>
+        <div id="qrVerifyUplink" class="qr-verify-uplink hidden">
+          <p>请用手机 <b id="qrUplinkFrom">本机号码</b> 发送短信：</p>
+          <p>发送到：<b id="qrUplinkTo">-</b></p>
+          <p>短信内容：<b id="qrUplinkContent">-</b></p>
+          <p class="sub">发完后等几秒，页面会自动继续。号码和内容以这里显示的为准。</p>
+        </div>
         <div id="qrVerifyCodeWrap" class="qr-verify-form hidden">
-          <input id="qrVerifyCode" placeholder="短信 / 邮箱验证码" autocomplete="one-time-code" />
+          <input id="qrVerifyCode" placeholder="短信验证码" autocomplete="one-time-code" />
           <input id="qrVerifyPass" class="hidden" type="password" placeholder="账号密码" autocomplete="current-password" />
-          <button class="btn-primary" type="button" onclick="submitQrVerifyCode()">提交验证</button>
+          <button class="btn-primary" type="button" onclick="submitQrVerifyCode()">提交验证码</button>
         </div>
       </div>
       <div class="modal-actions">
@@ -424,38 +430,52 @@
         return;
       }
       const methods = Array.isArray(data.verify_methods) ? data.verify_methods : [];
-      const info = data.verify_info || data.message || "";
+      const info = data.verify_info || "";
+      const kind = data.verify_kind || "";
+      const uplinkTo = data.verify_uplink_to || "";
+      const uplinkContent = data.verify_uplink_content || "";
+      const needCode = !!data.verify_need_code || kind === "sms";
+      const needUplink = kind === "uplink" || !!(uplinkTo || uplinkContent);
       const key = JSON.stringify({
         methods,
         account: data.verify_account || "",
-        needCode: !!data.verify_need_code,
+        needCode,
         needPass: !!data.verify_need_password,
+        kind,
+        uplinkTo,
+        uplinkContent,
         info,
+        message: data.message || "",
       });
       $("qrVerifyAccount").textContent = data.verify_account ? ("账号：" + data.verify_account) : "";
-      $("qrVerifyInfo").textContent = info;
-      $("qrVerifyCodeWrap").classList.toggle("hidden", !(data.verify_need_code || data.verify_need_password));
+      $("qrVerifyInfo").textContent = (info && info !== data.message) ? info : "";
+      $("qrVerifyCodeWrap").classList.toggle("hidden", !needCode);
       $("qrVerifyPass").classList.toggle("hidden", !data.verify_need_password);
+      $("qrVerifyUplink").classList.toggle("hidden", !needUplink);
+      if (needUplink) {
+        $("qrUplinkFrom").textContent = data.verify_uplink_from || "绑定的手机号";
+        $("qrUplinkTo").textContent = uplinkTo || "等待抖音返回发送号码…";
+        $("qrUplinkContent").textContent = uplinkContent || "等待抖音返回短信内容…";
+      }
       if (key === lastVerifyKey) return;
       lastVerifyKey = key;
       const wrap = $("qrVerifyMethods");
       wrap.innerHTML = methods.map((item) => {
         const id = escapeAttr(item.id || item.label || "");
         const label = escapeHtml(item.label || item.id || "验证方式");
-        return `<button class="verify-btn" type="button" data-id="${id}">${label}</button>`;
-      }).join("") || `<p class="sub">还没有识别到验证方式，等页面弹出后再点刷新。</p>`;
+        return `<button class="verify-btn" type="button" data-id="${id}" data-label="${label}">${label}</button>`;
+      }).join("") || "";
       wrap.onclick = (ev) => {
         const btn = ev.target.closest("button[data-id]");
-        if (btn) chooseQrVerify(btn.getAttribute("data-id"));
+        if (btn) chooseQrVerify(btn.getAttribute("data-id"), btn.getAttribute("data-label") || btn.textContent);
       };
     }
-    async function chooseQrVerify(methodId) {
+    async function chooseQrVerify(methodId, label) {
       try {
         await api("/api/douyin/login/verify", {
           method: "POST",
-          body: JSON.stringify({ action: "choose", id: methodId }),
+          body: JSON.stringify({ action: "choose", id: methodId, label: label || "" }),
         });
-        toast("已选择验证方式");
       } catch (err) {
         toast(err.message, "err");
       }
