@@ -449,6 +449,14 @@ def github_check(request: Request):
     }
 
 
+def _clamp_task_threads(value) -> int:
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        n = 10
+    return max(1, min(n, 32))
+
+
 @app.get("/api/config")
 def get_config(request: Request):
     require_auth(request)
@@ -477,6 +485,7 @@ def get_config(request: Request):
         "browser_timeout": int(env.get("BROWSER_TIMEOUT") or 120000),
         "friend_list_wait_time": int(env.get("FRIEND_LIST_WAIT_TIME") or 2000),
         "task_retry_times": int(env.get("TASK_RETRY_TIMES") or 3),
+        "max_task_threads": _clamp_task_threads(env.get("MAX_TASK_THREADS") or 10),
         "log_level": env.get("LOG_LEVEL") or "DEBUG",
         "github_repo": repo_name(),
         "accounts": accounts,
@@ -529,6 +538,7 @@ def save_config(request: Request, payload: dict):
         "BROWSER_TIMEOUT": str(payload.get("browser_timeout") or 120000),
         "FRIEND_LIST_WAIT_TIME": str(payload.get("friend_list_wait_time") or 2000),
         "TASK_RETRY_TIMES": str(payload.get("task_retry_times") or 3),
+        "MAX_TASK_THREADS": str(_clamp_task_threads(payload.get("max_task_threads"))),
         "LOG_LEVEL": payload.get("log_level") or "DEBUG",
         "GITHUB_REPO": payload.get("github_repo") or repo_name(),
         "HEADLESS": "true",

@@ -125,6 +125,9 @@
             <label>每天发送时间
               <input id="cronTime" placeholder="例如 9:00" />
             </label>
+            <label>同时处理账号数
+              <input id="maxTaskThreads" type="number" min="1" max="32" value="10" title="一个账号一条线程，给多个好友发也在同一线程。最多 32。" />
+            </label>
             <label class="span-2">消息模板
               <textarea id="messageTemplate" rows="3"></textarea>
             </label>
@@ -364,6 +367,7 @@
       const cfg = await api("/api/config");
       $("cronTime").value = String(cfg.cron_hour) + ":" + String(cfg.cron_minute).padStart(2, "0");
       $("messageTemplate").value = cfg.message_template;
+      if ($("maxTaskThreads")) $("maxTaskThreads").value = String(cfg.max_task_threads || 10);
       window.__accountCookies = {};
       window.__accounts = cfg.accounts || [];
       window.__accounts.forEach((item) => {
@@ -699,6 +703,7 @@
           cron_hour: t.hour,
           cron_minute: t.minute,
           message_template: $("messageTemplate").value,
+          max_task_threads: Number(($("maxTaskThreads") && $("maxTaskThreads").value) || 10),
           github_repo: "Aze0920/DouYinSparkFlow",
           accounts: collectAccounts(),
         }),

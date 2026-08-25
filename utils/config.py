@@ -16,6 +16,14 @@ config = None
 userData = None
 
 
+def _clamp_threads(value) -> int:
+    try:
+        n = int(value or 10)
+    except (TypeError, ValueError):
+        n = 10
+    return max(1, min(n, 32))
+
+
 class Environment(Enum):
     GITHUBACTION = "GITHUB_ACTION"  # GitHub Action 运行
     LOCAL = "LOCAL"  # 本地代码运行
@@ -60,6 +68,7 @@ def get_config():
             os.getenv("FRIEND_LIST_WAIT_TIME", "2000")
         ),  # 好友列表加载超时时间，单位毫秒
         "taskRetryTimes": int(os.getenv("TASK_RETRY_TIMES", "3")),  # 任务重试次数
+        "maxTaskThreads": _clamp_threads(os.getenv("MAX_TASK_THREADS", "10")),
         "logLevel": os.getenv("LOG_LEVEL", "DEBUG"),  # 日志级别
     }
 

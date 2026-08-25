@@ -81,6 +81,7 @@ def write_env(data: dict, extra: dict | None = None) -> Path:
         "BROWSER_TIMEOUT",
         "FRIEND_LIST_WAIT_TIME",
         "TASK_RETRY_TIMES",
+        "MAX_TASK_THREADS",
         "LOG_LEVEL",
         "WEB_PASSWORD",
         "GITHUB_REPO",
