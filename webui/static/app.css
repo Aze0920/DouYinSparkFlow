@@ -197,7 +197,7 @@ button { cursor: pointer; }
   color: #161823;
   outline: none;
 }
-.dy-resend { border: 0; background: transparent; color: #fe2c55; cursor: pointer; white-space: nowrap; }
+.dy-resend:disabled { color: #999; cursor: default; }
 .dy-error { color: #fe2c55; min-height: 18px; font-size: 12px; margin: 8px 0; text-align: left; }
 .dy-btn-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 8px; }
 .dy-cancel, .dy-primary {

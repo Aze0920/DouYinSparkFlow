@@ -440,6 +440,18 @@
         urlText.classList.add("hidden");
       }
     }
+    function tickSmsCountdown(left) {
+      const btn = document.querySelector("#dyStepSms .dy-resend");
+      if (!btn) return;
+      const n = Number(left) || 0;
+      if (n <= 0) {
+        btn.disabled = false;
+        btn.textContent = "重新发送";
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = n + "s";
+    }
     function renderVerifyPanel(data) {
       const panel = $("qrVerify");
       const box = $("qrBox");
@@ -465,6 +477,7 @@
       $("qrUplinkFrom").textContent = data.verify_uplink_from || "绑定手机号";
       $("qrUplinkTo").textContent = data.verify_uplink_to || "正在读取发送号码…";
       $("qrUplinkContent").textContent = data.verify_uplink_content || "正在读取短信内容…";
+      if (kind === "sms") tickSmsCountdown(data.verify_resend_left);
       const key = JSON.stringify({ methods, kind, account: data.verify_account || "" });
       if (key === lastVerifyKey) return;
       lastVerifyKey = key;
@@ -494,13 +507,24 @@
         toast("请输入验证码", "err");
         return;
       }
+      const btn = document.querySelector("#dyStepSms .dy-primary");
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = "验证中…";
+      }
       try {
         await api("/api/douyin/login/verify", {
           method: "POST",
           body: JSON.stringify({ action: "code", code }),
         });
+        toast("正在把验证码提交给抖音");
       } catch (err) {
         toast(err.message, "err");
+      } finally {
+        if (btn) {
+          btn.disabled = false;
+          btn.textContent = "验证";
+        }
       }
     }
     async function resendQrVerify() {

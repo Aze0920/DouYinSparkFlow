@@ -49,6 +49,7 @@ _state: dict[str, Any] = {
     "verify_uplink_to": "",
     "verify_uplink_content": "",
     "verify_error": "",
+    "verify_resend_at": 0,
 }
 
 
@@ -81,6 +82,7 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "verify_uplink_to": _state.get("verify_uplink_to") or "",
             "verify_uplink_content": _state.get("verify_uplink_content") or "",
             "verify_error": _state.get("verify_error") or "",
+            "verify_resend_left": max(0, int((_state.get("verify_resend_at") or 0) - time.time())),
         }
         if include_cookies and data["status"] == "success":
             data["cookies"] = _state.get("cookies") or []
@@ -285,7 +287,7 @@ VERIFY_SCAN_JS = """() => {
   const sendTo = (text.match(/发送至[:：]?\\s*(\\d{8,})/) || text.match(/(1069\\d{6,})/) || [])[1] || "";
   const smsContent = (text.match(/编辑短信内容[:：]?\\s*(\\S+)/) || text.match(/短信内容[:：]?\\s*(\\S+)/) || [])[1] || "";
   const fromMobile = (text.match(/(1[3-9][0-9\\*]{9})/) || [])[1] || "";
-  const err = (text.match(/验证码发送太频繁[^\\n]*|请稍后再试|发送失败[^\\n]*/) || [])[0] || "";
+  const err = (text.match(/验证码发送太频繁[^\\n]*|验证码错误[^\\n]*|验证失败[^\\n]*|验证码不正确[^\\n]*|请稍后再试|发送失败[^\\n]*/) || [])[0] || "";
   return {
     visible: true,
     methods,
@@ -567,7 +569,8 @@ def _click_verify_method(page, method_id: str, label: str = "") -> bool:
         if (!target) continue;
         const hit = nodes.find((el) => {
           const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
-          return t === target || t.includes(target) || target.includes(t);
+          if (/无法验证|选择其他|用户协议|隐私政策|登录即代表/.test(t)) return false;
+          return t === target || t.startsWith(target + "（") || t.startsWith(target + " ");
         });
         if (hit) {
           hit.click();
@@ -596,57 +599,89 @@ def _click_verify_method(page, method_id: str, label: str = "") -> bool:
     return False
 
 
-def _fill_verify_code(page, code: str, password: str = "") -> bool:
-    ok = False
-    if password:
-        for scope in _iter_scopes(page):
-            try:
-                loc = scope.locator("input[type='password']").first
-                if loc.count():
-                    loc.fill(password, timeout=2000)
-                    ok = True
-                    logger.info("已填入账号密码")
-                    break
-            except Exception:
-                continue
-    if code:
-        selectors = [
-            "input[placeholder*='验证码']",
-            "input[placeholder*='校验码']",
-            "input[autocomplete='one-time-code']",
-            "input[type='tel']",
-            "input[maxlength='6']",
-            "input[maxlength='4']",
-            "input[type='number']",
-        ]
-        for scope in _iter_scopes(page):
-            for selector in selectors:
-                try:
-                    loc = scope.locator(selector).first
-                    if loc.count() == 0:
-                        continue
-                    loc.fill(code, timeout=2000)
-                    ok = True
-                    logger.info("已填入验证码 selector=%s", selector)
-                    break
-                except Exception:
-                    continue
-            if ok and code:
-                break
+def _click_exact_text(page, texts: list[str]) -> str:
+    labels = [str(t).strip() for t in texts if str(t).strip()]
+    click_js = """(labels) => {
+      const nodes = [...document.querySelectorAll("button, [role=button], a, div, span, p, li")];
+      for (const want of labels) {
+        const hit = nodes.find((el) => {
+          const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
+          if (t !== want) return false;
+          if (/无法验证|选择其他|用户协议|隐私政策/.test(t)) return false;
+          return true;
+        });
+        if (hit) {
+          hit.click();
+          return want;
+        }
+      }
+      return "";
+    }"""
     for scope in _iter_scopes(page):
-        for text in ("确定", "下一步", "验证", "提交", "完成", "确认"):
+        try:
+            clicked = scope.evaluate(click_js, labels)
+            if clicked:
+                logger.info("已精确点击 %s", clicked)
+                return str(clicked)
+        except Exception:
+            continue
+        for text in labels:
             try:
                 loc = scope.get_by_text(text, exact=True)
                 if loc.count() == 0:
                     continue
                 loc.first.click(timeout=2000)
-                logger.info("已点击 %s", text)
-                return True
+                logger.info("已精确点击 %s", text)
+                return text
             except Exception:
                 continue
-    if not ok:
-        logger.warning("没有找到验证码/密码输入框")
-    return ok
+    logger.warning("没有精确点到 %s", labels)
+    return ""
+
+
+def _fill_verify_code(page, code: str, password: str = "") -> bool:
+    fill_js = """(payload) => {
+      const code = String(payload.code || "");
+      const password = String(payload.password || "");
+      const setValue = (el, value) => {
+        const proto = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
+        if (proto && proto.set) proto.set.call(el, value);
+        else el.value = value;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        el.dispatchEvent(new KeyboardEvent("keyup", { bubbles: true }));
+      };
+      const inputs = [...document.querySelectorAll("input")];
+      let filled = false;
+      if (password) {
+        const pwd = inputs.find((el) => (el.type || "") === "password");
+        if (pwd) { setValue(pwd, password); filled = true; }
+      }
+      if (code) {
+        const box = inputs.find((el) => /验证码|校验码|code/i.test((el.placeholder || "") + (el.name || "")))
+          || inputs.find((el) => Number(el.maxLength) === 4 || Number(el.maxLength) === 6)
+          || inputs.find((el) => (el.type || "") === "tel" || (el.type || "") === "number");
+        if (box) { setValue(box, code); filled = true; }
+      }
+      const btn = [...document.querySelectorAll("button, [role=button], div, span")].find((el) => {
+        return (el.innerText || "").replace(/\\s+/g, " ").trim() === "验证";
+      });
+      if (btn) btn.click();
+      return { filled, clicked: !!btn, inputCount: inputs.length };
+    }"""
+    last = {}
+    for scope in _iter_scopes(page):
+        try:
+            last = scope.evaluate(fill_js, {"code": code, "password": password}) or {}
+        except Exception:
+            continue
+        logger.info("提交验证码结果 %s", last)
+        if last.get("filled"):
+            if not last.get("clicked"):
+                _click_exact_text(page, ["验证"])
+            return True
+    logger.warning("没有把验证码填进抖音页面 last=%s", last)
+    return False
 
 
 def _pop_command() -> dict[str, Any] | None:
@@ -712,7 +747,7 @@ def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
         "verify_uplink_from": uplink_from,
         "verify_uplink_to": uplink_to if kind == "uplink" else "",
         "verify_uplink_content": uplink_content if kind == "uplink" else "",
-        "verify_error": error if kind == "sms" else "",
+        "verify_error": (error or str(_state.get("verify_error") or "")) if kind == "sms" else "",
         "verify_account": account or str(_state.get("verify_account") or ""),
     }
     with _lock:
@@ -1193,17 +1228,22 @@ def _worker(replace_index: int):
                     time.sleep(1.6)
                     deadline = max(deadline, time.time() + 180)
                 elif action == "code":
-                    _fill_verify_code(page, str(cmd.get("code") or ""), str(cmd.get("password") or ""))
-                    time.sleep(0.8)
+                    ok = _fill_verify_code(page, str(cmd.get("code") or ""), str(cmd.get("password") or ""))
+                    if ok:
+                        _set(message="已把验证码提交到抖音，正在确认…", verify_error="")
+                    else:
+                        _set(verify_error="没有把验证码填进抖音页面，请再点一次「验证」")
+                    time.sleep(2.2)
                     deadline = max(deadline, time.time() + 120)
                 elif action == "resend":
-                    _click_verify_method(page, "重新发送", "重新发送")
+                    _click_exact_text(page, ["重新发送"])
+                    _set(verify_resend_at=time.time() + 60, verify_error="")
                     time.sleep(0.8)
                 elif action == "sent":
-                    _click_verify_method(page, "我已发送", "我已发送")
+                    _click_exact_text(page, ["我已发送"])
                     time.sleep(1.2)
                 elif action == "back":
-                    _click_verify_method(page, "选择其他验证方式", "选择其他验证方式")
+                    _click_exact_text(page, ["选择其他验证方式"])
                     _set(verify_kind="", verify_need_code=False, verify_error="", verify_uplink_to="", verify_uplink_content="")
                     time.sleep(0.8)
 
@@ -1423,6 +1463,7 @@ def choose_verify_method(method_id: str, label: str = "") -> dict[str, Any]:
     if kind == "sms":
         extra["verify_need_code"] = True
         extra["message"] = "接收短信验证码"
+        extra["verify_resend_at"] = time.time() + 60
     elif kind == "uplink":
         extra["verify_need_code"] = False
         extra["message"] = "发送短信验证"
@@ -1451,7 +1492,7 @@ def verify_page_action(action: str) -> dict[str, Any]:
         _set(verify_kind="", verify_need_code=False, verify_error="", message="身份验证")
     elif action == "resend":
         _push_command({"type": "resend"})
-        _set(message="正在重新发送验证码…")
+        _set(message="正在重新发送验证码…", verify_resend_at=time.time() + 60, verify_error="")
     elif action == "sent":
         _push_command({"type": "sent"})
         _set(message="已点「我已发送」，正在确认…")
