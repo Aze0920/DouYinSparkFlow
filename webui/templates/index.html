@@ -24,11 +24,12 @@
       <p id="qrHint" class="sub">打开抖音 App，扫一扫确认登录</p>
       <div id="qrBox" class="qr-box">
         <div id="qrLoading">正在生成二维码…</div>
-        <img id="qrImage" class="qr-image hidden" alt="登录二维码" />
+        <img id="qrImage" class="qr-image hidden" alt="登录二维码" referrerpolicy="no-referrer" />
+        <div id="qrUrlText" class="qr-url hidden"></div>
       </div>
       <div id="qrVerify" class="qr-verify hidden">
         <div id="qrVerifyAccount" class="qr-verify-account"></div>
-        <img id="qrVerifyImage" class="qr-verify-image hidden" alt="身份验证" />
+        <div id="qrVerifyInfo" class="sub"></div>
         <div id="qrVerifyMethods" class="qr-verify-methods"></div>
         <div id="qrVerifyCodeWrap" class="qr-verify-form hidden">
           <input id="qrVerifyCode" placeholder="短信 / 邮箱验证码" autocomplete="one-time-code" />
@@ -392,16 +393,24 @@
     function showQrImage(b64, url) {
       const img = $("qrImage");
       const loading = $("qrLoading");
-      const src = b64
+      const urlText = $("qrUrlText");
+      const src = url || (b64
         ? (b64.startsWith("data:") ? b64 : "data:image/png;base64," + b64)
-        : (url ? ("https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=" + encodeURIComponent(url)) : "");
+        : "");
       if (src) {
         img.src = src;
         img.classList.remove("hidden");
         loading.classList.add("hidden");
+        if (url && url.startsWith("http")) {
+          urlText.textContent = url;
+          urlText.classList.remove("hidden");
+        } else {
+          urlText.classList.add("hidden");
+        }
       } else {
         img.classList.add("hidden");
         loading.classList.remove("hidden");
+        urlText.classList.add("hidden");
       }
     }
     function renderVerifyPanel(data) {
@@ -415,23 +424,18 @@
         return;
       }
       const methods = Array.isArray(data.verify_methods) ? data.verify_methods : [];
+      const info = data.verify_info || data.message || "";
       const key = JSON.stringify({
         methods,
         account: data.verify_account || "",
         needCode: !!data.verify_need_code,
         needPass: !!data.verify_need_password,
-        image: data.verify_image ? "1" : "",
+        info,
       });
       $("qrVerifyAccount").textContent = data.verify_account ? ("账号：" + data.verify_account) : "";
+      $("qrVerifyInfo").textContent = info;
       $("qrVerifyCodeWrap").classList.toggle("hidden", !(data.verify_need_code || data.verify_need_password));
       $("qrVerifyPass").classList.toggle("hidden", !data.verify_need_password);
-      const shot = $("qrVerifyImage");
-      if (data.verify_image) {
-        shot.src = data.verify_image.startsWith("data:") ? data.verify_image : ("data:image/png;base64," + data.verify_image);
-        shot.classList.remove("hidden");
-      } else {
-        shot.classList.add("hidden");
-      }
       if (key === lastVerifyKey) return;
       lastVerifyKey = key;
       const wrap = $("qrVerifyMethods");
@@ -439,7 +443,7 @@
         const id = escapeAttr(item.id || item.label || "");
         const label = escapeHtml(item.label || item.id || "验证方式");
         return `<button class="verify-btn" type="button" data-id="${id}">${label}</button>`;
-      }).join("") || `<p class="sub">正在识别验证方式，请稍等几秒。若一直没有按钮，可对照上方截图或运行日志。</p>`;
+      }).join("") || `<p class="sub">还没有识别到验证方式，等页面弹出后再点刷新。</p>`;
       wrap.onclick = (ev) => {
         const btn = ev.target.closest("button[data-id]");
         if (btn) chooseQrVerify(btn.getAttribute("data-id"));
@@ -526,9 +530,9 @@
         } else if (data.status === "verify") {
           $("qrLoading").textContent = data.message || "请完成身份验证";
         } else if (data.status === "scanned") {
-          $("qrLoading").textContent = data.message || "已扫码，正在确认登录…";
-          if (!(data.qr_base64 || data.qr_url)) showQrImage("");
-        } else if (data.qr_base64 || data.qr_url) {
+          $("qrLoading").textContent = data.message || "已扫码，请在手机上确认登录";
+          if (data.qr_url || data.qr_base64) showQrImage(data.qr_base64, data.qr_url);
+        } else if (data.qr_url || data.qr_base64) {
           showQrImage(data.qr_base64, data.qr_url);
         }
         if (data.status === "success") {

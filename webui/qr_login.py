@@ -42,7 +42,7 @@ _state: dict[str, Any] = {
     "verify_account": "",
     "verify_need_code": False,
     "verify_need_password": False,
-    "verify_image": "",
+    "verify_info": "",
 }
 
 
@@ -69,7 +69,7 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "verify_account": _state.get("verify_account") or "",
             "verify_need_code": bool(_state.get("verify_need_code")),
             "verify_need_password": bool(_state.get("verify_need_password")),
-            "verify_image": _state.get("verify_image") or "",
+            "verify_info": _state.get("verify_info") or "",
         }
         if include_cookies and data["status"] == "success":
             data["cookies"] = _state.get("cookies") or []
@@ -145,7 +145,7 @@ def _page_signals(page) -> dict[str, Any]:
                 loginStatus: localStorage.getItem("LOGIN_STATUS") || "",
                 hasScan: text.includes("扫码登录"),
                 hasEnjoy: text.includes("登录后免费畅享") || text.includes("打开「抖音APP」"),
-                hasVerify: text.includes("身份验证") || text.includes("完成身份验证"),
+                hasVerify: text.includes("身份验证") && (text.includes("为保障账号安全") || text.includes("确保为本人操作")),
                 hasChat: !!(document.querySelector("[class*='conversation']") || document.querySelector("[class*='Conversation']")),
               };
             }"""
@@ -213,48 +213,73 @@ VERIFY_WAY_LABELS = {
     "voice_verify": "语音验证码",
     "question": "安全问题",
 }
-VERIFY_SCAN_JS = """(keys) => {
+VERIFY_SCAN_JS = """() => {
   const bodyText = (document.body && document.body.innerText) || "";
-  const visible = bodyText.includes("身份验证") || bodyText.includes("完成身份验证") || bodyText.includes("确保为本人操作");
-  const methods = [];
-  const seen = new Set();
-  const push = (label, id) => {
-    const t = String(label || "").replace(/\\s+/g, " ").trim();
-    if (!t || t.length > 48 || seen.has(t)) return;
-    seen.add(t);
-    methods.push({ id: String(id || t), label: t });
-  };
-  const nodes = document.querySelectorAll("button, [role=button], li, a, p, span, div");
-  for (const el of nodes) {
-    if (el.children && el.children.length > 6) continue;
-    const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
-    if (!t || t.length > 40) continue;
-    for (const k of keys) {
-      if (t === k || t.includes(k)) {
-        push(t.length <= 24 ? t : k, t);
-        break;
-      }
+  const visible = bodyText.includes("身份验证") && (
+    bodyText.includes("为保障账号安全") ||
+    bodyText.includes("确保为本人操作") ||
+    bodyText.includes("接收短信") ||
+    bodyText.includes("发送短信")
+  );
+  if (!visible) {
+    return { visible: false, methods: [], account: "", needCode: false, needPassword: false, info: "" };
+  }
+  let dialog = null;
+  let best = 1e9;
+  for (const el of document.querySelectorAll("div")) {
+    const t = el.innerText || "";
+    if (!t.includes("身份验证") || t.length < 24 || t.length > 1600) continue;
+    if (t.length < best) {
+      best = t.length;
+      dialog = el;
     }
   }
-  const lines = bodyText.split(/\\n+/).map((s) => s.trim()).filter(Boolean);
+  const root = dialog || document.body;
+  const skipRe = /身份验证|为保障|账号安全|本人操作|请先完成|返回|关闭/;
+  const methods = [];
+  const seen = new Set();
+  const push = (label) => {
+    const t = String(label || "").replace(/\\s+/g, " ").trim();
+    if (!t || t.length > 36 || seen.has(t) || skipRe.test(t)) return;
+    seen.add(t);
+    methods.push({ id: t, label: t });
+  };
+  for (const el of root.querySelectorAll("button, [role=button], li, a, div, p, span")) {
+    const t = (el.innerText || "").replace(/\\s+/g, " ").trim();
+    if (!t || t.length < 2 || t.length > 36) continue;
+    if (el.querySelectorAll("button, [role=button]").length) continue;
+    const style = window.getComputedStyle(el);
+    const clickable = el.tagName === "BUTTON" || el.getAttribute("role") === "button" || style.cursor === "pointer";
+    const looksLike = /验证|短信|邮箱|密码|人脸|语音|认证/.test(t);
+    if (clickable || looksLike) push(t);
+  }
+  const lines = (root.innerText || "").split(/\\n+/).map((s) => s.trim()).filter(Boolean);
   const head = lines.findIndex((l) => l.includes("身份验证"));
   let account = "";
   if (head >= 0) {
     for (let i = head + 1; i < Math.min(lines.length, head + 12); i++) {
       const line = lines[i];
-      if (!line || line.length > 20) continue;
-      if (/验证|短信|邮箱|密码|人脸|保障|账号安全|本人操作/.test(line)) continue;
+      if (!line || line.length > 20 || skipRe.test(line) || /验证|短信|邮箱|密码|人脸/.test(line)) continue;
       account = line;
       break;
     }
   }
-  const inputs = [...document.querySelectorAll("input")];
-  const needCode = inputs.some((el) => {
-    const hint = ((el.placeholder || "") + (el.name || "") + (el.getAttribute("maxlength") || "")).toLowerCase();
-    return hint.includes("验证码") || hint.includes("code") || el.maxLength === 4 || el.maxLength === 6;
-  });
+  if (!methods.length) {
+    for (const line of lines) {
+      if (/验证|短信|邮箱|密码|人脸|语音/.test(line) && line.length <= 24) push(line);
+    }
+  }
+  const inputs = [...root.querySelectorAll("input")];
+  const needCode = inputs.some((el) => /验证码|code/i.test((el.placeholder || "") + (el.name || "")));
   const needPassword = inputs.some((el) => (el.type || "") === "password");
-  return { visible, methods, account, needCode, needPassword, href: location.href, snippet: bodyText.slice(0, 500) };
+  return {
+    visible: true,
+    methods,
+    account,
+    needCode,
+    needPassword,
+    info: (root.innerText || "").replace(/\\s+/g, " ").trim().slice(0, 500),
+  };
 }"""
 
 
@@ -318,6 +343,16 @@ def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
     token = data.get("token")
     if token:
         bag["token"] = str(token)
+    qr_url = data.get("qrcode_url") or data.get("qr_url") or ""
+    if isinstance(qr_url, str) and qr_url.startswith(("http://", "https://", "data:image")):
+        bag["qr_url"] = qr_url
+    qrcode = data.get("qrcode")
+    if isinstance(qrcode, str) and len(qrcode) > 80:
+        bag["qr_url"] = qrcode if qrcode.startswith("data:") else f"data:image/png;base64,{qrcode.split(',', 1)[-1]}"
+    if not bag.get("qr_url"):
+        index_url = data.get("qrcode_index_url") or ""
+        if isinstance(index_url, str) and index_url.startswith(("http://", "https://")):
+            bag["qr_url"] = index_url
     status = data.get("status")
     if status is not None and status != "":
         bag["qr_status"] = str(status)
@@ -328,14 +363,15 @@ def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
     nick = data.get("nickname") or data.get("screen_name") or data.get("name")
     if isinstance(nick, str) and nick.strip() and nick not in ("douyin", "抖音"):
         bag["account"] = nick.strip()
+    echo = data.get("description") or data.get("message") or data.get("msg") or data.get("toast") or data.get("error_message")
+    if isinstance(echo, str) and echo.strip():
+        bag["echo"] = echo.strip()
+        logger.info("抓包回传信息 %s", echo.strip()[:200])
     methods: list[dict[str, str]] = []
     _collect_methods_from_obj(payload, methods)
     if methods:
         bag["methods"] = _uniq_methods((bag.get("methods") or []) + methods)
         logger.info("抓包验证方式 %s", bag["methods"])
-    text_blob = json.dumps(payload, ensure_ascii=False)
-    if "身份验证" in text_blob or "verify_way" in text_blob or "verify_ways" in text_blob:
-        bag["need_verify"] = True
 
 
 def _attach_sniffer(page, bag: dict[str, Any]):
@@ -374,28 +410,17 @@ def _attach_sniffer(page, bag: dict[str, Any]):
 
 
 def _scan_verify_ui(page) -> dict[str, Any]:
-    keys = list(dict.fromkeys(list(VERIFY_WAY_LABELS.values()) + [
-        "接收短信验证码",
-        "发送短信验证",
-        "短信验证码",
-        "发送短信",
-        "邮箱验证",
-        "密码验证",
-        "人脸验证",
-        "语音验证码",
-        "安全问题",
-    ]))
     merged = {
         "visible": False,
         "methods": [],
         "account": "",
         "needCode": False,
         "needPassword": False,
-        "snippet": "",
+        "info": "",
     }
     for scope in _iter_scopes(page):
         try:
-            part = scope.evaluate(VERIFY_SCAN_JS, keys) or {}
+            part = scope.evaluate(VERIFY_SCAN_JS) or {}
         except Exception:
             continue
         if part.get("visible"):
@@ -406,62 +431,42 @@ def _scan_verify_ui(page) -> dict[str, Any]:
             merged["needPassword"] = True
         if part.get("account") and not merged["account"]:
             merged["account"] = str(part.get("account") or "")
-        if part.get("snippet") and not merged["snippet"]:
-            merged["snippet"] = str(part.get("snippet") or "")
+        if part.get("info") and not merged["info"]:
+            merged["info"] = str(part.get("info") or "")
         merged["methods"].extend(part.get("methods") or [])
     merged["methods"] = _uniq_methods(merged["methods"])
     return merged
-
-
-def _capture_verify_image(page) -> str:
-    selectors = [
-        "div:has-text('身份验证')",
-        "text=身份验证",
-    ]
-    for scope in _iter_scopes(page):
-        for selector in selectors:
-            try:
-                loc = scope.locator(selector).last
-                if loc.count() == 0:
-                    continue
-                box = loc.bounding_box()
-                if box and box["width"] < 180:
-                    continue
-                png = loc.screenshot()
-                if png and len(png) > 1200:
-                    return base64.b64encode(png).decode("ascii")
-            except Exception:
-                continue
-    try:
-        png = page.screenshot()
-        if png:
-            return base64.b64encode(png).decode("ascii")
-    except Exception:
-        logger.debug("身份验证截图失败", exc_info=True)
-    return ""
 
 
 def _click_verify_method(page, method_id: str) -> bool:
     label = str(method_id or "").strip()
     if not label:
         return False
-    candidates = [label]
-    for prefix in ("接收", "发送"):
-        if label.startswith(prefix) is False and prefix in label:
-            pass
-    if "（" in label:
-        candidates.append(label.split("（", 1)[0].strip())
+    click_js = """(label) => {
+      const want = String(label || "").replace(/\\s+/g, " ").trim();
+      const nodes = [...document.querySelectorAll("button, [role=button], li, a, div, p, span")];
+      const hit = nodes.find((el) => (el.innerText || "").replace(/\\s+/g, " ").trim() === want)
+        || nodes.find((el) => (el.innerText || "").replace(/\\s+/g, " ").trim().includes(want));
+      if (!hit) return false;
+      hit.click();
+      return true;
+    }"""
     for scope in _iter_scopes(page):
-        for text in candidates:
-            try:
-                loc = scope.get_by_text(text, exact=True)
-                if loc.count() == 0:
-                    loc = scope.get_by_text(text, exact=False)
-                loc.first.click(timeout=2500)
-                logger.info("已点击验证方式 %s", text)
+        try:
+            if scope.evaluate(click_js, label):
+                logger.info("已点击验证方式 %s", label)
                 return True
-            except Exception:
-                continue
+        except Exception:
+            continue
+        try:
+            loc = scope.get_by_text(label, exact=True)
+            if loc.count() == 0:
+                loc = scope.get_by_text(label, exact=False)
+            loc.first.click(timeout=2500)
+            logger.info("已点击验证方式 %s", label)
+            return True
+        except Exception:
+            continue
     logger.warning("没有点到验证方式 %s", label)
     return False
 
@@ -541,33 +546,24 @@ def _status() -> str:
         return str(_state.get("status") or "idle")
 
 
-def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any], shot: str = ""):
+def _publish_verify(ui: dict[str, Any], sniff: dict[str, Any]):
     methods = _uniq_methods((ui.get("methods") or []) + (sniff.get("methods") or []))
     account = str(ui.get("account") or sniff.get("account") or "")
-    need_code = bool(ui.get("needCode") or sniff.get("need_code"))
-    need_password = bool(ui.get("needPassword"))
+    info = str(ui.get("info") or sniff.get("echo") or "").strip()
     payload = {
         "status": "verify",
-        "message": "扫码成功，请选择身份验证方式",
+        "message": info or "请选择身份验证方式",
         "qr_base64": "",
-        "qr_url": "",
-        "verify_need_code": need_code,
-        "verify_need_password": need_password,
+        "verify_need_code": bool(ui.get("needCode")),
+        "verify_need_password": bool(ui.get("needPassword")),
+        "verify_info": info,
+        "verify_methods": methods,
     }
-    if methods:
-        payload["verify_methods"] = methods
-        payload["message"] = "扫码成功，请选择一种身份验证方式"
     if account:
         payload["verify_account"] = account
-        payload["message"] = f"扫码成功，请完成「{account}」的身份验证"
-    if shot:
-        payload["verify_image"] = shot
-    if need_code:
-        payload["message"] = (payload["message"] + "，并填写验证码").replace("，并填写验证码，并填写验证码", "，并填写验证码")
     with _lock:
-        same = all(_state.get(key) == value for key, value in payload.items() if key != "verify_image")
-        has_image = bool(_state.get("verify_image"))
-    if same and (not shot or has_image):
+        same = all(_state.get(key) == value for key, value in payload.items())
+    if same:
         return
     _set(**payload)
 
@@ -760,40 +756,66 @@ def _iter_scopes(page):
         return
 
 
-def _capture_qr_image(page) -> str:
-    selectors = [
-        "#animate_qrcode_container img",
-        "img[src*='qrcode']",
-        "img[src*='qr']",
-        "img[alt*='二维码']",
-        "img[alt*='扫码']",
-        "[class*='qrcode'] img",
-        "[class*='qr-code'] img",
-        "[class*='Qrcode'] img",
-        "[class*='qrcode'] canvas",
-        "[class*='scan'] img",
-        "div:has-text('扫码登录') img",
-        "div:has-text('打开「抖音APP」') img",
-        "div:has-text('扫一扫') img",
-        "div:has-text('登录后免费畅享') img",
-    ]
+EXTRACT_QR_JS = """() => {
+  const toSrc = (img) => {
+    if (!img) return "";
+    const src = img.currentSrc || img.src || img.getAttribute("src") || "";
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (w && (w < 80 || h < 80)) return "";
+    return src || "";
+  };
+  const blobToData = (img) => {
+    try {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth || img.width || 0;
+      canvas.height = img.naturalHeight || img.height || 0;
+      if (canvas.width < 80 || canvas.height < 80) return "";
+      canvas.getContext("2d").drawImage(img, 0, 0);
+      return canvas.toDataURL("image/png");
+    } catch (e) {
+      return "";
+    }
+  };
+  const normalize = (img) => {
+    let src = toSrc(img);
+    if (src.startsWith("blob:")) src = blobToData(img) || src;
+    return src;
+  };
+  const selectors = [
+    "#animate_qrcode_container img",
+    "img[src*='qrcode']",
+    "img[src*='qr']",
+    "[class*='qrcode'] img",
+    "[class*='Qrcode'] img",
+    "[class*='qr-code'] img",
+  ];
+  for (const sel of selectors) {
+    const src = normalize(document.querySelector(sel));
+    if (src && !src.startsWith("blob:")) return { src, sel };
+  }
+  for (const img of document.querySelectorAll("img")) {
+    const w = img.naturalWidth || img.width || 0;
+    const h = img.naturalHeight || img.height || 0;
+    if (w < 120 || h < 120 || w > 480 || Math.abs(w - h) > 40) continue;
+    const src = normalize(img);
+    if (src && !src.startsWith("blob:")) return { src, sel: "square-img" };
+  }
+  return { src: "", sel: "" };
+}"""
+
+
+def _extract_qr_url(page) -> str:
     for scope in _iter_scopes(page):
-        for selector in selectors:
-            try:
-                loc = scope.locator(selector).first
-                if loc.count() == 0:
-                    continue
-                loc.wait_for(state="visible", timeout=1200)
-                box = loc.bounding_box()
-                if box and (box["width"] < 90 or box["height"] < 90):
-                    continue
-                png = loc.screenshot()
-                if png and len(png) > 800:
-                    logger.info("页面截到二维码 selector=%s size=%s", selector, len(png))
-                    return base64.b64encode(png).decode("ascii")
-            except Exception:
-                continue
-    logger.warning("页面上没有截到二维码 url=%s frames=%s", getattr(page, "url", ""), len(getattr(page, "frames", []) or []))
+        try:
+            data = scope.evaluate(EXTRACT_QR_JS) or {}
+        except Exception:
+            continue
+        src = str(data.get("src") or "").strip()
+        if src:
+            logger.info("拿到二维码 url selector=%s prefix=%s", data.get("sel"), src[:120])
+            return src
+    logger.warning("页面上没有二维码 url=%s frames=%s", getattr(page, "url", ""), len(getattr(page, "frames", []) or []))
     return ""
 
 
@@ -805,22 +827,16 @@ def _wait_chat_qr(page) -> str:
         page.wait_for_selector("text=扫码登录", timeout=12000)
         logger.info("已出现扫码登录弹窗")
     except Exception:
-        logger.warning("12 秒内没等到「扫码登录」文案，继续截图尝试")
-    qr_png = ""
+        logger.warning("12 秒内没等到「扫码登录」文案，继续取二维码地址")
     for attempt in range(12):
         if _stop.is_set():
             return ""
-        qr_png = _capture_qr_image(page)
-        if qr_png:
-            return qr_png
-        logger.info("第 %s 次未截到二维码，继续等", attempt + 1)
+        qr_url = _extract_qr_url(page)
+        if qr_url:
+            return qr_url
+        logger.info("第 %s 次未拿到二维码地址，继续等", attempt + 1)
         time.sleep(1)
-    try:
-        DEBUG_SHOT.parent.mkdir(parents=True, exist_ok=True)
-        page.screenshot(path=str(DEBUG_SHOT))
-        logger.error("截二维码失败，已保存调试图 %s", DEBUG_SHOT)
-    except Exception:
-        logger.exception("保存调试截图失败")
+    logger.error("没有拿到二维码地址")
     return ""
 
 
@@ -942,7 +958,7 @@ def _worker(replace_index: int):
             verify_account="",
             verify_need_code=False,
             verify_need_password=False,
-            verify_image="",
+            verify_info="",
         )
         logger.info("扫码线程启动 replace_index=%s", replace_index)
         logger.info("正在启动浏览器")
@@ -971,29 +987,36 @@ def _worker(replace_index: int):
         except Exception:
             logger.warning("写入 s_v_web_id cookie 失败", exc_info=True)
         try:
-            qr_png = _wait_chat_qr(page)
+            qr_url = _wait_chat_qr(page)
         except Exception:
             logger.exception("打开抖音私信页失败")
-            qr_png = ""
+            qr_url = ""
 
-        token, qr_url = "", ""
-        if not qr_png:
-            logger.info("页面未截到二维码，再试 SSO 接口")
-            token, api_png, qr_url = _request_qr(context, fp)
-            qr_png = api_png
+        token = str(sniff.get("token") or "")
+        if sniff.get("qr_url") and not qr_url:
+            qr_url = str(sniff.get("qr_url") or "")
+            logger.info("从页面抓包拿到二维码地址")
+        if not qr_url:
+            logger.info("页面未拿到二维码地址，再试 SSO 接口")
+            token2, api_png, api_url = _request_qr(context, fp)
+            token = token or token2
+            if api_url:
+                qr_url = api_url
+            elif api_png:
+                qr_url = api_png if str(api_png).startswith("data:") else f"data:image/png;base64,{api_png}"
         if sniff.get("token") and not token:
             token = str(sniff.get("token") or "")
             logger.info("从页面抓包拿到扫码 token")
 
-        if not qr_png and not qr_url and not token:
-            logger.error("获取二维码失败：token、图片、链接都为空")
+        if not qr_url:
+            logger.error("获取二维码失败：没有二维码地址")
             _set(status="error", message="获取二维码失败，请稍后点「刷新二维码」再试")
             return
 
         _set(
             status="waiting",
             message="请用抖音 App 扫码，并在手机上确认登录",
-            qr_base64=qr_png,
+            qr_base64="",
             qr_url=qr_url,
         )
 
@@ -1001,8 +1024,7 @@ def _worker(replace_index: int):
         last_shot = 0
         last_cookie_log = 0
         missing_qr = 0
-        had_qr = bool(qr_png)
-        verify_shot_done = False
+        had_qr = bool(qr_url)
         verify_gone = 0
         while time.time() < deadline and not _stop.is_set():
             cmd = _pop_command()
@@ -1010,30 +1032,27 @@ def _worker(replace_index: int):
                 action = str(cmd.get("type") or "")
                 if action == "choose":
                     _click_verify_method(page, str(cmd.get("id") or ""))
+                    time.sleep(0.8)
                     deadline = max(deadline, time.time() + 180)
                 elif action == "code":
                     _fill_verify_code(page, str(cmd.get("code") or ""), str(cmd.get("password") or ""))
+                    time.sleep(0.8)
                     deadline = max(deadline, time.time() + 120)
 
             if sniff.get("token") and not token:
                 token = str(sniff.get("token") or "")
 
             ui = _scan_verify_ui(page)
-            in_verify = bool(ui.get("visible") or ui.get("methods") or sniff.get("methods") or sniff.get("need_verify") or _status() == "verify")
-            if ui.get("visible") or ui.get("methods") or sniff.get("methods") or sniff.get("need_verify"):
+            in_verify = bool(ui.get("visible"))
+            if in_verify:
                 deadline = max(deadline, time.time() + 240)
-                shot = ""
-                if not verify_shot_done:
-                    shot = _capture_verify_image(page)
-                    verify_shot_done = True
-                    logger.info(
-                        "已进入身份验证 methods=%s account=%s snippet=%s",
-                        ui.get("methods"),
-                        ui.get("account"),
-                        (ui.get("snippet") or "")[:180],
-                    )
-                _publish_verify(ui, sniff, shot)
-                in_verify = True
+                logger.info(
+                    "已进入身份验证 methods=%s account=%s info=%s",
+                    ui.get("methods"),
+                    ui.get("account"),
+                    (ui.get("info") or "")[:180],
+                )
+                _publish_verify(ui, sniff)
             elif _status() == "verify":
                 _publish_verify(ui, sniff)
                 in_verify = True
@@ -1041,11 +1060,11 @@ def _worker(replace_index: int):
             sniff_status = str(sniff.get("qr_status") or "")
             if not in_verify:
                 if sniff_status == "2" and _status() == "waiting":
-                    _set(status="scanned", message="已扫码，请在手机上确认登录")
+                    _set(status="scanned", message=str(sniff.get("echo") or "已扫码，请在手机上确认登录"))
                 elif sniff_status in ("3", "4") or sniff.get("redirect"):
                     redirect = str(sniff.pop("redirect", "") or "")
                     sniff["qr_status"] = ""
-                    _set(status="scanned", message="已确认，正在进入下一步…")
+                    _set(status="scanned", message=str(sniff.get("echo") or "已确认，正在进入下一步…"))
                     _follow_login_redirect(page, context, redirect or None)
 
             if token and not in_verify:
@@ -1094,16 +1113,14 @@ def _worker(replace_index: int):
                 logger.info("等待扫码中 url=%s status=%s cookies=%s", page.url, _status(), list(_cookie_map(context)))
                 last_cookie_log = now
             if _status() != "verify" and now - last_shot > 2:
-                shot = _capture_qr_image(page)
-                if shot:
+                fresh = _extract_qr_url(page) or str(sniff.get("qr_url") or "")
+                if fresh:
                     had_qr = True
                     missing_qr = 0
-                    _set(qr_base64=shot)
+                    _set(qr_url=fresh, qr_base64="")
                 elif had_qr:
                     missing_qr += 1
-                    logger.info("二维码已消失 %s 次，检查是否进入身份验证", missing_qr)
-                    if missing_qr >= 2 and not ui.get("visible"):
-                        _set(status="scanned", message="二维码已消失，正在确认登录态…")
+                    logger.info("二维码地址已消失 %s 次", missing_qr)
                 last_shot = now
             time.sleep(1)
         else:
@@ -1190,7 +1207,7 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
         verify_account="",
         verify_need_code=False,
         verify_need_password=False,
-        verify_image="",
+        verify_info="",
     )
     _thread = threading.Thread(target=_worker, args=(replace_index,), daemon=True)
     _thread.start()
@@ -1211,7 +1228,7 @@ def cancel_qr_login() -> dict[str, Any]:
         verify_account="",
         verify_need_code=False,
         verify_need_password=False,
-        verify_image="",
+        verify_info="",
     )
     return snapshot()
 
