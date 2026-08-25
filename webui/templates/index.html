@@ -153,27 +153,28 @@
         </div>
         <section class="panel" id="pushplusPanel">
           <div class="panel-head">
-            <h2>PushPlus</h2>
+            <h2>我的微信通知</h2>
             <span class="ck-status" id="ppBindStatus">未绑定</span>
           </div>
-          <p class="sub">打开 <a href="https://www.pushplus.plus" target="_blank" rel="noreferrer">pushplus.plus</a> 微信登录，进入个人中心复制 <b>用户token</b> 粘贴保存。也可以扫下面的码绑定。这和设置里的微信公众号不是一回事。</p>
+          <p class="sub" id="ppUserHint">这里给当前登录的客户绑定自己的微信。你名下的抖音号只会推到你绑的这个号，别人的号不会发过来。</p>
           <div class="grid two">
             <label class="span-2">PushPlus 用户token
-              <input id="ppTokenInput" placeholder="在 pushplus.plus 个人中心复制，不要填公众号 Token" autocomplete="off" />
+              <input id="ppTokenInput" placeholder="打开 pushplus.plus 登录后，个人中心复制用户token" autocomplete="off" />
             </label>
             <label class="span-2">
               <span class="pp-actions" style="margin-top:0">
                 <button class="btn-primary" type="button" onclick="savePushplusToken()">保存并测试</button>
                 <button class="btn-ghost" type="button" onclick="testPushplusBind()">发送测试</button>
                 <button class="btn-ghost" type="button" onclick="unbindPushplus()">解绑</button>
+                <button class="btn-ghost" type="button" onclick="refreshPushplusQr()">扫码绑定</button>
               </span>
             </label>
           </div>
           <p class="sub" id="ppBoundText"></p>
-          <div id="ppUnbound" class="pp-bind-box">
+          <div id="ppUnbound" class="pp-bind-box hidden">
             <img id="ppQrImage" class="qr-image hidden" alt="PushPlus 绑定二维码" referrerpolicy="no-referrer" />
             <div>
-              <div id="ppQrHint">也可以扫码绑定。二维码过期就点刷新。</div>
+              <div id="ppQrHint">用微信扫码后，会绑到当前这个登录账号。</div>
               <div class="pp-actions">
                 <button class="btn-ghost" type="button" onclick="refreshPushplusQr()">刷新二维码</button>
               </div>
@@ -476,7 +477,7 @@
       if (name === "users" && isAdmin()) loadUsers();
       if (name === "cards" && isAdmin()) loadCards();
       if (name === "settings" && isAdmin()) loadNotifySettings();
-      if (name === "home") ensurePushplusQr();
+      if (name === "home") renderPushplusPanel(current || {});
     }
     window.addEventListener("popstate", () => {
       showPage(pathToPage(location.pathname), { skipHistory: true });
@@ -646,11 +647,15 @@
       const operate = canSpark();
       const ck = cookieStatusMeta(data);
       const source = cookieSourceText(data);
+      const ownerName = data.owner || (current && current.username) || "";
+      const notifyHint = data.pushplus_bound
+        ? ("消息发给 " + ownerName + " 绑定的微信")
+        : ("消息发给 " + (ownerName || "所属用户") + "，对方还没绑定微信");
       return `<div class="account" data-index="${index}">
         <div class="account-head">
           <div>
             <strong>${escapeHtml(name)}</strong>
-            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${escapeHtml(source)}${isAdmin() && data.owner ? " · 所属 " + escapeHtml(data.owner) : ""}</div>
+            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${escapeHtml(source)}${isAdmin() && data.owner ? " · 所属 " + escapeHtml(data.owner) : ""} · ${escapeHtml(notifyHint)}</div>
           </div>
           <div class="account-head-right">
             <span class="ck-status ${ck.cls}">${ck.text}</span>
@@ -1532,23 +1537,29 @@
       }
     }
     function renderPushplusPanel(data) {
-      data = data || {};
+      data = data || current || {};
       const waiting = ppWaiting || !!data.waiting;
       const bound = !!(data.bound || data.pushplus_bound);
       const mask = data.mask || data.pushplus_mask || "";
+      const who = (current && current.username) || "当前用户";
+      if ($("ppUserHint")) {
+        $("ppUserHint").textContent =
+          "你现在登录的是「" + who + "」。这里绑的是你自己的微信。你名下的抖音号（比如你加的号）续火花、掉线只会发到你绑的这个微信。别人用自己的账号登录去绑，不会跟你混在一起。";
+      }
       if ($("ppBindStatus")) {
-        $("ppBindStatus").textContent = bound ? "已绑定" : (waiting ? "等待扫码" : "未绑定");
+        $("ppBindStatus").textContent = bound ? ("已绑定 · " + who) : (waiting ? "等待扫码" : "未绑定");
         $("ppBindStatus").className = "ck-status " + (bound ? "ck-ok" : "ck-unknown");
       }
       if ($("ppBoundText")) {
         $("ppBoundText").textContent = bound
-          ? ("当前已保存 token" + (mask ? " · " + mask : "") + "。若提示令牌不正确，到 pushplus.plus 个人中心重新复制用户token 保存。")
-          : "还没保存可用的 PushPlus 用户token。";
+          ? ("「" + who + "」已绑定" + (mask ? " · " + mask : "") + "。这个登录账号下的抖音号都会推到这里。")
+          : ("「" + who + "」还没绑定。打开 pushplus.plus 复制用户token 保存，或点扫码绑定。");
       }
+      if ($("ppUnbound")) $("ppUnbound").classList.toggle("hidden", !waiting);
       if ($("ppQrHint")) {
         $("ppQrHint").textContent = waiting
-          ? "请用微信扫码。扫完会自动绑定到当前登录账号。"
-          : "也可以扫码绑定。二维码过期就点刷新。";
+          ? ("请用微信扫码，会绑到「" + who + "」这个登录账号。")
+          : "点「扫码绑定」后才会显示二维码。";
       }
     }
     async function savePushplusToken() {
@@ -1570,6 +1581,7 @@
         if ($("ppTokenInput")) $("ppTokenInput").value = "";
         renderPushplusPanel(data);
         toast(data.message || "已保存并发送测试");
+        try { await loadConfig(); } catch (e) {}
       } catch (err) {
         toast(err.message, "err");
       }
@@ -1668,9 +1680,9 @@
           current.pushplus_bound = false;
           current.pushplus_mask = "";
         }
-        renderPushplusPanel(data);
+        renderPushplusPanel({ bound: false, waiting: false });
         toast("已解绑");
-        await ensurePushplusQr();
+        try { await loadConfig(); } catch (e) {}
       } catch (err) {
         toast(err.message, "err");
       }

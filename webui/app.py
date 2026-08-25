@@ -212,7 +212,6 @@ def _notify_account_owners(kind: str, title: str, unique_ids=None, extra: str = 
         label = str(acc.get("username") or uid)
         grouped.setdefault(owner, []).append(label)
     if not grouped:
-        notify_event(kind, title, extra or "相关账号")
         return
     for owner, names in grouped.items():
         body = "、".join(names)
@@ -905,10 +904,14 @@ def get_config(request: Request):
     accounts = []
     for item in parse_accounts(env):
         cookie_raw = env.get(cookie_key(item["unique_id"]), "")
+        owner = _account_owner(item)
+        pp = public_pushplus(find_user(owner) if owner else None)
         accounts.append(
             {
                 **item,
                 "cookies": cookie_raw if isinstance(cookie_raw, str) else json.dumps(cookie_raw, ensure_ascii=False),
+                "owner": owner,
+                "pushplus_bound": bool(pp.get("bound")),
             }
         )
     return {
