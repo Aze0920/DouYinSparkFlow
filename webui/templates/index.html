@@ -153,10 +153,10 @@
         </div>
         <section class="panel" id="pushplusPanel">
           <div class="panel-head">
-            <h2>微信推送</h2>
+            <h2>PushPlus</h2>
             <span class="ck-status" id="ppBindStatus">未绑定</span>
           </div>
-          <p class="sub">用微信扫码关注 PushPlus 后，续火花完成、失败、抖音掉线会发到你自己的微信。管理员和普通用户都要各自绑一次。</p>
+          <p class="sub">用微信扫这个码，关注的是 PushPlus 官方公众号，不是咱们自己的公众号。扫完后，续火花完成、失败、抖音掉线会发到你微信。管理员和普通用户都要各自绑一次。</p>
           <div id="ppUnbound" class="pp-bind-box">
             <img id="ppQrImage" class="qr-image hidden" alt="PushPlus 绑定二维码" referrerpolicy="no-referrer" />
             <div>
@@ -261,8 +261,9 @@
         <section class="panel">
           <div class="panel-head">
             <h2>推送事件</h2>
+            <button class="btn-primary" type="button" onclick="return navTo(event, 'home')">去总览绑定 PushPlus</button>
           </div>
-          <p class="sub">控制哪些事件会推送。PushPlus 在总览扫码绑定；这里只管开哪些事件，以及可选的公众号模板。</p>
+          <p class="sub">PushPlus 绑定入口在「总览」，扫的是 PushPlus 官方码，不是自己的微信公众号。这里只勾选哪些事件要发。</p>
           <div class="grid two">
             <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
             <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
@@ -271,33 +272,6 @@
               <span class="row">
                 <button class="btn-primary" type="button" onclick="saveNotifySettings()">保存设置</button>
               </span>
-            </label>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>微信公众号（可选）</h2>
-            <span class="ck-status" id="wxBindStatus">未绑定</span>
-          </div>
-          <p class="sub">公众号登录和服务器配置先不做。模板通道以后再用。</p>
-          <div class="grid two">
-            <label class="check-line"><input id="wxEnabled" type="checkbox" /> 启用公众号推送</label>
-            <label>AppID<input id="wxAppId" placeholder="wx 开头的公众号 AppID" autocomplete="off" /></label>
-            <label>AppSecret<input id="wxAppSecret" type="password" placeholder="公众号 AppSecret" autocomplete="off" /></label>
-            <label>管理员 OpenID<input id="wxOpenId" placeholder="关注公众号后的 OpenID" autocomplete="off" /></label>
-            <label>Token<input id="wxToken" placeholder="服务器配置里的 Token" autocomplete="off" /></label>
-            <label>EncodingAESKey<input id="wxAesKey" placeholder="可选，安全模式才需要" autocomplete="off" /></label>
-            <label>完成模板 ID<input id="wxTplDone" placeholder="续火花完成" autocomplete="off" /></label>
-            <label>失败模板 ID<input id="wxTplFail" placeholder="续火花失败" autocomplete="off" /></label>
-            <label>掉线模板 ID<input id="wxTplOffline" placeholder="Cookie 失效 / 抖音掉线" autocomplete="off" /></label>
-            <label>模板字段
-              <select id="wxTplStyle">
-                <option value="thing">新版 thing1 / time2 / thing3</option>
-                <option value="keyword">旧版 first / keyword / remark</option>
-              </select>
-            </label>
-            <label class="span-2">
-              <button class="btn-ghost" type="button" onclick="testNotifySettings()">发送公众号测试</button>
             </label>
           </div>
         </section>
@@ -457,7 +431,7 @@
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "管理员永久有效。普通用户的天数和账号额度由卡密或这里指定"],
         cards: ["卡密管理", "一排一张卡密，生成后可复制发给用户"],
-        settings: ["设置", "推送事件和可选的公众号模板"],
+        settings: ["设置", "勾选哪些事件发给 PushPlus"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
