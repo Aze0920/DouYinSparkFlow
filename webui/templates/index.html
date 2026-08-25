@@ -99,7 +99,7 @@
         <div class="cards">
           <article class="card"><label>本地版本</label><strong id="localVersion">-</strong></article>
           <article class="card"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
-          <article class="card"><label>定时发送</label><strong id="cronText">-</strong></article>
+          <article class="card"><label>账号定时</label><strong id="cronText">-</strong></article>
           <article class="card"><label>账号数量</label><strong id="accountCount">-</strong></article>
         </div>
         <section class="panel">
@@ -117,14 +117,10 @@
             <h2>抖音账号与发送策略</h2>
             <div class="admin-only hidden">
               <button class="btn-ghost" onclick="startQrLogin(-1)">添加账号</button>
-              <button class="btn-ghost" onclick="saveConfig()">保存配置</button>
-              <button class="btn-run" id="runBtn" onclick="runNow()">立即续火花</button>
+              <button class="btn-ghost" onclick="saveGlobalSettings()">保存模板</button>
             </div>
           </div>
           <div class="grid two">
-            <label>每天发送时间
-              <input id="cronTime" placeholder="例如 9:00" />
-            </label>
             <label>同时处理账号数
               <input id="maxTaskThreads" type="number" min="1" max="32" value="10" title="一个账号一条线程，给多个好友发也在同一线程。最多 32。" />
             </label>
@@ -132,8 +128,9 @@
               <textarea id="messageTemplate" rows="3"></textarea>
             </label>
           </div>
+          <p class="sub">模板和并发数是全局的。每个账号自己选每天几点发、自己保存、自己点续火花。窗口够宽时一排会自动排多张卡片。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，用抖音 App 扫码后会自动抓取用户名、抖音号和 Cookie，你只需要填写目标好友。</p>
-          <div id="accounts"></div>
+          <div id="accounts" class="accounts-grid"></div>
         </section>
       </section>
 
@@ -243,7 +240,7 @@
       });
       const titles = {
         home: ["总览", "查看版本、状态和快捷操作"],
-        tasks: ["任务配置", "扫码登录抖音账号后，只需填写目标好友"],
+        tasks: ["任务配置", "每个账号一张卡片，独立定时、独立保存、独立续火花"],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "管理员可以添加、改密和管理其他控制台账号"],
       };
@@ -280,11 +277,16 @@
     function setBusy(busy, text) {
       $("liveDot").classList.toggle("busy", !!busy);
       $("runText").textContent = text;
-      ["runBtn", "runBtnHome"].forEach((id) => {
+      ["runBtnHome"].forEach((id) => {
         if ($(id)) {
           $(id).disabled = !!busy;
           $(id).textContent = busy ? "发送中..." : "立即续火花";
         }
+      });
+      document.querySelectorAll(".btn-run-account").forEach((btn) => {
+        btn.disabled = !!busy;
+        if (!btn.dataset.label) btn.dataset.label = btn.textContent;
+        btn.textContent = busy ? "发送中..." : (btn.dataset.label || "立即续火花");
       });
     }
     async function applyStatus(data) {
@@ -337,26 +339,40 @@
         }
       }
     }
+    function formatCron(hour, minute) {
+      const h = Number(hour);
+      const m = Number(minute);
+      const hh = Number.isFinite(h) ? Math.min(23, Math.max(0, h)) : 9;
+      const mm = Number.isFinite(m) ? Math.min(59, Math.max(0, m)) : 0;
+      return String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
+    }
     function accountCard(data, index) {
       const name = data.username || "抖音账号";
       const uid = data.unique_id || "";
       const bound = !!(uid && (data.cookies_set || data.cookies || window.__accountCookies[uid]));
-      return `<div class="account">
+      const cron = formatCron(data.cron_hour, data.cron_minute);
+      const admin = isAdmin();
+      return `<div class="account" data-index="${index}">
         <div class="account-head">
           <div>
             <strong>${escapeHtml(name)}</strong>
             <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未扫码登录"} · ${bound ? "已绑定 Cookie" : "未绑定 Cookie"}</div>
           </div>
-          <div class="row">
-            <button class="btn-ghost mini admin-only ${isAdmin() ? "" : "hidden"}" onclick="startQrLogin(${index})">${bound ? "重新扫码" : "扫码登录"}</button>
-            <button class="btn-ghost mini admin-only ${isAdmin() ? "" : "hidden"}" onclick="removeAccount(${index})">删除</button>
-          </div>
+          <button class="btn-ghost mini admin-only ${admin ? "" : "hidden"}" onclick="removeAccount(${index})">删除</button>
         </div>
         <input type="hidden" class="username" value="${escapeAttr(name)}" />
         <input type="hidden" class="unique-id" value="${escapeAttr(uid)}" />
-        <label>目标好友（一行一个）
-          <textarea class="targets" ${isAdmin() ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea>
+        <label>每天发送时间
+          <input class="cron-time" type="time" value="${escapeAttr(cron)}" ${admin ? "" : "disabled"} />
         </label>
+        <label>目标好友（一行一个）
+          <textarea class="targets" ${admin ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea>
+        </label>
+        <div class="account-actions admin-only ${admin ? "" : "hidden"}">
+          <button class="btn-ghost" type="button" onclick="saveAccount(${index})">保存</button>
+          <button class="btn-ghost" type="button" onclick="startQrLogin(${index})">${bound ? "重新扫码" : "扫码登录"}</button>
+          <button class="btn-run btn-run-account" type="button" onclick="runAccount(${index})">立即续火花</button>
+        </div>
       </div>`;
     }
     function renderAccounts() {
@@ -365,9 +381,9 @@
     }
     async function loadConfig() {
       const cfg = await api("/api/config");
-      $("cronTime").value = String(cfg.cron_hour) + ":" + String(cfg.cron_minute).padStart(2, "0");
       $("messageTemplate").value = cfg.message_template;
       if ($("maxTaskThreads")) $("maxTaskThreads").value = String(cfg.max_task_threads || 10);
+      window.__defaultCron = formatCron(cfg.cron_hour, cfg.cron_minute);
       window.__accountCookies = {};
       window.__accounts = cfg.accounts || [];
       window.__accounts.forEach((item) => {
@@ -375,22 +391,32 @@
       });
       renderAccounts();
     }
-    function collectAccounts() {
-      return [...document.querySelectorAll(".account")].map((node) => {
-        const uniqueId = node.querySelector(".unique-id").value.trim();
-        return {
-          username: node.querySelector(".username").value.trim(),
-          unique_id: uniqueId,
-          targets: node.querySelector(".targets").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
-          cookies: window.__accountCookies[uniqueId] || "",
-        };
-      }).filter((item) => item.unique_id);
+    function collectAccount(node) {
+      const uniqueId = node.querySelector(".unique-id").value.trim();
+      const t = parseCronTime((node.querySelector(".cron-time") && node.querySelector(".cron-time").value) || window.__defaultCron || "9:00");
+      return {
+        username: node.querySelector(".username").value.trim(),
+        unique_id: uniqueId,
+        targets: node.querySelector(".targets").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
+        cron_hour: t.hour,
+        cron_minute: t.minute,
+        cookies: window.__accountCookies[uniqueId] || "",
+      };
     }
-    function removeAccount(index) {
+    function collectAccounts() {
+      return [...document.querySelectorAll(".account")].map(collectAccount).filter((item) => item.unique_id);
+    }
+    async function removeAccount(index) {
       window.__accounts = collectAccounts();
       const removed = window.__accounts.splice(index, 1)[0];
       if (removed && removed.unique_id) delete window.__accountCookies[removed.unique_id];
       renderAccounts();
+      try {
+        await saveConfig(true, true);
+        toast(removed && removed.username ? "已删除 " + removed.username : "已删除账号");
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
     function stopQrPoll() {
       if (qrTimer) {
@@ -598,16 +624,22 @@
         targets: [],
         cookies,
         cookies_set: true,
+        cron_hour: 9,
+        cron_minute: 0,
       };
       const idx = Number(data.replace_index);
       if (Number.isInteger(idx) && idx >= 0 && idx < window.__accounts.length) {
         next.targets = window.__accounts[idx].targets || [];
+        next.cron_hour = window.__accounts[idx].cron_hour;
+        next.cron_minute = window.__accounts[idx].cron_minute;
         const oldId = window.__accounts[idx].unique_id;
         if (oldId && oldId !== uniqueId) delete window.__accountCookies[oldId];
         window.__accounts[idx] = next;
       } else if (window.__accounts.some((item) => item.unique_id === uniqueId)) {
         const exist = window.__accounts.findIndex((item) => item.unique_id === uniqueId);
         next.targets = window.__accounts[exist].targets || [];
+        next.cron_hour = window.__accounts[exist].cron_hour;
+        next.cron_minute = window.__accounts[exist].cron_minute;
         window.__accounts[exist] = next;
       } else {
         window.__accounts.push(next);
@@ -616,7 +648,7 @@
       renderAccounts();
       $("qrModal").classList.add("hidden");
       try {
-        await saveConfig(true);
+        await saveConfig(true, true);
         toast("已登录 " + next.username + "，请填写目标好友");
       } catch (err) {
         toast(err.message, "err");
@@ -695,28 +727,81 @@
       const minute = Number.isFinite(minuteNum) ? Math.min(59, Math.max(0, minuteNum)) : 0;
       return { hour, minute };
     }
-    async function saveConfig(silent = false) {
-      const t = parseCronTime($("cronTime").value);
+    async function saveConfig(silent = false, includeAccounts = false) {
+      const body = {
+        message_template: $("messageTemplate").value,
+        max_task_threads: Number(($("maxTaskThreads") && $("maxTaskThreads").value) || 10),
+        github_repo: "Aze0920/DouYinSparkFlow",
+      };
+      if (includeAccounts) body.accounts = collectAccounts();
       await api("/api/config", {
         method: "POST",
-        body: JSON.stringify({
-          cron_hour: t.hour,
-          cron_minute: t.minute,
-          message_template: $("messageTemplate").value,
-          max_task_threads: Number(($("maxTaskThreads") && $("maxTaskThreads").value) || 10),
-          github_repo: "Aze0920/DouYinSparkFlow",
-          accounts: collectAccounts(),
-        }),
+        body: JSON.stringify(body),
       });
-      if (!silent) toast("配置已保存");
+      if (!silent) toast(includeAccounts ? "配置已保存" : "模板已保存");
       await checkStatus();
+    }
+    async function saveGlobalSettings() {
+      try {
+        await saveConfig(false, false);
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function saveAccount(index, silent = false) {
+      const node = document.querySelectorAll(".account")[index];
+      if (!node) return;
+      const item = collectAccount(node);
+      if (!item.unique_id) {
+        toast("请先扫码登录这个账号", "err");
+        return;
+      }
+      try {
+        window.__accounts = collectAccounts();
+        await api("/api/account", {
+          method: "POST",
+          body: JSON.stringify(item),
+        });
+        if (!silent) toast("已保存 " + (item.username || "账号"));
+        await checkStatus();
+        return true;
+      } catch (err) {
+        toast(err.message, "err");
+        return false;
+      }
+    }
+    async function runAccount(index) {
+      const node = document.querySelectorAll(".account")[index];
+      if (!node) return;
+      const item = collectAccount(node);
+      if (!item.unique_id) {
+        toast("请先扫码登录这个账号", "err");
+        return;
+      }
+      const ok = await ask("立即续火花", `现在用「${item.username || "这个账号"}」给目标好友发消息？`);
+      if (!ok) return;
+      try {
+        if (isAdmin()) {
+          const saved = await saveAccount(index, true);
+          if (!saved) return;
+        }
+        const data = await api("/api/run", {
+          method: "POST",
+          body: JSON.stringify({ unique_id: item.unique_id }),
+        });
+        toast(data.message || "任务已开始");
+        showPage("logs");
+        await loadLogs();
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
     async function runNow() {
       toast("正在启动任务...");
-      const ok = await ask("立即续火花", "现在就会给配置里的好友发消息，确定继续？");
+      const ok = await ask("立即续火花", "现在会给所有账号的目标好友发消息，确定继续？");
       if (!ok) return;
       try {
-        if (isAdmin()) await saveConfig(true);
+        if (isAdmin()) await saveConfig(true, true);
         const data = await api("/api/run", { method: "POST", body: "{}" });
         toast(data.message || "任务已开始");
         showPage("logs");

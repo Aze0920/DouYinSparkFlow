@@ -115,14 +115,47 @@ def cookie_key(unique_id: str) -> str:
     return f"COOKIES_{cleaned.upper()}"
 
 
-def parse_accounts(env: dict) -> list:
+def _clamp_hm(hour, minute) -> tuple[int, int]:
+    try:
+        h = int(hour)
+    except (TypeError, ValueError):
+        h = 9
+    try:
+        m = int(minute)
+    except (TypeError, ValueError):
+        m = 0
+    return max(0, min(23, h)), max(0, min(59, m))
+
+
+def default_cron(env: dict | None = None) -> tuple[int, int]:
+    env = env or {}
+    return _clamp_hm(env.get("CRON_HOUR") or 9, env.get("CRON_MINUTE") or 0)
+
+
+def account_cron(task: dict | None, env: dict | None = None) -> tuple[int, int]:
+    env = env or {}
+    hour, minute = default_cron(env)
+    task = task or {}
+    if task.get("cron_hour") is not None:
+        hour = _clamp_hm(task.get("cron_hour"), minute)[0]
+    if task.get("cron_minute") is not None:
+        minute = _clamp_hm(hour, task.get("cron_minute"))[1]
+    return hour, minute
+
+
+def read_tasks(env: dict | None = None) -> list:
+    env = env if env is not None else load_env()
     raw_tasks = env.get("TASKS", "[]")
     try:
         tasks = json.loads(raw_tasks) if isinstance(raw_tasks, str) else raw_tasks
     except json.JSONDecodeError:
         tasks = []
+    return list(tasks or [])
+
+
+def parse_accounts(env: dict) -> list:
     accounts = []
-    for task in tasks or []:
+    for task in read_tasks(env):
         unique_id = str(task.get("unique_id") or "").strip()
         cookies_raw = env.get(cookie_key(unique_id), "")
         cookies_ok = False
@@ -133,11 +166,14 @@ def parse_accounts(env: dict) -> list:
                 cookies_ok = isinstance(parsed, list) and len(parsed) > 0
             except json.JSONDecodeError:
                 cookies_ok = False
+        hour, minute = account_cron(task, env)
         accounts.append(
             {
                 "username": task.get("username") or "账号",
                 "unique_id": unique_id,
                 "targets": task.get("targets") or [],
+                "cron_hour": hour,
+                "cron_minute": minute,
                 "cookies_set": cookies_ok,
                 "cookie_count": len(parsed) if cookies_ok else 0,
             }

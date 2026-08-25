@@ -146,6 +146,35 @@ button { cursor: pointer; }
 .btn-ghost { background: transparent; }
 .mini { padding: 6px 10px; font-size: 12px; }
 .account, .user-card { padding: 16px; margin-top: 12px; }
+.accounts-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+  align-items: stretch;
+}
+.accounts-grid .account {
+  margin-top: 0;
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+}
+.accounts-grid .account .targets {
+  min-height: 120px;
+  resize: vertical;
+}
+.account-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: auto;
+}
+.account-actions button { width: 100%; }
+.account-actions .btn-run-account {
+  grid-column: 1 / -1;
+}
 .account-id { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .qr-card { width: min(440px, calc(100% - 24px)); text-align: center; }
 .live-wrap {
@@ -266,7 +295,7 @@ button { cursor: pointer; }
 
 @media (max-width: 980px) {
   html, body { overflow: auto; height: auto; }
-  .login-page, .cards, .grid.two { grid-template-columns: 1fr; }
+  .login-page, .cards, .grid.two, .accounts-grid { grid-template-columns: 1fr; }
   .sidebar {
     position: sticky;
     top: 0;

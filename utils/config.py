@@ -93,6 +93,7 @@ def get_userData():
         return userData
 
     tasks = json.loads(os.getenv("TASKS", "[]"))
+    only_ids = {item.strip() for item in os.getenv("SPARK_ONLY_IDS", "").split(",") if item.strip()}
 
     userData = []
 
@@ -101,6 +102,8 @@ def get_userData():
         unique_id = task.get("unique_id")
         if not unique_id:
             logger.warning(f"{username} 的任务  缺少 unique_id 字段，已跳过")
+            continue
+        if only_ids and str(unique_id) not in only_ids:
             continue
         cookies_key = f"cookies_{unique_id}".upper()
         cookies_str = (
@@ -120,7 +123,9 @@ def get_userData():
                 "unique_id": unique_id,
                 "username": username,
                 "cookies": sanitize_cookies(cookies),
-                "targets": [norm(t) for t in task.get("targets", [])], # 标准化目标列表
+                "targets": [norm(t) for t in task.get("targets", [])],
+                "cron_hour": task.get("cron_hour"),
+                "cron_minute": task.get("cron_minute"),
             }
         )
 

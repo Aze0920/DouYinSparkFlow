@@ -5,6 +5,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
 
 import httpx
@@ -14,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
-from webui.envfile import cookie_key, env_path, load_env, parse_accounts, write_env
+from webui.envfile import account_cron, cookie_key, default_cron, env_path, load_env, parse_accounts, read_tasks, write_env
 from webui.qr_login import (
     cancel_qr_login,
     choose_verify_method,
@@ -62,6 +63,8 @@ templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 _run_lock = threading.Lock()
 _run_state = {"running": False, "message": "空闲", "started_at": 0}
 _remote_cache = {"version": "", "sha": "", "ts": 0, "busy": False}
+_sched_last: dict[str, str] = {}
+_sched_boot = time.time()
 
 
 @app.middleware("http")
@@ -92,6 +95,8 @@ async def log_api_calls(request: Request, call_next):
 def on_startup():
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     logger.info("控制台启动 version=%s cwd=%s log=%s", read_version(), os.getcwd(), LOG_FILE)
+    threading.Thread(target=_scheduler_loop, daemon=True, name="spark-cron").start()
+    logger.info("已启动按账号定时调度")
 
 
 def read_version() -> str:
@@ -403,6 +408,18 @@ def status(request: Request):
     env = load_env()
     local = read_version()
     remote = remote_version_fast()
+    accounts = parse_accounts(env)
+    times = []
+    seen = set()
+    for item in accounts:
+        hour = item.get("cron_hour")
+        minute = item.get("cron_minute")
+        hour = 9 if hour is None else int(hour)
+        minute = 0 if minute is None else int(minute)
+        label = f"{hour:02d}:{minute:02d}"
+        if label not in seen:
+            seen.add(label)
+            times.append(label)
     return {
         "ok": True,
         "local_version": local,
@@ -411,11 +428,11 @@ def status(request: Request):
         "github_repo": repo_name(),
         "env_file": str(env_path()),
         "is_git_repo": (ROOT / ".git").exists(),
-        "cron": f"{env.get('CRON_HOUR', '9')}:{env.get('CRON_MINUTE', '0').zfill(2)}",
+        "cron": "、".join(times) if times else f"{env.get('CRON_HOUR', '9')}:{str(env.get('CRON_MINUTE', '0')).zfill(2)}",
         "tz": env.get("TZ", "Asia/Shanghai"),
         "running": _run_state["running"],
         "run_message": _run_state["message"],
-        "accounts": parse_accounts(env),
+        "accounts": accounts,
     }
 
 
@@ -447,6 +464,40 @@ def github_check(request: Request):
         "source": source,
         "message": message,
     }
+
+
+def _task_from_account(account: dict, env: dict) -> dict:
+    unique_id = str(account.get("unique_id") or "").strip()
+    targets = account.get("targets") or []
+    if isinstance(targets, str):
+        targets = [x.strip() for x in targets.replace("，", ",").split(",") if x.strip()]
+    hour, minute = account_cron(account, env)
+    return {
+        "username": str(account.get("username") or "账号").strip(),
+        "unique_id": unique_id,
+        "targets": targets,
+        "cron_hour": hour,
+        "cron_minute": minute,
+    }
+
+
+def _cookie_extra(account: dict) -> dict:
+    unique_id = str(account.get("unique_id") or "").strip()
+    cookies = account.get("cookies")
+    extra = {}
+    if not unique_id or cookies in (None, ""):
+        return extra
+    if isinstance(cookies, str):
+        try:
+            cookies_obj = json.loads(cookies)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"账号 {unique_id} 的 Cookie 不是合法 JSON") from exc
+    else:
+        cookies_obj = cookies
+    if not isinstance(cookies_obj, list):
+        raise HTTPException(status_code=400, detail=f"账号 {unique_id} 的 Cookie 必须是 JSON 数组")
+    extra[cookie_key(unique_id)] = cookies_obj
+    return extra
 
 
 def _clamp_task_threads(value) -> int:
@@ -495,51 +546,40 @@ def get_config(request: Request):
 @app.post("/api/config")
 def save_config(request: Request, payload: dict):
     require_admin(request)
-    accounts = payload.get("accounts") or []
-    tasks = []
+    env = load_env()
     extra = {}
-    for account in accounts:
-        unique_id = str(account.get("unique_id") or "").strip()
-        if not unique_id:
-            raise HTTPException(status_code=400, detail="每个账号都要填写抖音号/编号")
-        targets = account.get("targets") or []
-        if isinstance(targets, str):
-            targets = [x.strip() for x in targets.replace("，", ",").split(",") if x.strip()]
-        tasks.append(
-            {
-                "username": str(account.get("username") or "账号").strip(),
-                "unique_id": unique_id,
-                "targets": targets,
-            }
-        )
-        cookies = account.get("cookies")
-        if cookies in (None, ""):
-            continue
-        if isinstance(cookies, str):
-            try:
-                cookies_obj = json.loads(cookies)
-            except json.JSONDecodeError as exc:
-                raise HTTPException(status_code=400, detail=f"账号 {unique_id} 的 Cookie 不是合法 JSON") from exc
-        else:
-            cookies_obj = cookies
-        if not isinstance(cookies_obj, list):
-            raise HTTPException(status_code=400, detail=f"账号 {unique_id} 的 Cookie 必须是 JSON 数组")
-        extra[cookie_key(unique_id)] = cookies_obj
+    if "accounts" in payload:
+        tasks = []
+        for account in payload.get("accounts") or []:
+            unique_id = str(account.get("unique_id") or "").strip()
+            if not unique_id:
+                raise HTTPException(status_code=400, detail="每个账号都要填写抖音号/编号")
+            tasks.append(_task_from_account(account, env))
+            extra.update(_cookie_extra(account))
+    else:
+        tasks = read_tasks(env)
+
+    hour, minute = default_cron(env)
+    if payload.get("cron_hour") is not None:
+        hour, minute = account_cron({"cron_hour": payload.get("cron_hour"), "cron_minute": payload.get("cron_minute")}, env)
+    elif tasks:
+        hour, minute = account_cron(tasks[0], env)
 
     data = {
-        "PROXY_ADDRESS": payload.get("proxy_address") or "",
-        "CRON_HOUR": str(payload.get("cron_hour") if payload.get("cron_hour") is not None else 9),
-        "CRON_MINUTE": str(payload.get("cron_minute") if payload.get("cron_minute") is not None else 0),
-        "CRON_SECOND": str(payload.get("cron_second") if payload.get("cron_second") is not None else 0),
-        "TZ": payload.get("tz") or "Asia/Shanghai",
+        "PROXY_ADDRESS": payload.get("proxy_address") if payload.get("proxy_address") is not None else env.get("PROXY_ADDRESS") or "",
+        "CRON_HOUR": str(hour),
+        "CRON_MINUTE": str(minute),
+        "CRON_SECOND": str(payload.get("cron_second") if payload.get("cron_second") is not None else env.get("CRON_SECOND") or 0),
+        "TZ": payload.get("tz") or env.get("TZ") or "Asia/Shanghai",
         "MESSAGE_TEMPLATE": payload.get("message_template")
+        or env.get("MESSAGE_TEMPLATE")
         or "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n[API]",
-        "HITOKOTO_TYPES": payload.get("hitokoto_types") or ["文学", "影视", "诗词", "哲学"],
-        "BROWSER_TIMEOUT": str(payload.get("browser_timeout") or 120000),
-        "FRIEND_LIST_WAIT_TIME": str(payload.get("friend_list_wait_time") or 2000),
-        "TASK_RETRY_TIMES": str(payload.get("task_retry_times") or 3),
-        "MAX_TASK_THREADS": str(_clamp_task_threads(payload.get("max_task_threads"))),
-        "LOG_LEVEL": payload.get("log_level") or "DEBUG",
+        "HITOKOTO_TYPES": payload.get("hitokoto_types") or env.get("HITOKOTO_TYPES") or ["文学", "影视", "诗词", "哲学"],
+        "BROWSER_TIMEOUT": str(payload.get("browser_timeout") or env.get("BROWSER_TIMEOUT") or 120000),
+        "FRIEND_LIST_WAIT_TIME": str(payload.get("friend_list_wait_time") or env.get("FRIEND_LIST_WAIT_TIME") or 2000),
+        "TASK_RETRY_TIMES": str(payload.get("task_retry_times") or env.get("TASK_RETRY_TIMES") or 3),
+        "MAX_TASK_THREADS": str(_clamp_task_threads(payload.get("max_task_threads") or env.get("MAX_TASK_THREADS") or 10)),
+        "LOG_LEVEL": payload.get("log_level") or env.get("LOG_LEVEL") or "DEBUG",
         "GITHUB_REPO": payload.get("github_repo") or repo_name(),
         "HEADLESS": "true",
         "TASKS": tasks,
@@ -547,6 +587,29 @@ def save_config(request: Request, payload: dict):
     path = write_env(data, extra)
     logger.info("已保存配置 path=%s accounts=%s", path, len(tasks))
     return {"ok": True, "path": str(path), "account_count": len(tasks)}
+
+
+@app.post("/api/account")
+def save_account(request: Request, payload: dict):
+    require_admin(request)
+    env = load_env()
+    unique_id = str(payload.get("unique_id") or "").strip()
+    if not unique_id:
+        raise HTTPException(status_code=400, detail="缺少抖音号")
+    row = _task_from_account(payload, env)
+    tasks = read_tasks(env)
+    replaced = False
+    for index, item in enumerate(tasks):
+        if str(item.get("unique_id") or "").strip() == unique_id:
+            tasks[index] = {**item, **row}
+            replaced = True
+            break
+    if not replaced:
+        tasks.append(row)
+    extra = _cookie_extra(payload)
+    path = write_env({"TASKS": tasks}, extra)
+    logger.info("已保存账号 %s unique_id=%s cron=%02d:%02d", row["username"], unique_id, row["cron_hour"], row["cron_minute"])
+    return {"ok": True, "path": str(path), "account": row}
 
 
 @app.get("/api/logs")
@@ -567,18 +630,66 @@ def clear_logs(request: Request):
     return {"ok": True, "text": "日志已清空。"}
 
 
-def _run_task():
+def _now_local():
+    env = load_env()
+    tz_name = env.get("TZ") or "Asia/Shanghai"
+    try:
+        from zoneinfo import ZoneInfo
+        return datetime.now(ZoneInfo(tz_name))
+    except Exception:
+        return datetime.now()
+
+
+def _scheduler_loop():
+    while True:
+        time.sleep(20)
+        try:
+            if time.time() - _sched_boot < 50:
+                continue
+            if _run_state["running"]:
+                continue
+            env = load_env()
+            now = _now_local()
+            stamp = now.strftime("%Y-%m-%d %H:%M")
+            due = []
+            for acc in parse_accounts(env):
+                uid = str(acc.get("unique_id") or "").strip()
+                if not uid or not acc.get("cookies_set"):
+                    continue
+                hour = acc.get("cron_hour")
+                minute = acc.get("cron_minute")
+                hour = 9 if hour is None else int(hour)
+                minute = 0 if minute is None else int(minute)
+                if hour != now.hour or minute != now.minute:
+                    continue
+                if _sched_last.get(uid) == stamp:
+                    continue
+                due.append(uid)
+            if not due:
+                continue
+            for uid in due:
+                _sched_last[uid] = stamp
+            logger.info("定时到达，开始续火花 accounts=%s", due)
+            _run_task(due)
+        except Exception:
+            logger.exception("定时调度失败")
+
+
+def _run_task(unique_ids=None):
     env = os.environ.copy()
     env["HEADLESS"] = "true"
     env_file = env_path()
     if env_file.is_file():
         env["CONFIG_ENV_FILE"] = str(env_file)
+    ids = [str(x).strip() for x in (unique_ids or []) if str(x).strip()]
+    if ids:
+        env["SPARK_ONLY_IDS"] = ",".join(ids)
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
         _run_state["running"] = True
         _run_state["message"] = "正在执行续火花任务"
         _run_state["started_at"] = time.time()
-        logger.info("开始执行续火花任务")
+        logger.info("开始执行续火花任务 ids=%s", ids or "全部")
         proc = subprocess.run(
             [sys.executable, str(ROOT / "main.py")],
             cwd=str(ROOT),
@@ -666,14 +777,17 @@ def douyin_login_live(request: Request, payload: dict | None = None):
 
 
 @app.post("/api/run")
-def run_now(request: Request):
+def run_now(request: Request, payload: dict | None = None):
     require_auth(request)
     if _run_state["running"]:
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
     if not _run_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
+    payload = payload or {}
+    unique_id = str(payload.get("unique_id") or "").strip()
+    ids = [unique_id] if unique_id else None
     try:
-        threading.Thread(target=_run_task, daemon=True).start()
+        threading.Thread(target=_run_task, args=(ids,), daemon=True).start()
     finally:
         _run_lock.release()
     return {"ok": True, "message": "已开始执行，请看日志"}
