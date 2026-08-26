@@ -8,14 +8,22 @@ from pathlib import Path
 import httpx
 
 from utils.logger import setup_logger
+from webui.users import find_user, load_users, now_utc, save_users, to_iso
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTIFY_FILE = ROOT / "config" / "notify.json"
 logger = setup_logger("notify")
 
 EVENT_KEYS = ("task_done", "task_fail", "cookie_offline")
+WP_QR_TTL = 1800
+WP_POLL_MIN = 10
+WP_CREATE_QR = "https://wxpusher.zjiecode.com/api/fun/create/qrcode"
+WP_SCAN_UID = "https://wxpusher.zjiecode.com/api/fun/scan-qrcode-uid"
+WP_SEND = "https://wxpusher.zjiecode.com/api/send/message"
 
 _token_cache = {"token": "", "expire": 0}
+_bind_lock = threading.Lock()
+_bind_sessions: dict[str, dict] = {}
 
 
 def default_notify() -> dict:
@@ -123,15 +131,84 @@ def public_notify(data: dict | None = None) -> dict:
     wechat["app_secret_set"] = bool(secret)
     wxpusher = dict(data.get("wxpusher") or {})
     wp_token = str(wxpusher.get("app_token") or "").strip()
-    wp_uids = _parse_uids(wxpusher.get("uids"))
     return {
         "wechat": wechat,
         "wxpusher": wxpusher,
         "events": dict(data.get("events") or {}),
         "bound": bool(wechat.get("admin_openid")),
         "ready": bool(wechat.get("enabled") and wechat.get("app_id") and secret and wechat.get("admin_openid")),
-        "wxpusher_ready": bool(wxpusher.get("enabled") and wp_token and wp_uids),
+        "wxpusher_ready": bool(wxpusher.get("enabled") and wp_token),
     }
+
+
+def mask_uid(uid: str) -> str:
+    raw = str(uid or "").strip()
+    if not raw:
+        return ""
+    if len(raw) <= 4:
+        return "已绑定"
+    return "••••" + raw[-4:]
+
+
+def public_wxpusher(user: dict | None) -> dict:
+    uid = str((user or {}).get("wxpusher_uid") or "").strip()
+    return {
+        "bound": bool(uid),
+        "mask": mask_uid(uid) if uid else "",
+        "bound_at": str((user or {}).get("wxpusher_bound_at") or ""),
+    }
+
+
+def user_wxpusher_uid(username: str) -> str:
+    user = find_user(username)
+    return str((user or {}).get("wxpusher_uid") or "").strip()
+
+
+def set_user_wxpusher(username: str, uid: str) -> dict | None:
+    name = str(username or "").strip()
+    if not name:
+        return None
+    users = load_users()
+    found = None
+    for item in users:
+        if item.get("username") != name:
+            continue
+        item["wxpusher_uid"] = str(uid or "").strip()
+        item["wxpusher_bound_at"] = to_iso(now_utc()) if item["wxpusher_uid"] else ""
+        found = item
+        break
+    if not found:
+        return None
+    save_users(users)
+    return found
+
+
+def _close_session(session: dict | None) -> None:
+    if not session:
+        return
+    client = session.get("client")
+    if client is None:
+        return
+    try:
+        client.close()
+    except Exception:
+        pass
+
+
+def _session_alive(session: dict | None) -> bool:
+    if not session:
+        return False
+    return float(session.get("expire") or 0) > time.time()
+
+
+def _app_token() -> str:
+    cfg = load_notify().get("wxpusher") or {}
+    if not cfg.get("enabled"):
+        raise RuntimeError("还没打开 WxPusher，请管理员先在设置里启用并填写 appToken")
+    token = str(cfg.get("app_token") or "").strip()
+    if not token:
+        raise RuntimeError("请管理员先在设置里填写 WxPusher appToken")
+    return token
 
 
 def verify_wechat_signature(signature: str, timestamp: str, nonce: str) -> bool:
@@ -218,30 +295,25 @@ def send_wechat(kind: str, title: str, body: str = "") -> dict:
     return data
 
 
-def send_wxpusher(title: str, body: str = "") -> dict:
-    cfg = load_notify().get("wxpusher") or {}
-    if not cfg.get("enabled"):
-        raise RuntimeError("还没打开 WxPusher")
-    token = str(cfg.get("app_token") or "").strip()
-    uids = _parse_uids(cfg.get("uids"))
-    if not token:
-        raise RuntimeError("请填写 WxPusher appToken")
-    if not uids:
-        raise RuntimeError("请填写 WxPusher UID")
+def send_wxpusher(title: str, body: str = "", uids=None) -> dict:
+    token = _app_token()
+    targets = _parse_uids(uids)
+    if not targets:
+        raise RuntimeError("还没扫码绑定微信")
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     payload = {
         "appToken": token,
         "content": f"{title}\n{body or '-'}\n{now}",
         "summary": (title or "SparkFlow")[:20],
         "contentType": 1,
-        "uids": uids,
+        "uids": targets,
     }
     with httpx.Client(timeout=8.0) as client:
-        resp = client.post("https://wxpusher.zjiecode.com/api/send/message", json=payload)
+        resp = client.post(WP_SEND, json=payload)
         data = resp.json()
     if int(data.get("code") or 0) != 1000:
         raise RuntimeError(data.get("msg") or "WxPusher 发送失败")
-    logger.info("WxPusher 推送成功 title=%s uids=%s", title, len(uids))
+    logger.info("WxPusher 推送成功 title=%s uids=%s", title, len(targets))
     return data
 
 
@@ -252,14 +324,28 @@ def notify_event(kind: str, title: str, body: str = "", usernames=None) -> None:
         return
     wechat = cfg.get("wechat") or {}
     wxpusher = cfg.get("wxpusher") or {}
-    if not wechat.get("enabled") and not wxpusher.get("enabled"):
+    names = []
+    seen = set()
+    for name in usernames or []:
+        item = str(name or "").strip()
+        if item and item not in seen:
+            seen.add(item)
+            names.append(item)
+    uids = []
+    for name in names:
+        uid = user_wxpusher_uid(name)
+        if uid and uid not in uids:
+            uids.append(uid)
+    if not wechat.get("enabled") and not (wxpusher.get("enabled") and uids):
+        if wxpusher.get("enabled") and names and not uids:
+            logger.warning("WxPusher 跳过 kind=%s owners=%s 未绑定微信", kind, ",".join(names))
         return
-    owners = ",".join(str(name).strip() for name in (usernames or []) if str(name).strip()) or "-"
+    owners = ",".join(names) or "-"
 
     def _run():
-        if wxpusher.get("enabled"):
+        if wxpusher.get("enabled") and uids:
             try:
-                send_wxpusher(title, body)
+                send_wxpusher(title, body, uids=uids)
             except Exception as exc:
                 logger.warning("WxPusher 未发出 kind=%s owners=%s: %s", kind, owners, exc)
         if wechat.get("enabled"):
@@ -269,3 +355,144 @@ def notify_event(kind: str, title: str, body: str = "", usernames=None) -> None:
                 logger.warning("公众号未发出 kind=%s: %s", kind, exc)
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def start_wxpusher_qr(username: str, force: bool = False) -> dict:
+    name = str(username or "").strip()
+    if not name:
+        raise RuntimeError("未登录")
+    token = _app_token()
+    bound = public_wxpusher(find_user(name))
+    extra = name[:64]
+    with _bind_lock:
+        session = _bind_sessions.get(name)
+        if not force and _session_alive(session) and (session.get("qr_bytes") or session.get("qr_url")):
+            return {
+                "ok": True,
+                "waiting": True,
+                "expire_in": max(0, int(session["expire"] - time.time())),
+                "qr_url": session.get("qr_url") or "",
+                "has_image": bool(session.get("qr_bytes")),
+                **bound,
+            }
+        _close_session(session)
+        try:
+            with httpx.Client(timeout=10.0, follow_redirects=True) as client:
+                resp = client.post(
+                    WP_CREATE_QR,
+                    json={"appToken": token, "extra": extra, "validTime": WP_QR_TTL},
+                )
+                data = resp.json()
+                if int(data.get("code") or 0) != 1000:
+                    raise RuntimeError(data.get("msg") or "生成 WxPusher 二维码失败")
+                info = data.get("data") if isinstance(data.get("data"), dict) else {}
+                code = str(info.get("code") or "").strip()
+                qr_url = str(info.get("url") or info.get("shortUrl") or "").strip()
+                if not code or not qr_url:
+                    raise RuntimeError("WxPusher 没有返回二维码")
+                qr_bytes = b""
+                try:
+                    img = client.get(qr_url)
+                    if img.status_code == 200 and img.content:
+                        qr_bytes = img.content
+                except Exception:
+                    logger.warning("拉取 WxPusher 二维码图片失败 user=%s", name)
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError("生成 WxPusher 二维码失败") from exc
+        now = time.time()
+        _bind_sessions[name] = {
+            "code": code,
+            "extra": extra,
+            "qr_url": qr_url,
+            "qr_bytes": qr_bytes,
+            "created": now,
+            "expire": now + WP_QR_TTL,
+            "last_poll": 0,
+        }
+        logger.info("已生成 WxPusher 绑定二维码 user=%s ttl=%s", name, WP_QR_TTL)
+        return {
+            "ok": True,
+            "waiting": True,
+            "expire_in": WP_QR_TTL,
+            "qr_url": qr_url,
+            "has_image": bool(qr_bytes),
+            **bound,
+        }
+
+
+def wxpusher_qr_image(username: str) -> bytes:
+    name = str(username or "").strip()
+    with _bind_lock:
+        session = _bind_sessions.get(name)
+        if not _session_alive(session):
+            return b""
+        return session.get("qr_bytes") or b""
+
+
+def poll_wxpusher_qr(username: str) -> dict:
+    name = str(username or "").strip()
+    bound = public_wxpusher(find_user(name))
+    with _bind_lock:
+        session = _bind_sessions.get(name)
+        if not _session_alive(session):
+            if session:
+                _close_session(_bind_sessions.pop(name, None))
+            if bound.get("bound"):
+                return {"ok": True, "waiting": False, "expired": False, **bound}
+            return {"ok": True, "waiting": False, "expired": True, **bound}
+        now = time.time()
+        last = float(session.get("last_poll") or 0)
+        if last and now - last < WP_POLL_MIN:
+            left = max(0, int(float(session.get("expire") or 0) - now))
+            return {"ok": True, "waiting": True, "expired": False, "expire_in": left, **bound}
+        session["last_poll"] = now
+        code = session.get("code") or ""
+        extra = session.get("extra") or name
+        try:
+            with httpx.Client(timeout=8.0) as client:
+                resp = client.get(WP_SCAN_UID, params={"code": code})
+                data = resp.json()
+        except Exception as exc:
+            logger.warning("查询 WxPusher 扫码状态失败 user=%s: %s", name, exc)
+            left = max(0, int(float(session.get("expire") or 0) - now))
+            return {"ok": True, "waiting": True, "expired": False, "expire_in": left, **bound}
+        info = data.get("data") if isinstance(data.get("data"), dict) else {}
+        uid = str((info or {}).get("uid") or "").strip()
+        if not uid and isinstance(data.get("data"), str):
+            uid = str(data.get("data") or "").strip()
+        got_extra = str((info or {}).get("extra") or "").strip()
+        if uid and got_extra and got_extra != extra:
+            left = max(0, int(float(session.get("expire") or 0) - now))
+            return {"ok": True, "waiting": True, "expired": False, "expire_in": left, **bound}
+        if not uid or int(data.get("code") or 0) != 1000:
+            left = max(0, int(float(session.get("expire") or 0) - now))
+            return {"ok": True, "waiting": True, "expired": False, "expire_in": left, **bound}
+        _close_session(_bind_sessions.pop(name, None))
+    saved = set_user_wxpusher(name, uid)
+    logger.info("WxPusher 扫码绑定成功 user=%s", name)
+    return {"ok": True, "waiting": False, "bound": True, **public_wxpusher(saved)}
+
+
+def cancel_wxpusher_qr(username: str) -> None:
+    name = str(username or "").strip()
+    with _bind_lock:
+        _close_session(_bind_sessions.pop(name, None))
+
+
+def apply_wxpusher_callback(payload: dict | None) -> dict:
+    data = payload or {}
+    info = data.get("data") if isinstance(data.get("data"), dict) else data
+    uid = str((info or {}).get("uid") or "").strip()
+    extra = str((info or {}).get("extra") or "").strip()
+    if not uid or not extra:
+        return {"ok": True, "bound": False}
+    saved = set_user_wxpusher(extra, uid)
+    if not saved:
+        logger.warning("WxPusher 回调未匹配到用户 extra=%s", extra)
+        return {"ok": True, "bound": False}
+    with _bind_lock:
+        _close_session(_bind_sessions.pop(extra, None))
+    logger.info("WxPusher 回调绑定成功 user=%s", extra)
+    return {"ok": True, "bound": True, **public_wxpusher(saved)}

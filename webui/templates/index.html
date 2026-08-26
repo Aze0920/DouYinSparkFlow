@@ -68,6 +68,23 @@
       </div>
     </div>
   </div>
+  <div id="wpModal" class="modal-mask hidden" onclick="if(event.target===this)closeWxpusherBind()">
+    <div class="modal-card qr-card">
+      <h3>微信扫码开启推送</h3>
+      <p class="sub" id="wpModalHint">用微信扫下面的码，会绑到当前这个登录账号。这个账号下的抖音号只会发到这个微信。</p>
+      <div class="wp-qr-wrap">
+        <img id="wpQrImage" class="qr-image hidden" alt="WxPusher 绑定二维码" referrerpolicy="no-referrer" />
+        <div id="wpQrLoading">正在生成二维码…</div>
+      </div>
+      <p class="sub" id="wpModalStatus"></p>
+      <div class="modal-actions wp-modal-actions">
+        <button class="btn-ghost" type="button" onclick="refreshWxpusherQr()">刷新二维码</button>
+        <button class="btn-ghost" type="button" id="wpTestBtn" onclick="testWxpusherBind()">发送测试</button>
+        <button class="btn-ghost" type="button" id="wpUnbindBtn" onclick="unbindWxpusher()">解绑</button>
+        <button class="btn-primary" type="button" onclick="closeWxpusherBind()">关闭</button>
+      </div>
+    </div>
+  </div>
 
   <div id="loginPage" class="login-page hidden">
     <section class="login-visual">
@@ -150,11 +167,17 @@
             <label>全部账号数量</label>
             <strong id="accountCount">-</strong>
           </article>
+          <article class="card card-click" id="wpBindCard" onclick="openWxpusherBind()">
+            <label>消息推送</label>
+            <strong id="wpBindLabel">未绑定</strong>
+            <div class="card-sub" id="wpBindHint">微信扫码，只收你名下抖音号的消息</div>
+          </article>
         </div>
         <section class="panel">
           <div class="panel-head">
             <h2>抖音账号与发送策略</h2>
             <div>
+              <button class="btn-ghost" type="button" onclick="openWxpusherBind()">消息推送</button>
               <button class="btn-ghost spark-action" type="button" onclick="openAddAccount()">添加账号</button>
               <button class="btn-ghost spark-action" type="button" onclick="saveGlobalSettings()">保存模板</button>
             </div>
@@ -239,20 +262,17 @@
             <h2>WxPusher</h2>
             <span class="ck-status" id="wpStatus">未配置</span>
           </div>
-          <p class="sub">一个应用可以填多个 UID，对应多个微信。打开 <a href="https://wxpusher.zjiecode.com" target="_blank" rel="noreferrer">wxpusher.zjiecode.com</a> 注册应用，复制 appToken；每个微信扫码关注后把 UID 填进来，逗号或换行分隔。微信对话框收不到时，用 WxPusher App 看消息。</p>
+          <p class="sub">打开 <a href="https://wxpusher.zjiecode.com" target="_blank" rel="noreferrer">wxpusher.zjiecode.com</a> 注册应用，把 appToken 填在这里。每个登录用户自己到总览扫码绑定微信：admin 绑的号只收 admin 名下抖音号，test 绑的号只收 test 名下的。微信对话框收不到时，用 WxPusher App 看消息。</p>
           <div class="grid two">
             <label class="check-line"><input id="wpEnabled" type="checkbox" /> 启用 WxPusher</label>
             <label>appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
-            <label class="span-2">UID（多个用逗号或换行）
-              <textarea id="wpUids" rows="3" placeholder="UID_xxxx"></textarea>
-            </label>
           </div>
         </section>
         <section class="panel">
           <div class="panel-head">
             <h2>推送事件</h2>
           </div>
-          <p class="sub">勾选后，续火花完成、失败、抖音掉线会发给上面填的全部 WxPusher UID；若同时启用了公众号，也会发模板消息。</p>
+          <p class="sub">勾选后，续火花完成、失败、抖音掉线会发给对应登录用户扫码绑定的微信；若同时启用了公众号，也会发模板消息。</p>
           <div class="grid two">
             <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
             <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
@@ -309,6 +329,8 @@
     let liveQuietUntil = 0;
     let lastVerifyKey = "";
     let githubCheckBusy = false;
+    let wpBindOpen = false;
+    let wpBindTimer = null;
     window.__accountCookies = {};
 
     function toast(message, type = "ok") {
@@ -410,6 +432,20 @@
           ? (isAdmin() || current.permanent ? "不过期" : (current.remain_label || ""))
           : "";
       }
+      renderWxpusherCard();
+    }
+    function renderWxpusherCard() {
+      const bound = !!(current && current.wxpusher_bound);
+      const who = (current && current.username) || "当前用户";
+      const mask = (current && current.wxpusher_mask) || "";
+      if ($("wpBindLabel")) $("wpBindLabel").textContent = bound ? ("已绑定" + (mask ? " · " + mask : "")) : "未绑定";
+      if ($("wpBindHint")) {
+        $("wpBindHint").textContent = bound
+          ? ("「" + who + "」名下的抖音号会发到这个微信")
+          : ("点这里，用微信扫码绑到「" + who + "」");
+      }
+      if ($("wpTestBtn")) $("wpTestBtn").classList.toggle("hidden", !bound);
+      if ($("wpUnbindBtn")) $("wpUnbindBtn").classList.toggle("hidden", !bound);
     }
     function pagePath(name) {
       return { home: "/", logs: "/logs", users: "/users", cards: "/cards", settings: "/settings" }[name] || "/";
@@ -628,11 +664,15 @@
       const operate = canSpark();
       const ck = cookieStatusMeta(data);
       const source = cookieSourceText(data);
+      const ownerName = data.owner || (current && current.username) || "";
+      const notifyHint = data.wxpusher_bound
+        ? ("消息发给 " + ownerName + " 绑定的微信")
+        : ("消息发给 " + (ownerName || "所属用户") + "，对方还没扫码绑定");
       return `<div class="account" data-index="${index}">
         <div class="account-head">
           <div>
             <strong>${escapeHtml(name)}</strong>
-            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${escapeHtml(source)}${isAdmin() && data.owner ? " · 所属 " + escapeHtml(data.owner) : ""}</div>
+            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${escapeHtml(source)}${isAdmin() && data.owner ? " · 所属 " + escapeHtml(data.owner) : ""} · ${escapeHtml(notifyHint)}</div>
           </div>
           <div class="account-head-right">
             <span class="ck-status ${ck.cls}">${ck.text}</span>
@@ -1466,7 +1506,6 @@
       if ($("wxEnabled")) $("wxEnabled").checked = !!wx.enabled;
       if ($("wpEnabled")) $("wpEnabled").checked = !!wp.enabled;
       if ($("wpAppToken")) $("wpAppToken").value = wp.app_token || "";
-      if ($("wpUids")) $("wpUids").value = wp.uids || "";
       if ($("wxEventDone")) $("wxEventDone").checked = events.task_done !== false;
       if ($("wxEventFail")) $("wxEventFail").checked = events.task_fail !== false;
       if ($("wxEventOffline")) $("wxEventOffline").checked = events.cookie_offline !== false;
@@ -1491,7 +1530,6 @@
             wxpusher: {
               enabled: !!( $("wpEnabled") && $("wpEnabled").checked ),
               app_token: ($("wpAppToken") && $("wpAppToken").value) || "",
-              uids: ($("wpUids") && $("wpUids").value) || "",
             },
             wechat: {
               enabled: !!( $("wxEnabled") && $("wxEnabled").checked ),
@@ -1525,6 +1563,124 @@
           body: JSON.stringify(channel ? { channel } : {}),
         });
         toast(data.message || "测试消息已发送");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    function stopWxpusherPoll() {
+      if (wpBindTimer) {
+        clearTimeout(wpBindTimer);
+        wpBindTimer = null;
+      }
+    }
+    function applyWxpusherBind(data) {
+      if (!current || !data) return;
+      if (typeof data.bound === "boolean") current.wxpusher_bound = data.bound;
+      if (data.mask) current.wxpusher_mask = data.mask;
+      if (data.bound === false) current.wxpusher_mask = "";
+      renderWxpusherCard();
+    }
+    function showWxpusherQr(url) {
+      const img = $("wpQrImage");
+      const loading = $("wpQrLoading");
+      if (!img) return;
+      if (url) window.__wpQrUrl = url;
+      img.onload = () => {
+        img.classList.remove("hidden");
+        if (loading) loading.classList.add("hidden");
+      };
+      img.onerror = () => {
+        if (window.__wpQrUrl && img.src.indexOf("qr-image") >= 0) {
+          img.src = window.__wpQrUrl;
+          return;
+        }
+        if (loading) loading.textContent = "二维码加载失败，请点刷新";
+      };
+      img.classList.add("hidden");
+      if (loading) {
+        loading.classList.remove("hidden");
+        loading.textContent = "正在生成二维码…";
+      }
+      img.src = "/api/notify/wxpusher/qr-image?t=" + Date.now();
+    }
+    async function openWxpusherBind() {
+      const who = (current && current.username) || "当前用户";
+      if ($("wpModalHint")) {
+        $("wpModalHint").textContent =
+          "用微信扫下面的码，会绑到登录账号「" + who + "」。这个账号下的抖音号只会发到这个微信，别人的号不会发过来。";
+      }
+      if ($("wpModal")) $("wpModal").classList.remove("hidden");
+      wpBindOpen = true;
+      renderWxpusherCard();
+      await refreshWxpusherQr();
+    }
+    async function closeWxpusherBind() {
+      wpBindOpen = false;
+      stopWxpusherPoll();
+      if ($("wpModal")) $("wpModal").classList.add("hidden");
+      try {
+        await api("/api/notify/wxpusher/cancel", { method: "POST", body: "{}" });
+      } catch (e) {}
+    }
+    async function refreshWxpusherQr() {
+      if (!current) return;
+      stopWxpusherPoll();
+      if ($("wpModalStatus")) $("wpModalStatus").textContent = "请用微信扫码，大约 10 秒内完成绑定。";
+      try {
+        const data = await api("/api/notify/wxpusher/qr", {
+          method: "POST",
+          body: JSON.stringify({ force: true }),
+        });
+        applyWxpusherBind(data);
+        showWxpusherQr(data.qr_url);
+        wpBindTimer = setTimeout(pollWxpusherBind, 10000);
+      } catch (err) {
+        if ($("wpQrLoading")) {
+          $("wpQrLoading").classList.remove("hidden");
+          $("wpQrLoading").textContent = err.message || "二维码生成失败";
+        }
+        if ($("wpQrImage")) $("wpQrImage").classList.add("hidden");
+        if ($("wpModalStatus")) $("wpModalStatus").textContent = err.message || "生成失败";
+        toast(err.message, "err");
+      }
+    }
+    async function pollWxpusherBind() {
+      if (!wpBindOpen) return;
+      try {
+        const data = await api("/api/notify/wxpusher/poll");
+        if (data.bound && !data.waiting) {
+          applyWxpusherBind(data);
+          if ($("wpModalStatus")) $("wpModalStatus").textContent = "已绑定。这个登录账号下的抖音号会发到这个微信。";
+          toast("微信推送已绑定");
+          try { await loadConfig(); } catch (e) {}
+          return;
+        }
+        if (data.expired) {
+          if ($("wpModalStatus")) $("wpModalStatus").textContent = "二维码已过期，请点刷新。";
+          toast("二维码已过期，请刷新", "err");
+          return;
+        }
+        if ($("wpModalStatus")) $("wpModalStatus").textContent = "等待扫码…";
+      } catch (e) {}
+      if (wpBindOpen) wpBindTimer = setTimeout(pollWxpusherBind, 10000);
+    }
+    async function testWxpusherBind() {
+      try {
+        const data = await api("/api/notify/wxpusher/test", { method: "POST", body: "{}" });
+        toast(data.message || "测试消息已发送");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function unbindWxpusher() {
+      const ok = await ask("解绑微信推送", "解绑后不会再给你名下的抖音号发消息。确定解绑吗？");
+      if (!ok) return;
+      try {
+        const data = await api("/api/notify/wxpusher/unbind", { method: "POST", body: "{}" });
+        applyWxpusherBind({ bound: false, mask: "", ...data });
+        toast("已解绑");
+        try { await loadConfig(); } catch (e) {}
+        await refreshWxpusherQr();
       } catch (err) {
         toast(err.message, "err");
       }

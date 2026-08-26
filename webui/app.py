@@ -10,7 +10,7 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -52,13 +52,21 @@ from webui.cards import (
     public_card,
 )
 from webui.notify import (
+    apply_wxpusher_callback,
+    cancel_wxpusher_qr,
     load_notify,
     notify_event,
+    poll_wxpusher_qr,
     public_notify,
+    public_wxpusher,
     save_notify,
     send_wechat,
     send_wxpusher,
+    set_user_wxpusher,
+    start_wxpusher_qr,
+    user_wxpusher_uid,
     verify_wechat_signature,
+    wxpusher_qr_image,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -109,6 +117,9 @@ async def log_api_calls(request: Request, call_next):
         "/cards",
         "/settings",
         "/api/wechat/callback",
+        "/api/notify/wxpusher/poll",
+        "/api/notify/wxpusher/qr-image",
+        "/api/wxpusher/callback",
     } or path.startswith("/static/")
     if not quiet:
         logger.info("请求 %s %s", request.method, path)
@@ -640,7 +651,7 @@ def save_notify_settings(request: Request, payload: dict | None = None):
 
 @app.post("/api/settings/notify/test")
 def test_notify_settings(request: Request, payload: dict | None = None):
-    require_admin(request)
+    admin = require_admin(request)
     payload = payload or {}
     channel = str(payload.get("channel") or "").strip()
     cfg = load_notify()
@@ -651,11 +662,15 @@ def test_notify_settings(request: Request, payload: dict | None = None):
     want_wp = channel in ("", "wxpusher", "all")
     want_wx = channel in ("", "wechat", "all")
     if want_wp and wxpusher.get("enabled"):
-        try:
-            send_wxpusher("SparkFlow 测试推送", "WxPusher 通道正常")
-            notes.append("WxPusher 已发送")
-        except Exception as exc:
-            failed.append("WxPusher：" + str(exc))
+        uid = user_wxpusher_uid(admin.get("username") or "")
+        if not uid:
+            failed.append("WxPusher：请先在总览扫码绑定微信")
+        else:
+            try:
+                send_wxpusher("SparkFlow 测试推送", "WxPusher 通道正常", uids=[uid])
+                notes.append("WxPusher 已发送")
+            except Exception as exc:
+                failed.append("WxPusher：" + str(exc))
     if want_wx and wechat.get("enabled"):
         try:
             send_wechat("test", "SparkFlow 测试推送", "公众号消息通道正常")
@@ -671,6 +686,85 @@ def test_notify_settings(request: Request, payload: dict | None = None):
     if not notes:
         raise HTTPException(status_code=400, detail="；".join(failed))
     return {"ok": True, "message": "；".join(notes + failed)}
+
+
+@app.get("/api/notify/wxpusher")
+def get_wxpusher_bind(request: Request):
+    user = require_auth(request)
+    return {"ok": True, **public_wxpusher(user)}
+
+
+@app.post("/api/notify/wxpusher/qr")
+def create_wxpusher_qr(request: Request, payload: dict | None = None):
+    user = require_auth(request)
+    payload = payload or {}
+    try:
+        data = start_wxpusher_qr(user.get("username") or "", force=bool(payload.get("force")))
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return data
+
+
+@app.get("/api/notify/wxpusher/qr-image")
+def get_wxpusher_qr_image(request: Request):
+    user = require_auth(request)
+    raw = wxpusher_qr_image(user.get("username") or "")
+    if not raw:
+        raise HTTPException(status_code=404, detail="二维码还没生成或已过期")
+    kind = "image/png" if raw.startswith(b"\x89PNG") else "image/jpeg"
+    return Response(content=raw, media_type=kind, headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/notify/wxpusher/poll")
+def poll_wxpusher_bind(request: Request):
+    user = require_auth(request)
+    try:
+        data = poll_wxpusher_qr(user.get("username") or "")
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return data
+
+
+@app.post("/api/notify/wxpusher/cancel")
+def cancel_wxpusher_bind(request: Request):
+    user = require_auth(request)
+    cancel_wxpusher_qr(user.get("username") or "")
+    return {"ok": True}
+
+
+@app.post("/api/notify/wxpusher/unbind")
+def unbind_wxpusher(request: Request):
+    user = require_auth(request)
+    name = user.get("username") or ""
+    cancel_wxpusher_qr(name)
+    saved = set_user_wxpusher(name, "")
+    logger.info("已解绑 WxPusher user=%s", name)
+    return {"ok": True, **public_wxpusher(saved)}
+
+
+@app.post("/api/notify/wxpusher/test")
+def test_wxpusher_bind(request: Request):
+    user = require_auth(request)
+    uid = user_wxpusher_uid(user.get("username") or "")
+    if not uid:
+        raise HTTPException(status_code=400, detail="请先扫码绑定微信")
+    try:
+        send_wxpusher("SparkFlow 测试推送", "绑定成功，以后你名下的抖音号消息会发到这里", uids=[uid])
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "message": "测试消息已发送"}
+
+
+@app.post("/api/wxpusher/callback")
+async def wxpusher_callback(request: Request):
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    apply_wxpusher_callback(payload)
+    return {"code": 1000, "msg": "success"}
 
 
 @app.api_route("/api/wechat/callback", methods=["GET", "POST"])
@@ -824,11 +918,13 @@ def get_config(request: Request):
     for item in parse_accounts(env):
         cookie_raw = env.get(cookie_key(item["unique_id"]), "")
         owner = _account_owner(item)
+        owner_user = find_user(owner) if owner else None
         accounts.append(
             {
                 **item,
                 "cookies": cookie_raw if isinstance(cookie_raw, str) else json.dumps(cookie_raw, ensure_ascii=False),
                 "owner": owner,
+                "wxpusher_bound": bool(str((owner_user or {}).get("wxpusher_uid") or "").strip()),
             }
         )
     return {
