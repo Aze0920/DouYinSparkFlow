@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>DouYinSparkFlow</title>
   <link rel="stylesheet" href="/static/app.css?v={{ version }}" />
+  <script>
+    try {
+      if (localStorage.getItem("dsf_sidebar_collapsed") === "1") {
+        document.documentElement.classList.add("sidebar-collapsed");
+      }
+    } catch (e) {}
+  </script>
 </head>
 <body>
   <div id="toasts" class="toast-wrap"></div>
@@ -87,57 +94,90 @@
   </div>
 
   <div id="loginPage" class="login-page hidden">
-    <section class="login-visual">
-      <div class="spark-mark">✦</div>
-      <h2>把火花续在自己手里</h2>
-    </section>
     <section class="login-box">
-      <form class="login-card" id="loginForm" onsubmit="return doLogin(event)">
-        <h1>登录控制台</h1>
-        <input id="loginUser" placeholder="请输入用户名" autocomplete="username" />
-        <input id="loginPass" type="password" placeholder="请输入密码" autocomplete="current-password" />
-        <button class="btn-primary" type="submit">进入系统</button>
-        <button class="btn-ghost" type="button" onclick="showRegisterForm()">没有账号？用卡密注册</button>
-        <div id="loginError" class="error"></div>
-      </form>
-      <form class="login-card hidden" id="registerForm" onsubmit="return doRegister(event)">
-        <h1>注册账号</h1>
-        <input id="regUser" placeholder="请输入用户名" autocomplete="username" />
-        <input id="regPass" type="password" placeholder="请输入密码" autocomplete="new-password" />
-        <input id="regPass2" type="password" placeholder="再输入一次密码" autocomplete="new-password" />
-        <input id="regCard" placeholder="卡密，例如 DSF-XXXX-XXXX-XXXX" autocomplete="off" />
-        <button class="btn-primary" type="submit">注册并进入</button>
-        <button class="btn-ghost" type="button" onclick="showLoginForm()">已有账号？去登录</button>
-        <div id="registerError" class="error"></div>
-      </form>
+      <div class="login-card">
+        <div class="login-head">
+          <div class="spark-mark">✦</div>
+          <h1 id="loginTitle">登录控制台</h1>
+          <p class="login-slogan">把火花续在自己手里</p>
+        </div>
+        <form id="loginForm" onsubmit="return doLogin(event)">
+          <input id="loginUser" placeholder="请输入用户名" autocomplete="username" />
+          <input id="loginPass" type="password" placeholder="请输入密码" autocomplete="current-password" />
+          <button class="btn-primary" type="submit">进入系统</button>
+          <button class="btn-ghost" type="button" onclick="showRegisterForm()">没有账号？用卡密注册</button>
+          <div id="loginError" class="error"></div>
+        </form>
+        <form class="hidden" id="registerForm" onsubmit="return doRegister(event)">
+          <input id="regUser" placeholder="请输入用户名" autocomplete="username" />
+          <input id="regPass" type="password" placeholder="请输入密码" autocomplete="new-password" />
+          <input id="regPass2" type="password" placeholder="再输入一次密码" autocomplete="new-password" />
+          <input id="regCard" placeholder="卡密，例如 DSF-XXXX-XXXX-XXXX" autocomplete="off" />
+          <button class="btn-primary" type="submit">注册并进入</button>
+          <button class="btn-ghost" type="button" onclick="showLoginForm()">已有账号？去登录</button>
+          <div id="registerError" class="error"></div>
+        </form>
+      </div>
     </section>
   </div>
 
   <div id="app" class="app hidden">
-    <aside class="sidebar">
+    <aside class="sidebar" id="sidebar">
       <div class="brand">
         <div class="spark-mark">✦</div>
-        <div>
+        <div class="brand-text">
           <b>SparkFlow</b>
           <span id="versionPill">v{{ version }}</span>
         </div>
+        <button class="sidebar-toggle" type="button" onclick="toggleSidebar()" title="折叠侧边栏" aria-label="折叠侧边栏">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
+        </button>
       </div>
-      <a class="nav-btn active" href="/" data-page="home" onclick="return navTo(event, 'home')">总览</a>
-      <a class="nav-btn admin-only hidden" href="/logs" data-page="logs" onclick="return navTo(event, 'logs')">运行日志</a>
-      <a class="nav-btn admin-only hidden" href="/users" data-page="users" onclick="return navTo(event, 'users')">用户管理</a>
-      <a class="nav-btn admin-only hidden" href="/cards" data-page="cards" onclick="return navTo(event, 'cards')">卡密管理</a>
-      <a class="nav-btn admin-only hidden" href="/settings" data-page="settings" onclick="return navTo(event, 'settings')">设置</a>
+      <nav class="nav-list">
+        <a class="nav-btn active" href="/" data-page="home" title="总览" onclick="return navTo(event, 'home')">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10.5 12 4l8 6.5V20a1.2 1.2 0 0 1-1.2 1.2h-4.8v-6H10v6H5.2A1.2 1.2 0 0 1 4 20z"/></svg></span>
+          <span class="nav-label">总览</span>
+        </a>
+        <a class="nav-btn admin-only hidden" href="/logs" data-page="logs" title="运行日志" onclick="return navTo(event, 'logs')">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 5h13M7 12h13M7 19h13"/><circle cx="4" cy="5" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="19" r="1.2" fill="currentColor"/></svg></span>
+          <span class="nav-label">运行日志</span>
+        </a>
+        <a class="nav-btn admin-only hidden" href="/users" data-page="users" title="用户管理" onclick="return navTo(event, 'users')">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="9" cy="8" r="3.2"/><path d="M3.8 19a5.2 5.2 0 0 1 10.4 0"/><circle cx="17" cy="9" r="2.4"/><path d="M20.6 19a4.2 4.2 0 0 0-4.8-4"/></svg></span>
+          <span class="nav-label">用户管理</span>
+        </a>
+        <a class="nav-btn admin-only hidden" href="/cards" data-page="cards" title="卡密管理" onclick="return navTo(event, 'cards')">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6.5" width="18" height="11" rx="2.2"/><path d="M7 12h.01M11 12h6"/></svg></span>
+          <span class="nav-label">卡密管理</span>
+        </a>
+        <a class="nav-btn admin-only hidden" href="/settings" data-page="settings" title="设置" onclick="return navTo(event, 'settings')">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1.1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></span>
+          <span class="nav-label">设置</span>
+        </a>
+      </nav>
       <div class="sidebar-foot">
-        <div id="whoami">未登录</div>
-        <button class="btn-ghost mini" onclick="doLogout()">退出登录</button>
+        <div class="whoami-block">
+          <div class="whoami-avatar" id="whoamiAvatar">?</div>
+          <div class="whoami-text" id="whoami">未登录</div>
+        </div>
+        <button class="btn-ghost mini logout-btn" type="button" onclick="doLogout()" title="退出登录">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 7V5a2 2 0 0 1 2-2h7v18h-7a2 2 0 0 1-2-2v-2"/><path d="M15 12H3m0 0 3.5-3.5M3 12l3.5 3.5"/></svg>
+          <span class="logout-text">退出登录</span>
+        </button>
       </div>
     </aside>
+    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
 
     <main class="main">
       <div class="topbar">
-        <div>
-          <h1 class="page-title" id="pageTitle">总览</h1>
-          <div class="sub" id="pageSub">查看运行状态与版本</div>
+        <div class="topbar-left">
+          <button class="menu-btn" type="button" onclick="toggleSidebar()" title="打开菜单" aria-label="打开菜单">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+          </button>
+          <div>
+            <h1 class="page-title" id="pageTitle">总览</h1>
+            <div class="sub" id="pageSub">查看运行状态与版本</div>
+          </div>
         </div>
         <div class="row">
           <span class="status-dot" id="liveDot"><i></i><b id="runText">空闲</b></span>
@@ -367,6 +407,30 @@
       const n = Number(raw);
       return Number.isFinite(n) ? n : fallback;
     }
+    const SIDEBAR_KEY = "dsf_sidebar_collapsed";
+    function isMobileLayout() {
+      return window.matchMedia("(max-width: 860px)").matches;
+    }
+    function closeMobileSidebar() {
+      document.documentElement.classList.remove("sidebar-open");
+    }
+    function toggleSidebar() {
+      if (isMobileLayout()) {
+        document.documentElement.classList.toggle("sidebar-open");
+        return;
+      }
+      const next = !document.documentElement.classList.contains("sidebar-collapsed");
+      document.documentElement.classList.toggle("sidebar-collapsed", next);
+      try {
+        localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
+      } catch (e) {}
+    }
+    window.addEventListener("resize", () => {
+      if (!isMobileLayout()) closeMobileSidebar();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeMobileSidebar();
+    });
     async function api(path, options = {}) {
       const resp = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
       const data = await resp.json().catch(() => ({}));
@@ -424,6 +488,9 @@
         ? `${current.username} · ${current.role === "admin" ? "管理员 · 永久" : ((current.remain_label || "普通用户") + " · " + (current.account_limit_label || ""))}`
         : "";
       $("whoami").textContent = tag;
+      if ($("whoamiAvatar")) {
+        $("whoamiAvatar").textContent = current && current.username ? String(current.username).slice(0, 1).toUpperCase() : "?";
+      }
       updateHomeProfile();
       applySparkLock();
     }
@@ -468,6 +535,7 @@
       if (event && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button)) return true;
       if (event) event.preventDefault();
       showPage(name);
+      closeMobileSidebar();
       return false;
     }
     function showPage(name, opts) {
@@ -530,11 +598,13 @@
       $("loginForm").classList.add("hidden");
       $("registerForm").classList.remove("hidden");
       $("registerError").textContent = "";
+      if ($("loginTitle")) $("loginTitle").textContent = "注册账号";
     }
     function showLoginForm() {
       $("registerForm").classList.add("hidden");
       $("loginForm").classList.remove("hidden");
       $("loginError").textContent = "";
+      if ($("loginTitle")) $("loginTitle").textContent = "登录控制台";
     }
     async function doRegister(event) {
       event.preventDefault();
