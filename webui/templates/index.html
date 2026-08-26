@@ -127,7 +127,7 @@
         <div class="spark-mark">✦</div>
         <div class="brand-text">
           <b>SparkFlow</b>
-          <span id="versionPill">v{{ version }}</span>
+          <span id="versionPill" class="admin-only hidden">v{{ version }}</span>
         </div>
         <button class="sidebar-toggle" type="button" onclick="toggleSidebar()" title="折叠侧边栏" aria-label="折叠侧边栏">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 6l-6 6 6 6"/></svg>
@@ -198,8 +198,8 @@
             <strong id="homeExpires">-</strong>
             <div class="card-sub" id="homeRemain"></div>
           </article>
-          <article class="card"><label>本地版本</label><strong id="localVersion">-</strong></article>
-          <article class="card"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
+          <article class="card admin-only hidden" id="localVersionCard"><label>本地版本</label><strong id="localVersion">-</strong></article>
+          <article class="card admin-only hidden" id="remoteVersionCard"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
           <article class="card admin-only hidden" id="accountCountCard">
             <label>全部账号数量</label>
             <strong id="accountCount">-</strong>
@@ -657,9 +657,11 @@
     }
     async function applyStatus(data) {
       window.__lastStatus = data;
-      $("localVersion").textContent = "v" + data.local_version;
-      $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未获取到";
-      $("versionPill").textContent = "v" + data.local_version;
+      if (isAdmin()) {
+        if ($("localVersion") && data.local_version) $("localVersion").textContent = "v" + data.local_version;
+        if ($("remoteVersion")) $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未获取到";
+        if ($("versionPill") && data.local_version) $("versionPill").textContent = "v" + data.local_version;
+      }
       if ($("accountCount")) {
         $("accountCount").textContent = data.total_accounts == null ? "-" : String(data.total_accounts);
       }
@@ -668,7 +670,7 @@
         current = Object.assign(current || {}, data.me);
         applyRole();
       }
-      $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
+      if ($("updateBtn")) $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
     }
     async function checkStatus() {
       const data = await api("/api/status");
@@ -676,14 +678,14 @@
       return data;
     }
     async function checkGithub(silent = false) {
-      if (githubCheckBusy) return;
+      if (!isAdmin() || githubCheckBusy) return;
       githubCheckBusy = true;
       const btn = $("checkGithubBtn");
       const oldText = btn ? btn.textContent : "GitHub 检测";
       if (btn && !silent) {
         btn.disabled = true;
         btn.textContent = "检测中...";
-        $("remoteVersion").textContent = "检测中";
+        if ($("remoteVersion")) $("remoteVersion").textContent = "检测中";
       }
       try {
         const data = await api("/api/github/check", { method: "POST", body: "{}" });
@@ -701,14 +703,14 @@
         else if (data.update_available) toast(data.message);
       } catch (err) {
         if (!silent) {
-          $("remoteVersion").textContent = "未获取到";
+          if ($("remoteVersion")) $("remoteVersion").textContent = "未获取到";
           toast(err.message, "err");
         }
       } finally {
         githubCheckBusy = false;
         if (btn) {
           btn.disabled = false;
-          btn.textContent = "GitHub 检测";
+          btn.textContent = oldText || "GitHub 检测";
         }
       }
     }
@@ -1816,7 +1818,7 @@
         pollBusy = false;
       }, 2000);
       setInterval(() => {
-        checkGithub(true);
+        if (isAdmin()) checkGithub(true);
       }, 60000);
     }
     (async () => {

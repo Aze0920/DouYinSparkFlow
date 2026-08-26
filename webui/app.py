@@ -879,8 +879,6 @@ async def wechat_callback(request: Request):
 def status(request: Request):
     user = require_auth(request)
     env = load_env()
-    local = read_version()
-    remote = remote_version_fast()
     accounts = parse_accounts(env)
     times = []
     seen = set()
@@ -895,12 +893,6 @@ def status(request: Request):
             times.append(label)
     payload = {
         "ok": True,
-        "local_version": local,
-        "remote_version": remote,
-        "update_available": bool(remote and remote != local),
-        "github_repo": repo_name(),
-        "env_file": str(env_path()),
-        "is_git_repo": (ROOT / ".git").exists(),
         "cron": "、".join(times) if times else f"{env.get('CRON_HOUR', '9')}:{str(env.get('CRON_MINUTE', '0')).zfill(2)}",
         "tz": env.get("TZ", "Asia/Shanghai"),
         "running": _run_state["running"],
@@ -910,6 +902,14 @@ def status(request: Request):
         "me": public_user(user),
     }
     if _is_admin(user):
+        local = read_version()
+        remote = remote_version_fast()
+        payload["local_version"] = local
+        payload["remote_version"] = remote
+        payload["update_available"] = bool(remote and remote != local)
+        payload["github_repo"] = repo_name()
+        payload["env_file"] = str(env_path())
+        payload["is_git_repo"] = (ROOT / ".git").exists()
         payload["total_accounts"] = len(accounts)
     return payload
 
@@ -1020,7 +1020,7 @@ def get_config(request: Request):
                 "wxpusher_bound": bool(str((owner_user or {}).get("wxpusher_uid") or "").strip()),
             }
         )
-    return {
+    payload = {
         "cron_hour": int(env.get("CRON_HOUR") or 9),
         "cron_minute": int(env.get("CRON_MINUTE") or 0),
         "cron_second": int(env.get("CRON_SECOND") or 0),
@@ -1033,9 +1033,11 @@ def get_config(request: Request):
         "task_retry_times": int(env.get("TASK_RETRY_TIMES") or 3),
         "max_task_threads": _clamp_task_threads(env.get("MAX_TASK_THREADS") or 10),
         "log_level": env.get("LOG_LEVEL") or "DEBUG",
-        "github_repo": repo_name(),
         "accounts": _filter_accounts(user, accounts),
     }
+    if _is_admin(user):
+        payload["github_repo"] = repo_name()
+    return payload
 
 
 @app.post("/api/config")
