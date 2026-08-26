@@ -193,7 +193,12 @@ html, body {
   align-items: center;
   gap: 10px;
   min-width: 0;
+  text-decoration: none;
+  color: inherit;
+  border-radius: 12px;
+  padding: 6px 4px;
 }
+.whoami-block:hover { background: rgba(255, 122, 58, .1); }
 .whoami-avatar {
   width: 32px;
   height: 32px;
@@ -466,6 +471,19 @@ html.sidebar-collapsed .logout-btn { padding-left: 8px; padding-right: 8px; }
 .dash-quick-copy b { font-size: 14px; }
 .dash-quick-copy small { color: var(--muted); font-size: 12px; }
 .dash-quick-arrow { color: var(--muted); font-size: 22px; line-height: 1; }
+
+.mine { display: grid; gap: 16px; }
+.mine-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.mine-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+.mine-card-actions button { width: auto; }
+.mine-save { width: auto; margin-top: 12px; }
+.mine-exit { display: grid; gap: 12px; }
+.mine-logout { width: 100%; }
 
 @media (max-width: 1180px) and (min-width: 861px) {
   .dash-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -896,58 +914,76 @@ body.spark-locked .spark-action {
     font-size: 11px;
   }
   .dash-panel { min-height: 0; }
-  .menu-btn { display: grid; }
-  .sidebar-toggle { display: none; }
+  .menu-btn,
+  .sidebar-toggle,
+  .sidebar-backdrop,
+  .sidebar .brand,
+  .sidebar-foot { display: none !important; }
   .sidebar {
-    width: min(280px, 86vw);
-    transform: translateX(-105%);
-    box-shadow: none;
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: auto;
+    transform: none !important;
+    flex-direction: column;
+    padding: 4px 8px calc(6px + env(safe-area-inset-bottom));
+    border-right: 0;
+    border-top: 1px solid var(--line);
+    background: rgba(11, 18, 28, .94);
+    backdrop-filter: blur(18px);
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, .32);
+    overflow: visible;
   }
+  html.sidebar-collapsed .sidebar,
   html.sidebar-open .sidebar {
-    transform: translateX(0);
-    box-shadow: 24px 0 60px rgba(0, 0, 0, .35);
-  }
-  html.sidebar-collapsed .sidebar {
-    width: min(280px, 86vw);
+    width: 100%;
+    transform: none !important;
+    box-shadow: 0 -12px 32px rgba(0, 0, 0, .32);
   }
   html.sidebar-collapsed .main { margin-left: 0; }
-  html.sidebar-open, html.sidebar-open body { overflow: hidden; height: 100%; }
-  html.sidebar-collapsed .brand {
+  html.sidebar-collapsed .nav-label { display: block; }
+  html.sidebar-collapsed .nav-btn { justify-content: center; }
+  .nav-list {
     flex-direction: row;
-    justify-content: flex-start;
-    padding: 8px 8px 14px;
+    justify-content: space-around;
+    align-items: stretch;
+    gap: 4px;
+    width: 100%;
   }
-  html.sidebar-collapsed .brand-text,
-  html.sidebar-collapsed .whoami-text { display: block; }
-  html.sidebar-collapsed .nav-label,
-  html.sidebar-collapsed .logout-text { display: inline; }
-  html.sidebar-collapsed .legal-mini { display: flex; }
-  html.sidebar-collapsed .nav-btn { justify-content: flex-start; padding: 11px 12px; }
-  html.sidebar-collapsed .sidebar-toggle { margin: 0; }
-  html.sidebar-collapsed .sidebar-toggle svg { transform: none; }
-  html.sidebar-collapsed .whoami-block { justify-content: flex-start; }
-  .sidebar-backdrop {
-    display: none;
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, .48);
-    z-index: 35;
+  .sidebar .nav-btn.admin-only { display: none !important; }
+  .nav-btn {
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    gap: 3px;
+    padding: 8px 4px 6px;
+    min-width: 0;
+    text-align: center;
   }
-  html.sidebar-open .sidebar-backdrop { display: block; }
+  .nav-label { font-size: 11px; }
+  .nav-full { display: none; }
+  .nav-btn.active { color: var(--ember); }
+  .nav-btn.active .nav-icon { color: var(--ember); }
+  .nav-icon { width: 22px; height: 22px; }
+  .nav-icon svg { width: 20px; height: 20px; }
   .main {
     margin-left: 0;
     height: auto;
     overflow: visible;
-    padding: 16px 14px calc(28px + env(safe-area-inset-bottom));
+    padding: 16px 14px calc(88px + env(safe-area-inset-bottom));
   }
   .page-title { font-size: 22px; }
   .card strong { font-size: 20px; }
-  .topbar { align-items: flex-start; }
+  .topbar { align-items: center; }
   .span-2 { grid-column: auto; }
   .log-box { height: 42vh; min-height: 200px; }
   .account-actions { grid-template-columns: 1fr; }
   .toast-wrap { left: 12px; right: 12px; top: 12px; }
   .toast { min-width: 0; }
+  .mine-save { width: 100%; }
 }
 
 @media (max-width: 480px) {

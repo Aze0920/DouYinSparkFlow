@@ -149,6 +149,7 @@ async def log_api_calls(request: Request, call_next):
         "/settings",
         "/invite",
         "/accounts",
+        "/mine",
         "/terms",
         "/privacy",
         "/api/wechat/callback",
@@ -169,7 +170,7 @@ async def log_api_calls(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-XSS-Protection"] = "0"
-    if path.startswith("/api") or path in {"/", "/home", "/tasks", "/logs", "/users", "/cards", "/settings", "/invite", "/accounts"}:
+    if path.startswith("/api") or path in {"/", "/home", "/tasks", "/logs", "/users", "/cards", "/settings", "/invite", "/accounts", "/mine"}:
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -624,6 +625,7 @@ def privacy_page(request: Request):
 @app.get("/cards", response_class=HTMLResponse)
 @app.get("/settings", response_class=HTMLResponse)
 @app.get("/invite", response_class=HTMLResponse)
+@app.get("/mine", response_class=HTMLResponse)
 def spa_pages(request: Request):
     return spa_index(request)
 

@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <title>DouYinSparkFlow</title>
   <link rel="stylesheet" href="/static/app.css?v={{ version }}" />
   <script>
@@ -91,8 +91,6 @@
       <p class="sub" id="wpModalStatus"></p>
       <div class="modal-actions wp-modal-actions">
         <button class="btn-ghost" type="button" id="wpRefreshBtn" onclick="refreshWxpusherQr()">刷新二维码</button>
-        <button class="btn-ghost" type="button" id="wpTestBtn" onclick="testWxpusherBind()">发送测试</button>
-        <button class="btn-ghost" type="button" id="wpUnbindBtn" onclick="unbindWxpusher()">解绑</button>
         <button class="btn-primary" type="button" onclick="closeWxpusherBind()">关闭</button>
       </div>
     </div>
@@ -107,22 +105,6 @@
       <div class="modal-actions">
         <button class="btn-ghost" type="button" onclick="closeRechargeModal()">取消</button>
         <button class="btn-primary" type="button" onclick="submitRecharge()">确认充值</button>
-      </div>
-    </div>
-  </div>
-
-  <div id="profileModal" class="modal-mask hidden" onclick="if(event.target===this)closeProfileModal()">
-    <div class="modal-card">
-      <h3>账号设置</h3>
-      <p class="sub">修改控制台登录密码。微信推送也可从这里打开。</p>
-      <label>当前密码<input id="profileOldPass" type="password" autocomplete="current-password" /></label>
-      <label>新密码<input id="profileNewPass" type="password" autocomplete="new-password" /></label>
-      <label>再输入一次<input id="profileNewPass2" type="password" autocomplete="new-password" /></label>
-      <div id="profileError" class="error"></div>
-      <div class="modal-actions">
-        <button class="btn-ghost" type="button" onclick="closeProfileModal(); openWxpusherBind()">消息推送</button>
-        <button class="btn-ghost" type="button" onclick="closeProfileModal()">取消</button>
-        <button class="btn-primary" type="button" onclick="submitProfilePassword()">保存密码</button>
       </div>
     </div>
   </div>
@@ -182,7 +164,7 @@
         </a>
         <a class="nav-btn" href="/accounts" data-page="accounts" title="账号列表" onclick="return navTo(event, 'accounts')">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 12h8M8 15h5"/></svg></span>
-          <span class="nav-label">账号列表</span>
+          <span class="nav-label">账号<span class="nav-full">列表</span></span>
         </a>
         <a class="nav-btn admin-only hidden" href="/logs" data-page="logs" title="运行日志" onclick="return navTo(event, 'logs')">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 5h13M7 12h13M7 19h13"/><circle cx="4" cy="5" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="19" r="1.2" fill="currentColor"/></svg></span>
@@ -198,18 +180,22 @@
         </a>
         <a class="nav-btn invite-nav hidden" href="/invite" data-page="invite" title="邀请管理" onclick="return navTo(event, 'invite')">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="3"/><path d="M2.8 19a5.2 5.2 0 0 1 10.4 0"/><path d="M16 8h6M19 5v6"/><path d="M15.5 19a5 5 0 0 1 6.2-3.2"/></svg></span>
-          <span class="nav-label">邀请管理</span>
+          <span class="nav-label">邀请<span class="nav-full">管理</span></span>
         </a>
         <a class="nav-btn admin-only hidden" href="/settings" data-page="settings" title="设置" onclick="return navTo(event, 'settings')">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1.1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></span>
           <span class="nav-label">设置</span>
         </a>
+        <a class="nav-btn" href="/mine" data-page="mine" title="我的" onclick="return navTo(event, 'mine')">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.2"/><path d="M5 19.2a7 7 0 0 1 14 0"/></svg></span>
+          <span class="nav-label">我的</span>
+        </a>
       </nav>
       <div class="sidebar-foot">
-        <div class="whoami-block">
+        <a class="whoami-block" href="/mine" title="我的" onclick="return navTo(event, 'mine')">
           <div class="whoami-avatar" id="whoamiAvatar">?</div>
           <div class="whoami-text" id="whoami">未登录</div>
-        </div>
+        </a>
         <button class="btn-ghost mini logout-btn" type="button" onclick="doLogout()" title="退出登录">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M10 7V5a2 2 0 0 1 2-2h7v18h-7a2 2 0 0 1-2-2v-2"/><path d="M15 12H3m0 0 3.5-3.5M3 12l3.5 3.5"/></svg>
           <span class="logout-text">退出登录</span>
@@ -314,9 +300,9 @@
                   <span class="dash-quick-copy"><b>卡密激活</b><small>一步完成激活开通</small></span>
                   <span class="dash-quick-arrow" aria-hidden="true">›</span>
                 </button>
-                <button type="button" class="dash-quick-item" onclick="openProfileModal()">
+                <button type="button" class="dash-quick-item" onclick="return navTo(event, 'mine')">
                   <span class="dash-quick-icon is-muted" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1.1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></span>
-                  <span class="dash-quick-copy"><b>账号设置</b><small>修改密码、绑定推送</small></span>
+                  <span class="dash-quick-copy"><b>我的</b><small>修改密码、绑定微信推送</small></span>
                   <span class="dash-quick-arrow" aria-hidden="true">›</span>
                 </button>
               </div>
@@ -332,11 +318,6 @@
             <strong id="homeExpires">-</strong>
             <div class="card-sub" id="homeRemain"></div>
           </article>
-          <article class="card card-click" id="wpBindCard" onclick="openWxpusherBind()">
-            <label>消息推送</label>
-            <strong id="wpBindLabel">未绑定</strong>
-            <div class="card-sub hidden" id="wpBindHint"></div>
-          </article>
           <article class="card admin-only hidden" id="localVersionCard"><label>本地版本</label><strong id="localVersion">-</strong></article>
           <article class="card admin-only hidden" id="remoteVersionCard"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
           <article class="card admin-only hidden" id="accountCountCard">
@@ -348,7 +329,6 @@
           <div class="panel-head">
             <h2>抖音账号</h2>
             <div>
-              <button class="btn-ghost" type="button" onclick="openWxpusherBind()">消息推送</button>
               <button class="btn-ghost spark-action" type="button" onclick="openAddAccount()">添加账号</button>
             </div>
           </div>
@@ -357,6 +337,81 @@
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码、手机打开抖音，或粘贴 Cookie JSON。</p>
           <div id="accounts" class="accounts-grid"></div>
         </section>
+      </section>
+
+      <section id="page-mine" class="hidden">
+        <div class="mine">
+          <article class="dash-user-card">
+            <div class="dash-user-avatar" id="mineAvatar">?</div>
+            <div class="dash-user-meta">
+              <strong id="mineUserName">未登录</strong>
+              <div class="dash-user-line" id="mineRoleLine">-</div>
+              <div class="dash-user-line">最近登录 <b id="mineLastLogin">-</b></div>
+              <div class="dash-user-line">最近登录 IP <b id="mineLastIp">-</b></div>
+            </div>
+          </article>
+          <div class="cards mine-cards">
+            <article class="card card-click" id="mineExpiresCard" onclick="openRechargeModal()">
+              <label>会员到期</label>
+              <strong id="mineExpires">-</strong>
+              <div class="card-sub" id="mineRemain"></div>
+            </article>
+            <article class="card">
+              <label>微信推送</label>
+              <strong id="wpBindLabel">未绑定</strong>
+              <div class="card-sub" id="mineWpHint">绑定后，续火结果会发到微信</div>
+              <div class="mine-card-actions">
+                <button class="btn-primary mini" type="button" id="wpBindBtn" onclick="openWxpusherBind()">绑定微信</button>
+                <button class="btn-ghost mini hidden" type="button" id="wpTestBtn" onclick="testWxpusherBind()">发送测试</button>
+                <button class="btn-ghost mini hidden" type="button" id="wpUnbindBtn" onclick="unbindWxpusher()">解绑</button>
+              </div>
+            </article>
+          </div>
+          <section class="panel">
+            <div class="panel-head">
+              <h2>修改密码</h2>
+            </div>
+            <p class="sub">修改控制台登录密码，不影响已绑定的抖音号。</p>
+            <div class="grid two">
+              <label>当前密码<input id="profileOldPass" type="password" autocomplete="current-password" /></label>
+              <label>新密码<input id="profileNewPass" type="password" autocomplete="new-password" /></label>
+              <label class="span-2">再输入一次<input id="profileNewPass2" type="password" autocomplete="new-password" /></label>
+            </div>
+            <div id="profileError" class="error"></div>
+            <button class="btn-primary mine-save" type="button" onclick="submitProfilePassword()">保存密码</button>
+          </section>
+          <section class="panel admin-only hidden">
+            <div class="panel-head">
+              <h2>管理功能</h2>
+            </div>
+            <div class="dash-quick">
+              <button type="button" class="dash-quick-item" onclick="return navTo(event, 'logs')">
+                <span class="dash-quick-copy"><b>运行日志</b><small>查看任务输出</small></span>
+                <span class="dash-quick-arrow" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="dash-quick-item" onclick="return navTo(event, 'users')">
+                <span class="dash-quick-copy"><b>用户管理</b><small>天数、账号额度</small></span>
+                <span class="dash-quick-arrow" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="dash-quick-item" onclick="return navTo(event, 'cards')">
+                <span class="dash-quick-copy"><b>卡密管理</b><small>生成和查看卡密</small></span>
+                <span class="dash-quick-arrow" aria-hidden="true">›</span>
+              </button>
+              <button type="button" class="dash-quick-item" onclick="return navTo(event, 'settings')">
+                <span class="dash-quick-copy"><b>设置</b><small>邀请、推送、并发</small></span>
+                <span class="dash-quick-arrow" aria-hidden="true">›</span>
+              </button>
+            </div>
+          </section>
+          <section class="panel mine-exit">
+            <button class="btn-ghost mine-logout" type="button" onclick="doLogout()">退出登录</button>
+            <div class="legal-mini">
+              <a href="/terms" target="_blank" rel="noopener">服务条款</a>
+              <span>·</span>
+              <a href="/privacy" target="_blank" rel="noopener">隐私政策</a>
+            </div>
+          </section>
+        </div>
       </section>
 
       <section id="page-invite" class="hidden">
@@ -574,6 +629,8 @@
     let inviteEnabled = false;
     let pollBusy = false;
     let page = "home";
+    const PAGES = ["home", "accounts", "logs", "users", "cards", "invite", "settings", "mine"];
+    const USER_PAGES = ["home", "accounts", "invite", "mine"];
     let qrTimer = null;
     let qrReplaceIndex = -1;
     let qrApplying = false;
@@ -707,7 +764,7 @@
       });
       if ($("expiredBanner")) {
         if (current && current.invite_pending) {
-          $("expiredBanner").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。点「消息推送」扫码即可。";
+          $("expiredBanner").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。打开「我的」扫码即可。";
           $("expiredBanner").classList.remove("hidden");
         } else {
           $("expiredBanner").textContent = "卡密已到期，续火花按钮已禁用。点上面的「到期时间」可用卡密续期。";
@@ -716,7 +773,7 @@
       }
       if ($("dashExpired")) {
         if (current && current.invite_pending) {
-          $("dashExpired").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。请到账号列表打开「消息推送」扫码。";
+          $("dashExpired").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。请打开「我的」绑定微信。";
           $("dashExpired").classList.remove("hidden");
         } else {
           $("dashExpired").textContent = "卡密已到期，续火花已暂停。点右侧「卡密激活」续期。";
@@ -788,6 +845,35 @@
           ? ""
           : (current.permanent ? "当前为永久账户，无需充值" : "点击用卡密续期");
       }
+      if ($("mineAvatar")) {
+        $("mineAvatar").textContent = current && current.username ? String(current.username).slice(0, 1).toUpperCase() : "?";
+      }
+      if ($("mineUserName")) $("mineUserName").textContent = current ? (current.username || "-") : "未登录";
+      if ($("mineRoleLine")) {
+        $("mineRoleLine").textContent = current
+          ? (current.role === "admin" ? "管理员 · 永久" : ((current.remain_label || "普通用户") + " · " + (current.account_limit_label || "")))
+          : "-";
+      }
+      if ($("mineLastLogin")) $("mineLastLogin").textContent = current ? (current.last_login_label || "-") : "-";
+      if ($("mineLastIp")) $("mineLastIp").textContent = current ? (current.last_login_ip || "-") : "-";
+      if ($("mineExpires")) {
+        $("mineExpires").textContent = current
+          ? (isAdmin() || current.permanent ? "永久" : (current.expires_label || "-"))
+          : "-";
+      }
+      if ($("mineRemain")) {
+        if (!current) $("mineRemain").textContent = "";
+        else if (isAdmin()) $("mineRemain").textContent = "不过期";
+        else if (current.permanent) $("mineRemain").textContent = "永久账户，无需充值";
+        else $("mineRemain").textContent = (current.remain_label || "") + " · 点击续期";
+      }
+      if ($("mineExpiresCard")) {
+        const showTip = !!(current && !isAdmin());
+        $("mineExpiresCard").classList.toggle("card-click", showTip);
+        $("mineExpiresCard").title = !showTip
+          ? ""
+          : (current.permanent ? "当前为永久账户，无需充值" : "点击用卡密续期");
+      }
       renderWxpusherCard();
       renderDashboard();
     }
@@ -821,14 +907,7 @@
       if (wrap) wrap.classList.toggle("hidden", !list.length);
     }
     function openProfileModal() {
-      if ($("profileError")) $("profileError").textContent = "";
-      if ($("profileOldPass")) $("profileOldPass").value = "";
-      if ($("profileNewPass")) $("profileNewPass").value = "";
-      if ($("profileNewPass2")) $("profileNewPass2").value = "";
-      if ($("profileModal")) $("profileModal").classList.remove("hidden");
-    }
-    function closeProfileModal() {
-      if ($("profileModal")) $("profileModal").classList.add("hidden");
+      showPage("mine");
     }
     async function submitProfilePassword() {
       const oldPass = ($("profileOldPass") && $("profileOldPass").value) || "";
@@ -844,7 +923,9 @@
           method: "POST",
           body: JSON.stringify({ old_password: oldPass, new_password: next }),
         });
-        closeProfileModal();
+        if ($("profileOldPass")) $("profileOldPass").value = "";
+        if ($("profileNewPass")) $("profileNewPass").value = "";
+        if ($("profileNewPass2")) $("profileNewPass2").value = "";
         toast("密码已更新");
       } catch (err) {
         if ($("profileError")) $("profileError").textContent = err.message;
@@ -854,15 +935,19 @@
       const bound = !!(current && current.wxpusher_bound);
       const mask = (current && current.wxpusher_mask) || "";
       if ($("wpBindLabel")) $("wpBindLabel").textContent = bound ? ("已绑定" + (mask ? " · " + mask : "")) : "未绑定";
-      if ($("wpBindHint")) {
-        $("wpBindHint").textContent = "";
-        $("wpBindHint").classList.add("hidden");
+      if ($("mineWpHint")) {
+        if (current && current.invite_pending && !bound) {
+          $("mineWpHint").textContent = "邀请注册后必须先绑定微信，绑定成功才发放会员天数";
+        } else {
+          $("mineWpHint").textContent = bound ? "续火结果会发到已绑定的微信" : "绑定后，续火结果会发到微信";
+        }
       }
+      if ($("wpBindBtn")) $("wpBindBtn").classList.toggle("hidden", bound);
       if ($("wpTestBtn")) $("wpTestBtn").classList.toggle("hidden", !bound);
       if ($("wpUnbindBtn")) $("wpUnbindBtn").classList.toggle("hidden", !bound || !allowSelfUnbind);
     }
     function pagePath(name) {
-      return { home: "/", accounts: "/accounts", logs: "/logs", users: "/users", cards: "/cards", invite: "/invite", settings: "/settings" }[name] || "/";
+      return { home: "/", accounts: "/accounts", logs: "/logs", users: "/users", cards: "/cards", invite: "/invite", settings: "/settings", mine: "/mine" }[name] || "/";
     }
     function pathToPage(pathname) {
       const p = String(pathname || "/").replace(/\/+$/, "") || "/";
@@ -872,6 +957,7 @@
       if (p === "/cards") return "cards";
       if (p === "/invite") return "invite";
       if (p === "/settings") return "settings";
+      if (p === "/mine") return "mine";
       return "home";
     }
     function navTo(event, name) {
@@ -884,17 +970,18 @@
     function showPage(name, opts) {
       opts = opts || {};
       if (name === "tasks") name = "home";
-      if (!["home", "accounts", "logs", "users", "cards", "invite", "settings"].includes(name)) name = "home";
-      if (current && !isAdmin() && name !== "home" && name !== "accounts" && name !== "invite") name = "home";
+      if (!PAGES.includes(name)) name = "home";
+      if (current && !isAdmin() && !USER_PAGES.includes(name)) name = "home";
       if (name === "invite" && !inviteEnabled) name = "home";
       page = name;
-      ["home", "accounts", "logs", "users", "cards", "invite", "settings"].forEach((key) => {
+      PAGES.forEach((key) => {
         const el = $("page-" + key);
         if (el) el.classList.toggle("hidden", key !== name);
       });
       document.documentElement.classList.toggle("page-home", name === "home");
       document.querySelectorAll(".nav-btn").forEach((btn) => {
-        btn.classList.toggle("active", btn.dataset.page === name);
+        const mineParent = btn.dataset.page === "mine" && isMobileLayout() && ["logs", "users", "cards", "settings"].includes(name);
+        btn.classList.toggle("active", btn.dataset.page === name || mineParent);
       });
       const titles = {
         home: ["仪表盘", "今天也要好好续火"],
@@ -904,6 +991,7 @@
         cards: ["卡密管理", "填 0 表示天数或账号数不限制"],
         invite: ["邀请管理", "把链接发给朋友，对方不用填卡密也能注册"],
         settings: ["设置", "邀请、并发、WxPusher 和公众号推送"],
+        mine: ["我的", "密码、微信推送和账户信息"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
@@ -915,6 +1003,7 @@
         else history.pushState(state, "", path);
       }
       if (name === "home") renderDashboard();
+      if (name === "mine") updateHomeProfile();
       if (name === "logs") loadLogs();
       if (name === "users" && isAdmin()) loadUsers();
       if (name === "cards" && isAdmin()) loadCards();
