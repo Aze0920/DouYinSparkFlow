@@ -13,7 +13,7 @@ logger = setup_logger("app", "DEBUG")
 
 ROOT = Path(__file__).resolve().parent.parent
 SESSION_DIR = ROOT / "data" / "sessions"
-CHAT_CACHE_TTL = 30 * 60
+CHAT_CACHE_TTL = -1
 
 
 def safe_account_id(unique_id: str) -> str:
@@ -91,10 +91,20 @@ def save_chats(unique_id: str, items: list[dict], self_avatar: str = "") -> None
     chats_path(unique_id).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def clear_browser_state(unique_id: str) -> None:
+    path = state_path(unique_id)
+    try:
+        if path.is_file():
+            path.unlink()
+    except OSError:
+        pass
+
+
 def clear_account_session(unique_id: str) -> None:
-    for path in (state_path(unique_id), chats_path(unique_id)):
-        try:
-            if path.is_file():
-                path.unlink()
-        except OSError:
-            pass
+    clear_browser_state(unique_id)
+    path = chats_path(unique_id)
+    try:
+        if path.is_file():
+            path.unlink()
+    except OSError:
+        pass

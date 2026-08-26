@@ -31,6 +31,7 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("sortPickerRows", INDEX)
         self.assertIn("plausibleSpark", INDEX)
         self.assertIn("CHAT_CACHE_VER", INDEX)
+        self.assertIn("正在读取账号快照", INDEX)
         self.assertIn("force: !!force", INDEX)
         self.assertIn("force=bool(payload.get(\"force\"))", APP_PY)
         self.assertIn('data-name="${escapeAttr(name)}"', INDEX)

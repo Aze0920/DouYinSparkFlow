@@ -11,7 +11,7 @@ from utils.logger import setup_logger
 from webui.cookie_probe import _probe_lock
 from webui.qr_login import CHAT, wait_chat_access
 from webui.session_store import (
-    clear_account_session,
+    clear_browser_state,
     load_chats,
     load_state_path,
     save_chats,
@@ -66,22 +66,30 @@ EXTRACT_JS = """() => {
   const hasFlame = (root) => {
     if (!root) return false;
     if (root.querySelector('img.commonStreakicon, img[src*="flame_icon"], [class*="commonStreakicon"], [class*="Streakicon"]')) return true;
-    return Array.from(root.querySelectorAll('img')).some(isFlameNode);
+    return Array.from(root.querySelectorAll('img, [class*="Streak"], [class*="streak"], *[style]')).some(isFlameNode);
   };
   const numBeside = (flame) => {
     let sib = flame.nextElementSibling;
     while (sib) {
-      if (!looksTime(nodeText(sib))) {
-        const got = cleanNum(nodeText(sib));
-        if (got) return got;
-      }
+      const got = cleanNum(nodeText(sib));
+      if (got) return got;
       sib = sib.nextElementSibling;
     }
     const box = flame.closest('.commonStreakstreakContainer, [class*="streakContainer"], [class*="commonStreak"]') || flame.parentElement;
-    if (!box || looksTime(nodeText(box))) return null;
+    if (!box) return null;
     const exact = box.querySelector('.commonStreaknormalText, [class*="StreaknormalText"]');
-    if (exact) return cleanNum(nodeText(exact));
-    return cleanNum(nodeText(box));
+    if (exact) {
+      const got = cleanNum(nodeText(exact));
+      if (got) return got;
+    }
+    const self = cleanNum(nodeText(box));
+    if (self) return self;
+    for (const n of box.querySelectorAll('span, div, em, b, strong')) {
+      if (looksTime(nodeText(n))) continue;
+      const got = cleanNum(nodeText(n));
+      if (got) return got;
+    }
+    return null;
   };
   const readStreak = (el) => {
     const wrap = titleWrap(el);
@@ -92,7 +100,7 @@ EXTRACT_JS = """() => {
       const got = cleanNum(nodeText(exact));
       if (got) return got;
     }
-    const flames = Array.from(wrap.querySelectorAll('img, svg, [class*="Streakicon"]')).filter(isFlameNode);
+    const flames = Array.from(wrap.querySelectorAll('img, svg, [class*="Streakicon"], [class*="streak"], [class*="Streak"]')).filter(isFlameNode);
     for (const flame of flames) {
       const got = numBeside(flame);
       if (got) return got;
@@ -478,7 +486,7 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
                 "items": items,
                 "self_avatar": str(cached.get("self_avatar") or ""),
                 "from_snapshot": True,
-                "message": f"已用账号快照，{len(items)} 个会话。要点「检测火花天数」才会重新打开私信页",
+                "message": f"已打开账号快照，{len(items)} 个会话",
             }
     if not _probe_lock.acquire(blocking=False):
         return {"ok": False, "items": [], "message": "正在检测另一个账号，请稍后再试"}
@@ -517,34 +525,51 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
         chat_state = wait_chat_access(page, timeout_s=15)
         if chat_state == "login" or _looks_like_login(page):
             if account_id:
-                clear_account_session(account_id)
+                clear_browser_state(account_id)
             _dump_chat_debug(page, "picker")
+            cached = load_chats(account_id) if account_id else None
+            if cached and cached.get("items"):
+                items = cached.get("items") or []
+                return {
+                    "ok": True,
+                    "items": items,
+                    "self_avatar": str(cached.get("self_avatar") or ""),
+                    "from_snapshot": True,
+                    "message": f"网页私信要扫码，已改用上次快照（{len(items)} 个会话）。请重新扫码后再检测火花",
+                }
             return {
                 "ok": False,
                 "items": [],
-                "message": "网页私信在要求扫码。首页 Cookie 过了不等于私信能打开，请重新扫码登录这个号",
+                "message": "网页私信在要求扫码。请重新扫码登录这个号",
             }
 
         item_loc, scope, item_sel = _wait_locator(page, CONVERSATION_ITEM_SELECTORS, timeout_ms=8000)
         list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
         logger.info("选择好友等待会话列表 item=%s list=%s chat=%s", item_sel or "无", list_sel or "无", chat_state)
         try:
-            page.wait_for_selector(
-                ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
-                timeout=4000,
+            page.evaluate(
+                """() => {
+                  const el = document.querySelector('.conversationConversationListwrapper, [class*="conversationListwrapper"]');
+                  if (el) el.scrollTop = 0;
+                }"""
             )
         except Exception:
             pass
-        time.sleep(0.6)
+        try:
+            page.wait_for_selector(
+                ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
+                timeout=2500,
+            )
+        except Exception:
+            pass
+        time.sleep(0.9)
 
-        items: list[dict] = []
-        for _ in range(14):
-            api_names = [
-                {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None, "avatar": ""}
-                for row in api_rows
-                if row.get("name")
-            ]
-            items = merge_conversations(items, api_names, _collect_dom(page))
+        prev_items = []
+        if account_id:
+            prev = load_chats(account_id)
+            prev_items = (prev or {}).get("items") or []
+        items = merge_conversations(prev_items, _collect_dom(page))
+        for _ in range(18):
             moved = False
             try:
                 moved = bool(_scroll_list(scope, list_loc, item_loc))
@@ -553,16 +578,18 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
                     moved = bool(page.evaluate(SCROLL_JS))
                 except Exception:
                     moved = False
+            time.sleep(0.85)
             item_loc, scope, _ = _find_locator(page, CONVERSATION_ITEM_SELECTORS)
             list_loc, _, _ = _find_locator(page, CONVERSATION_LIST_SELECTORS)
+            items = merge_conversations(items, _collect_dom(page))
             if items and not moved:
                 break
             if _looks_like_login(page):
                 break
-            time.sleep(0.55)
 
         items = merge_conversations(
             items,
+            prev_items,
             [
                 {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None, "avatar": ""}
                 for row in api_rows
@@ -584,9 +611,16 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
         except Exception:
             self_avatar = ""
         if not items:
-            if _looks_like_login(page) and account_id:
-                clear_account_session(account_id)
             _dump_chat_debug(page, "picker")
+            cached = load_chats(account_id) if account_id else None
+            if cached and cached.get("items"):
+                return {
+                    "ok": True,
+                    "items": cached.get("items") or [],
+                    "self_avatar": str(cached.get("self_avatar") or self_avatar),
+                    "from_snapshot": True,
+                    "message": f"这次没扫到列表，已打开上次快照（{len(cached.get('items') or [])} 个会话）",
+                }
             return {
                 "ok": False,
                 "items": [],

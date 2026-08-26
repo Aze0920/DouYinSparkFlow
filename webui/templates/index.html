@@ -1441,7 +1441,7 @@
       const top = Math.max.apply(null, Object.keys(counts).map((k) => counts[k]));
       return days.length >= 5 && top >= Math.ceil(days.length * 0.6);
     }
-    const CHAT_CACHE_VER = 7;
+    const CHAT_CACHE_VER = 8;
     function renderTargetPickerList() {
       const state = window.__targetPicker;
       const box = $("targetList");
@@ -1487,12 +1487,14 @@
       if (!state) return;
       const uid = state.uid;
       const cached = (window.__accountChats || {})[uid];
-      if (!force && cached && cached.ver === CHAT_CACHE_VER && cached.items && cached.items.length && (Date.now() - (cached.at || 0) < 5 * 60 * 1000) && !sparkCacheStale(cached.items)) {
+      if (!force && cached && cached.ver === CHAT_CACHE_VER && cached.items && cached.items.length && !sparkCacheStale(cached.items)) {
         state.items = cached.items;
         renderTargetPickerList();
         return;
       }
-      if ($("targetList")) $("targetList").innerHTML = `<div class="target-empty">正在读取会话列表，大约十几秒…</div>`;
+      if ($("targetList")) $("targetList").innerHTML = force
+        ? `<div class="target-empty">正在打开抖音刷新火花天数，大约十几秒…</div>`
+        : `<div class="target-empty">正在读取账号快照…</div>`;
       if ($("targetRefreshBtn")) $("targetRefreshBtn").disabled = true;
       try {
         const data = await api("/api/account/conversations", {

@@ -39,6 +39,7 @@ class SessionStoreTests(unittest.TestCase):
         data["at"] = time.time() - 120
         path.write_text(json.dumps(data), encoding="utf-8")
         self.assertIsNone(session_store.load_chats("HQ7kiou", max_age=30))
+        self.assertIsNotNone(session_store.load_chats("HQ7kiou", max_age=-1))
         session_store.clear_account_session("HQ7kiou")
         self.assertIsNone(session_store.load_chats("HQ7kiou", max_age=9999))
 
