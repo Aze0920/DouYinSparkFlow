@@ -537,6 +537,15 @@ button:disabled {
   gap: 12px;
   padding: 18px;
 }
+.users-grid .user-card .user-edit-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.users-grid .user-card .expires-at {
+  color: var(--muted);
+  cursor: default;
+}
 .users-grid .user-card .account-actions { margin-top: auto; }
 body.spark-locked .spark-action {
   opacity: 0.55;

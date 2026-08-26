@@ -2406,26 +2406,31 @@
         const protectedUser = !!u.protected || String(u.username || "").toLowerCase() === "admin";
         const statusCls = admin || !u.expired ? "ck-ok" : "ck-bad";
         const accountsValue = u.max_accounts == null ? 1 : u.max_accounts;
+        const metaBits = ["注册 " + (u.created_label || "-")];
+        if (u.card_code) metaBits.push("卡密 " + u.card_code);
         return `<div class="user-card">
           <div class="account-head">
             <div>
               <strong>${escapeHtml(u.username)}</strong>
-              <div class="account-id">注册 ${escapeHtml(u.created_label || "-")} · 到期 ${escapeHtml(u.expires_label || "-")}${u.card_code ? " · 卡密 " + escapeHtml(u.card_code) : ""}</div>
+              <div class="account-id">${escapeHtml(metaBits.join(" · "))}</div>
             </div>
             <div class="account-head-right">
               <span class="pill">${admin ? "管理员" : "普通用户"}</span>
               <span class="ck-status ${statusCls}">${escapeHtml(u.remain_label || "")}</span>
             </div>
           </div>
-          <label>重置密码<input data-user="${escapeAttr(u.username)}" class="reset-pass" type="password" placeholder="留空则不改" /></label>
-          <label>角色
-            <select data-user="${escapeAttr(u.username)}" class="reset-role" ${protectedUser ? "disabled" : ""}>
-              <option value="user" ${u.role === "user" ? "selected" : ""}>普通用户</option>
-              <option value="admin" ${admin ? "selected" : ""}>管理员（永久）</option>
-            </select>
-          </label>
-          ${admin ? "" : `<label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="1" max="3650" placeholder="例如 1" /></label>
-          <label>账号额度<input data-user="${escapeAttr(u.username)}" class="max-accounts" type="number" min="0" max="100" value="${escapeAttr(String(accountsValue))}" /></label>`}
+          <label>重置密码<input data-user="${escapeAttr(u.username)}" class="reset-pass" type="password" placeholder="留空则不改" autocomplete="new-password" /></label>
+          <div class="user-edit-grid">
+            <label>角色
+              <select data-user="${escapeAttr(u.username)}" class="reset-role" ${protectedUser ? "disabled" : ""}>
+                <option value="user" ${u.role === "user" ? "selected" : ""}>普通用户</option>
+                <option value="admin" ${admin ? "selected" : ""}>管理员（永久）</option>
+              </select>
+            </label>
+            <label>账号额度<input data-user="${escapeAttr(u.username)}" class="max-accounts" type="number" min="0" max="100" value="${escapeAttr(String(accountsValue))}" ${admin ? "disabled" : ""} /></label>
+            <label>到期时间<input class="expires-at" value="${escapeAttr(u.expires_label || "-")}" readonly tabindex="-1" /></label>
+            <label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="1" max="3650" placeholder="例如 1" ${admin ? "disabled" : ""} /></label>
+          </div>
           <div class="account-actions">
             <button class="btn-ghost" type="button" onclick="saveUser('${escapeAttr(u.username)}')">保存</button>
             <button class="btn-ghost" type="button" ${u.wxpusher_bound ? "" : "disabled"} onclick="adminUnbindWx('${escapeAttr(u.username)}')">解绑微信</button>

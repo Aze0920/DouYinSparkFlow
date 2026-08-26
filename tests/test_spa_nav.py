@@ -42,6 +42,12 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("target-friend-list", INDEX)
         self.assertIn("account-head-copy", INDEX)
         self.assertIn("max-height: 270px", CSS)
+        self.assertIn("user-edit-grid", INDEX)
+        self.assertIn("user-edit-grid", CSS)
+        self.assertIn("到期时间", INDEX)
+        self.assertLess(INDEX.find("重置密码"), INDEX.find("user-edit-grid"))
+        self.assertLess(INDEX.find("class=\"reset-role\""), INDEX.find("class=\"max-accounts\""))
+        self.assertLess(INDEX.find("expires-at"), INDEX.find("class=\"extra-days\""))
 
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)
