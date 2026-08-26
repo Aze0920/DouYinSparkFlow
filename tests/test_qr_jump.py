@@ -19,37 +19,41 @@ class QrJumpTests(unittest.TestCase):
         self.assertFalse(is_app_jump_url("https://cdn.example.com/qr.png"))
         self.assertFalse(is_app_jump_url("data:image/png;base64,AAAA"))
 
-    def test_aweme_index_url_is_jump(self):
+    def test_landing_url_opens_webview_not_scan(self):
         url = "https://aweme.snssdk.com/oauth/authorize/?aid=1128&token=abc"
         self.assertTrue(is_app_jump_url(url))
-        self.assertFalse(is_image_qr_src(url))
         fields = _jump_fields(url)
         self.assertEqual(fields["app_jump_url"], url)
-        self.assertTrue(fields["app_scheme"].startswith("snssdk1128://scan?from=web&url="))
-        self.assertTrue(fields["app_scheme_ios"].startswith("aweme://scan?from=web&url="))
-        self.assertTrue(fields["app_open_url"].startswith("https://www.douyin.com/open/sdk/ul?schema="))
-        self.assertNotIn("aweme.snssdk.com", fields["app_open_url"].split("schema=")[0])
-
-    def test_amemv_landing_is_not_used_as_open_href(self):
-        url = "https://api.amemv.com/aweme/v1/fancy/qrconnect/?token=abc"
-        fields = _jump_fields(url)
-        self.assertTrue(fields["app_open_url"].startswith("https://www.douyin.com/open/sdk/ul?schema="))
-        self.assertTrue(fields["app_scheme_ios"].startswith("aweme://scan?"))
-        self.assertNotIn("webview", fields["app_scheme"])
+        self.assertTrue(fields["app_scheme"].startswith("snssdk1128://webview?url="))
+        self.assertTrue(fields["app_open_url"].startswith("aweme://webview?url="))
+        self.assertTrue(fields["app_open_url_android"].startswith("intent://aweme.snssdk.com/"))
+        self.assertIn("com.ss.android.ugc.aweme", fields["app_open_url_android"])
+        self.assertNotIn("scan?", fields["app_scheme"])
         self.assertNotEqual(fields["app_open_url"], url)
 
-    def test_v_douyin_used_as_direct_open(self):
+    def test_amemv_not_used_as_safari_href(self):
+        url = "https://api.amemv.com/aweme/v1/fancy/qrconnect/?token=abc"
+        fields = _jump_fields(url)
+        self.assertTrue(fields["app_open_url"].startswith("aweme://webview?url="))
+        self.assertTrue(fields["app_open_url_android"].startswith("intent://api.amemv.com/"))
+        self.assertNotEqual(fields["app_open_url"], url)
+        self.assertIn("append_common_params%3D1", fields["app_open_url"])
+
+    def test_v_douyin_not_used_as_direct_open(self):
         url = "https://v.douyin.com/AbCdEf/"
         self.assertTrue(is_douyin_app_link(url))
         fields = _jump_fields(url)
-        self.assertEqual(fields["app_open_url"], url)
-        self.assertEqual(fields["app_open_url_android"], url)
-        self.assertTrue(fields["app_scheme"].startswith("snssdk1128://webview?url="))
+        self.assertTrue(fields["app_open_url"].startswith("aweme://webview?url="))
+        self.assertTrue(fields["app_open_url_android"].startswith("intent://v.douyin.com/"))
+        self.assertNotEqual(fields["app_open_url"], url)
 
     def test_existing_scheme_kept(self):
         scheme = "snssdk1128://webview?url=https%3A%2F%2Faweme.snssdk.com%2Fx"
         self.assertEqual(douyin_app_scheme(scheme), scheme)
         self.assertTrue(is_app_jump_url(scheme))
+        fields = _jump_fields(scheme)
+        self.assertEqual(fields["app_open_url_android"], scheme)
+        self.assertTrue(fields["app_open_url"].startswith("aweme://"))
 
     def test_empty_rejected(self):
         fields = _jump_fields("")
@@ -63,19 +67,17 @@ class QrJumpTests(unittest.TestCase):
         self.assertTrue(is_app_jump_url(url))
         self.assertEqual(extract_jump_from_data({"qrcode": "iVBORxxx", "qrcode_index_url": url}), url)
 
-    def test_extract_prefers_short_over_landing(self):
-        jump = "https://v.douyin.com/AbCdEf/"
+    def test_extract_prefers_landing_over_short(self):
+        short = "https://v.douyin.com/AbCdEf/"
+        landing = "https://api.amemv.com/aweme/v1/fancy/qrconnect/?token=abc"
         data = {
             "qrcode": "iVBORw0KGgoAAA",
             "qrcode_url": "https://cdn.example.com/qr.png",
-            "qrcode_index_url": "https://api.amemv.com/aweme/v1/fancy/qrconnect/?token=abc",
-            "short_url": jump,
+            "qrcode_index_url": landing,
+            "short_url": short,
         }
-        self.assertEqual(extract_jump_from_data(data), jump)
-        self.assertEqual(
-            pick_best_jump(data["qrcode_index_url"], jump),
-            jump,
-        )
+        self.assertEqual(extract_jump_from_data(data), landing)
+        self.assertEqual(pick_best_jump(short, landing), landing)
 
     def test_decode_empty_png(self):
         self.assertEqual(decode_qr_payload(""), "")

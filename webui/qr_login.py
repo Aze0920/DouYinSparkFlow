@@ -81,11 +81,11 @@ def jump_priority(url: str) -> tuple[int, int]:
         return (0, 0)
     if raw.startswith(("snssdk1128://", "aweme://", "sslocal://")):
         return (100, len(raw))
-    if is_douyin_app_link(raw):
-        return (90, len(raw))
     if is_login_landing_url(raw):
-        return (10, len(raw))
-    return (50, len(raw))
+        return (80, len(raw))
+    if is_douyin_app_link(raw):
+        return (20, len(raw))
+    return (40, len(raw))
 
 
 def pick_best_jump(*urls: str) -> str:
@@ -145,6 +145,21 @@ def decode_qr_payload(png_b64: str) -> str:
         return ""
 
 
+def with_inapp_params(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        return raw
+    extra = []
+    if "append_common_params=" not in raw:
+        extra.append("append_common_params=1")
+    if "hide_nav_bar=" not in raw:
+        extra.append("hide_nav_bar=1")
+    if not extra:
+        return raw
+    sep = "&" if "?" in raw else "?"
+    return raw + sep + "&".join(extra)
+
+
 def douyin_webview_scheme(url: str, prefix: str = "snssdk1128") -> str:
     raw = str(url or "").strip()
     if not raw:
@@ -156,15 +171,15 @@ def douyin_webview_scheme(url: str, prefix: str = "snssdk1128") -> str:
     return f"{prefix}://webview?url={quote(raw, safe='')}&from=webview&refer=web"
 
 
-def douyin_scan_scheme(url: str, prefix: str = "snssdk1128") -> str:
+def android_intent_https(url: str) -> str:
     raw = str(url or "").strip()
-    if not raw:
+    parsed = urlparse(raw)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
         return ""
-    if raw.startswith(("snssdk1128://", "aweme://", "sslocal://")):
-        return raw
-    if not raw.startswith(("http://", "https://")):
-        return ""
-    return f"{prefix}://scan?from=web&url={quote(raw, safe='')}"
+    hostpath = parsed.netloc + (parsed.path or "/")
+    if parsed.query:
+        hostpath += "?" + parsed.query
+    return "intent://" + hostpath + "#Intent;scheme=https;package=com.ss.android.ugc.aweme;end"
 
 
 def douyin_app_scheme(url: str) -> str:
@@ -192,24 +207,23 @@ def _jump_fields(url: str) -> dict[str, str]:
     if jump.startswith(("snssdk1128://", "aweme://", "sslocal://")):
         scheme = jump
         scheme_ios = ("aweme://" + jump.split("://", 1)[-1]) if "://" in jump else jump
-        open_url = douyin_universal_link(scheme_ios)
-        open_android = douyin_universal_link(scheme)
-    elif is_douyin_app_link(jump):
-        scheme = douyin_webview_scheme(jump, "snssdk1128")
-        scheme_ios = douyin_webview_scheme(jump, "aweme")
-        open_url = jump
-        open_android = jump
-    else:
-        scheme = douyin_scan_scheme(jump, "snssdk1128")
-        scheme_ios = douyin_scan_scheme(jump, "aweme")
-        open_url = douyin_universal_link(scheme_ios)
-        open_android = douyin_universal_link(scheme)
+        return {
+            "app_jump_url": jump,
+            "app_scheme": scheme,
+            "app_scheme_ios": douyin_universal_link(scheme_ios),
+            "app_open_url": scheme_ios,
+            "app_open_url_android": scheme,
+        }
+    target = with_inapp_params(jump) if is_login_landing_url(jump) else jump
+    scheme = douyin_webview_scheme(target, "snssdk1128")
+    scheme_ios = douyin_webview_scheme(target, "aweme")
+    intent = android_intent_https(jump)
     return {
         "app_jump_url": jump,
         "app_scheme": scheme,
-        "app_scheme_ios": scheme_ios,
-        "app_open_url": open_url,
-        "app_open_url_android": open_android,
+        "app_scheme_ios": douyin_universal_link(scheme_ios),
+        "app_open_url": scheme_ios,
+        "app_open_url_android": intent or scheme,
     }
 
 _lock = threading.Lock()
@@ -1875,7 +1889,7 @@ def _worker(replace_index: int):
         )
         _set(
             status="waiting",
-            message="手机点「打开抖音 App」授权登录，或用抖音扫码。确认后如需验证码，回到本页填写",
+            message="手机点「打开抖音 App」，应出现「登录抖音网页版」。确认后如需验证码，回到本页填写",
             qr_base64="",
             qr_url=qr_url,
             **jump_fields,

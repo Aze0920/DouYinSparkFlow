@@ -31,8 +31,8 @@
       <p id="qrHint" class="sub">请用抖音 App 扫码，并在手机上确认登录</p>
       <div id="dyAppJumpWrap" class="dy-app-jump hidden">
         <a class="btn-primary dy-app-jump-btn" id="openDouyinBtn" href="#" onclick="return openDouyinApp(event)">打开抖音 App</a>
-        <a class="btn-ghost dy-app-jump-btn hidden" id="openDouyinSchemeBtn" href="#" onclick="return openDouyinApp(event, true)">直接打开抖音</a>
-        <p class="sub" id="dyAppJumpHint">仅手机浏览器可用。点按钮跳进抖音授权登录，确认后如需验证码回到本页填写，不要关掉。</p>
+        <a class="btn-ghost dy-app-jump-btn hidden" id="openDouyinSchemeBtn" href="#" onclick="return openDouyinApp(event, true)">还是首页？改用这个打开授权页</a>
+        <p class="sub" id="dyAppJumpHint">仅手机浏览器可用。点按钮应出现「登录抖音网页版」。如果只进了抖音首页，再点下面那个按钮。</p>
       </div>
       <div id="liveWrap" class="live-wrap">
         <div id="qrLoading">正在生成二维码…</div>
@@ -996,10 +996,6 @@
     function isIOSClient() {
       return /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
     }
-    function isDouyinAppLink(url) {
-      return /^https:\/\/(v\.douyin\.com|v\.iesdouyin\.com)\//i.test(url || "")
-        || /^https:\/\/www\.douyin\.com\/open\/sdk\/ul/i.test(url || "");
-    }
     function applyJumpUi(data) {
       window.__dyAppJumpUrl = (data && data.app_jump_url) || window.__dyAppJumpUrl || "";
       window.__dyAppScheme = (data && data.app_scheme) || window.__dyAppScheme || "";
@@ -1031,11 +1027,11 @@
       }
       if (hint) {
         if (isInAppBrowser()) {
-          hint.textContent = "微信/QQ 内置浏览器经常跳转不了。请用 Safari 或系统浏览器打开本站再点按钮。授权后如需验证码，回到本页填写。";
+          hint.textContent = "微信/QQ 内置浏览器经常跳转不了。请用 Safari 或系统浏览器打开本站再点。应出现「登录抖音网页版」，不要只停在抖音首页。";
         } else if (!ready) {
-          hint.textContent = "正在准备跳转链接，好了之后按钮就可以点。授权后如需验证码，回到本页填写，不要关掉。";
+          hint.textContent = "正在准备授权链接，好了之后按钮就可以点。应出现「登录抖音网页版」，确认后如需验证码回到本页。";
         } else {
-          hint.textContent = "点按钮会跳进抖音授权登录。若仍停在网页，再点下面「直接打开抖音」。确认后如需验证码，回到本页填写。";
+          hint.textContent = "点按钮应出现「登录抖音网页版」。如果只进了抖音首页，再点下面「改用这个打开授权页」。确认后如需验证码，回到本页填写。";
         }
       }
     }
@@ -1048,31 +1044,21 @@
       const ios = isIOSClient();
       const scheme = ios ? (window.__dySchemeIos || window.__dyAppScheme) : window.__dyAppScheme;
       const openUrl = ios ? window.__dyOpenUrl : (window.__dyOpenUrlAndroid || window.__dyOpenUrl);
-      if (!scheme && !openUrl) {
+      const a = event && event.currentTarget;
+      const href = (a && a.getAttribute && a.getAttribute("href")) || "";
+      if (!scheme && !openUrl && (!href || href === "#")) {
         if (event) event.preventDefault();
         toast("登录链接还没准备好，请稍等几秒再点", "err");
         return false;
       }
-      const a = event && event.currentTarget;
-      const href = a && a.getAttribute && a.getAttribute("href");
-      const appLink = isDouyinAppLink(href) || isDouyinAppLink(openUrl);
-      if (!forceScheme && appLink) {
-        if (href && isDouyinAppLink(href)) return true;
+      if (forceScheme) {
         if (event) event.preventDefault();
-        window.location.href = openUrl || href;
+        window.location.href = scheme || openUrl || href;
         return false;
       }
-      try {
-        if (scheme) {
-          const ifr = document.createElement("iframe");
-          ifr.style.display = "none";
-          ifr.src = scheme;
-          document.body.appendChild(ifr);
-          setTimeout(function () { try { ifr.remove(); } catch (e) {} }, 2500);
-        }
-      } catch (e) {}
+      if (href && href !== "#") return true;
       if (event) event.preventDefault();
-      window.location.href = forceScheme ? (scheme || openUrl) : (openUrl || scheme);
+      window.location.href = openUrl || scheme;
       return false;
     }
     async function decodeQrFromImage() {
@@ -1085,19 +1071,15 @@
         const raw = (codes && codes[0] && (codes[0].rawValue || "")).trim();
         if (!raw) return;
         if (!/^(https?:|snssdk1128:|aweme:|sslocal:)/i.test(raw)) return;
-        const better = isDouyinAppLink(raw) || /^(snssdk1128:|aweme:|sslocal:)/i.test(raw);
-        const current = window.__dyAppJumpUrl || "";
-        if (better && !isDouyinAppLink(current)) {
+        if (/^(snssdk1128:|aweme:|sslocal:)/i.test(raw)) {
           applyJumpUi({
             status: "waiting",
             app_jump_url: raw,
-            app_open_url: isDouyinAppLink(raw) ? raw : window.__dyOpenUrl,
-            app_open_url_android: isDouyinAppLink(raw) ? raw : window.__dyOpenUrlAndroid,
-            app_scheme: window.__dyAppScheme,
+            app_open_url: /^aweme:/i.test(raw) ? raw : window.__dyOpenUrl,
+            app_open_url_android: /^(snssdk1128:|sslocal:)/i.test(raw) ? raw : window.__dyOpenUrlAndroid,
+            app_scheme: /^(snssdk1128:|sslocal:)/i.test(raw) ? raw : window.__dyAppScheme,
             app_scheme_ios: window.__dySchemeIos
           });
-        } else if (!current) {
-          applyJumpUi({ status: "waiting", app_jump_url: raw, app_scheme: window.__dyAppScheme });
         }
       } catch (e) {}
     }
@@ -1365,7 +1347,7 @@
         } else if (qrLoginViaApp) {
           $("qrHint").textContent = data.message && data.status !== "waiting"
             ? data.message
-            : "点「打开抖音 App」跳进抖音授权登录。确认后如需验证码，回到本页填写。";
+            : "点「打开抖音 App」。应出现「登录抖音网页版」。如果只进了首页，再点「改用这个打开授权页」。";
         } else {
           $("qrHint").textContent = data.message || "请用抖音 App 扫码，并在手机上确认登录";
         }
@@ -1410,7 +1392,7 @@
       $("qrHint").classList.remove("hidden");
       $("qrLoginActions").classList.remove("hidden");
       $("qrHint").textContent = qrLoginViaApp
-        ? "点「打开抖音 App」跳进抖音授权登录。确认后如需验证码，回到本页填写。"
+        ? "点「打开抖音 App」。应出现「登录抖音网页版」。如果只进了首页，再点「改用这个打开授权页」。"
         : "请用抖音 App 扫码，并在手机上确认登录";
       resetLiveCard();
       $("qrModal").classList.remove("hidden");
