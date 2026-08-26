@@ -26,6 +26,7 @@ CONVERSATION_LIST_SELECTORS = [
 ]
 CONVERSATION_ITEM_SELECTORS = [
     CONVERSATION_ITEM_SELECTOR,
+    '[data-e2e="conversation-item"]',
     "[class*='ConversationItemwrapper']",
     "[class*='conversationItemwrapper']",
     "[class*='ConversationItem']",

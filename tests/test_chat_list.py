@@ -6,6 +6,8 @@ from webui.chat_list import (
     merge_conversations,
     parse_spark_days,
     parse_spark_near_name,
+    spark_from_streak_html,
+    spark_from_streak_text,
 )
 
 
@@ -95,6 +97,49 @@ class ChatListTests(unittest.TestCase):
         by_name = {item["name"]: item for item in rows}
         self.assertEqual(by_name["洁洁"]["kind"], "friend")
         self.assertEqual(by_name["家庭群"]["kind"], "group")
+
+    def test_streak_html_is_the_only_spark_source(self):
+        wangjie = """
+        <div data-e2e="conversation-item" class="conversationConversationItemwrapper">
+          <div class="conversationConversationItemtitle">王洁</div>
+          <div class="commonStreakstreakContainer">
+            <img class="commonStreakicon" src="https://lf3-static.bytednsdoc.com/obj/eden-cn/flame_icon/couple/normal_couple.png" alt="">
+            <div class="commonStreaknormalText"> 711 </div>
+          </div>
+        </div>
+        """
+        no_flame = """
+        <div data-e2e="conversation-item" class="conversationConversationItemwrapper">
+          <div class="conversationConversationItemtitle">郑州阿杰电脑的粉丝1群</div>
+          <div class="ConversationItemTagNextToTitletimeStr">52分钟前</div>
+        </div>
+        """
+        igniting = """
+        <div class="commonStreakstreakContainer">点燃中 1/3</div>
+        """
+        self.assertEqual(spark_from_streak_html(wangjie), 711)
+        self.assertEqual(spark_from_streak_text(" 711 "), 711)
+        self.assertIsNone(spark_from_streak_html(no_flame))
+        self.assertIsNone(spark_from_streak_html(igniting))
+        self.assertIsNone(spark_from_streak_text("点燃中 1/3"))
+
+    def test_extract_js_uses_douyin_streak_dom(self):
+        from webui.chat_list import EXTRACT_JS
+        self.assertIn("commonStreaknormalText", EXTRACT_JS)
+        self.assertIn("flame_icon", EXTRACT_JS)
+        self.assertIn("conversationConversationItemtitle", EXTRACT_JS)
+        self.assertIn('data-e2e="conversation-item"', EXTRACT_JS)
+
+    def test_harvest_ignores_nested_message_numbers(self):
+        payload = {
+            "name": "郑州阿杰电脑的粉丝1群",
+            "conversation_type": 2,
+            "messages": [{"text": "50", "streak": 8}],
+        }
+        rows = harvest_api_conversations(payload)
+        by_name = {item["name"]: item for item in rows}
+        self.assertEqual(by_name["郑州阿杰电脑的粉丝1群"]["kind"], "group")
+        self.assertIsNone(by_name["郑州阿杰电脑的粉丝1群"]["spark_days"])
 
 
 if __name__ == "__main__":

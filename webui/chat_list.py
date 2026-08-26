@@ -14,60 +14,43 @@ from webui.qr_login import CHAT
 logger = setup_logger("app", "DEBUG")
 
 EXTRACT_JS = """() => {
-  const sels = [
+  const itemSels = [
+    '[data-e2e="conversation-item"]',
     '.conversationConversationItemwrapper',
     '[class*="conversationItemwrapper"]',
-    '[class*="ConversationItemwrapper"]',
-    '[class*="conversation-item"]',
-    '[class*="ConversationItem"]',
   ];
   let items = [];
-  for (const sel of sels) {
+  for (const sel of itemSels) {
     items = Array.from(document.querySelectorAll(sel));
     if (items.length) break;
   }
-  const sparkSel = '[class*="spark"],[class*="Spark"],[class*="streak"],[class*="Streak"],[class*="huohua"],[class*="HuoHua"],[class*="flame"],[class*="Flame"],[class*="keepLight"]';
   const isSpark = (n) => {
     n = Number(n);
-    if (!n || n < 1 || n > 3660) return false;
-    if (n >= 1900 && n <= 2099) return false;
-    return true;
+    return n >= 1 && n <= 3660 && !(n >= 1900 && n <= 2099);
   };
-  const sparkFrom = (el, name) => {
-    const titleEl = el.querySelector('[class*="title"],[class*="Title"],[class*="nickName"],[class*="nickname"],[class*="NickName"]');
-    const line = String((titleEl && titleEl.innerText) || '').replace(/\\s+/g, ' ').trim();
-    if (name && line.indexOf(name) === 0) {
-      const rest = line.slice(name.length)
-        .replace(/(?:19|20)\\d{2}[-/.年]\\d{0,2}[-/.月]?\\d{0,2}日?/g, ' ')
-        .trim();
-      const m = rest.match(/^(\\d{1,4})\\b/);
-      if (m && isSpark(Number(m[1]))) return Number(m[1]);
-    }
-    for (const n of el.querySelectorAll(sparkSel)) {
-      const t = String(n.innerText || '').trim();
-      if (/^\\d{1,4}$/.test(t) && isSpark(Number(t))) return Number(t);
-    }
-    if (titleEl && titleEl.parentElement) {
-      for (const n of titleEl.parentElement.children) {
-        const t = String(n.innerText || '').trim();
-        if (/点燃中/.test(t) || /\\d+\\s*\\/\\s*\\d+/.test(t)) continue;
-        if (/^\\d{1,4}$/.test(t) && isSpark(Number(t))) return Number(t);
-      }
-    }
+  const titleOf = (el) => {
+    const exact = el.querySelector('.conversationConversationItemtitle');
+    if (exact) return String(exact.innerText || '').trim();
+    const nodes = Array.from(el.querySelectorAll('[class*="Itemtitle"]'));
+    const hit = nodes.find((n) => !/wrapper/i.test(String(n.className || '')));
+    return String((hit && hit.innerText) || '').trim();
+  };
+  const readStreak = (el) => {
+    const icon = el.querySelector('img.commonStreakicon, img[src*="flame_icon"], [class*="Streakicon"]');
+    const numEl = el.querySelector('.commonStreaknormalText, [class*="StreaknormalText"]');
+    const box = el.querySelector('.commonStreakstreakContainer, [class*="StreakstreakContainer"], [class*="streakContainer"]');
+    if (!icon && !numEl && !box) return null;
+    const txt = String((numEl && numEl.innerText) || (box && box.innerText) || '').replace(/\\s+/g, ' ').trim();
+    if (!txt || /点燃中/.test(txt) || /\\d+\\s*\\/\\s*\\d+/.test(txt)) return null;
+    const m = txt.match(/^(\\d{1,4})$/);
+    if (m && isSpark(Number(m[1]))) return Number(m[1]);
     return null;
   };
   return items.map((el) => {
-    const titleEl = el.querySelector('[class*="title"],[class*="Title"],[class*="nickName"],[class*="nickname"],[class*="NickName"]');
-    const rawName = (titleEl ? titleEl.innerText : el.innerText) || '';
-    let name = String(rawName).split('\\n').map((x) => x.trim()).filter(Boolean)[0] || '';
-    const text = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
-    const spark = sparkFrom(el, name);
-    if (spark && name.endsWith(String(spark)) && name.length > String(spark).length) {
-      name = name.slice(0, -String(spark).length).trim();
-    }
-    const cls = String(el.className || '');
-    const isGroup = /group|Group|群聊/.test(cls + ' ' + text) || /\\d+\\s*人/.test(text);
-    return { name, kind: isGroup ? 'group' : 'friend', text, cls, spark_days: spark };
+    const name = titleOf(el).split('\\n').map((x) => x.trim()).filter(Boolean)[0] || '';
+    const spark = readStreak(el);
+    const isGroup = /群/.test(name);
+    return { name, kind: isGroup ? 'group' : 'friend', spark_days: spark };
   }).filter((row) => row.name);
 }"""
 
@@ -85,7 +68,7 @@ SCROLL_JS = """() => {
 }"""
 
 SPARK_KEY_RE = re.compile(
-    r"(streak|spark|fire.?day|consecutive|huohua|keep_light|light_count|spark_count|streak_count|fire_count)",
+    r"^(streak|spark_days|spark_count|streak_count|huohua)$",
     re.I,
 )
 SKIP_SPARK_KEY_RE = re.compile(r"unread|red_dot|mention|badge_count", re.I)
@@ -172,32 +155,50 @@ def strip_spark_suffix(name: str, spark: int | None) -> str:
     return cleaned or str(name or "").strip()
 
 
-def _spark_from_obj(obj: Any) -> int | None:
-    if isinstance(obj, dict):
-        for key, value in obj.items():
-            if SKIP_SPARK_KEY_RE.search(str(key or "")):
-                continue
-            if SPARK_KEY_RE.search(str(key or "")):
+def spark_from_streak_text(text: str) -> int | None:
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not raw or "点燃中" in raw or re.search(r"\d+\s*/\s*\d+", raw):
+        return None
+    if re.fullmatch(r"\d{1,4}", raw) and is_plausible_spark(int(raw)):
+        return int(raw)
+    return None
+
+
+def spark_from_streak_html(html: str) -> int | None:
+    raw = str(html or "")
+    if "点燃中" in raw:
+        return None
+    if "flame_icon" not in raw and "commonStreak" not in raw and "StreaknormalText" not in raw:
+        return None
+    found = re.search(r"StreaknormalText[^>]*>\s*(\d{1,4})\s*<", raw)
+    if not found:
+        return None
+    n = int(found.group(1))
+    return n if is_plausible_spark(n) else None
+
+
+def _direct_spark(payload: dict) -> int | None:
+    for key, value in payload.items():
+        if SPARK_KEY_RE.search(str(key or "")):
+            try:
+                n = int(value)
+            except (TypeError, ValueError):
+                n = None
+            if is_plausible_spark(n):
+                return n
+        if str(key or "") in {"streak_info", "spark_info", "ext"}:
+            if isinstance(value, dict):
+                nested = _direct_spark(value)
+                if nested:
+                    return nested
+            if isinstance(value, str) and value.startswith("{") and len(value) < 8000:
                 try:
-                    n = int(value)
-                    if is_plausible_spark(n):
-                        return n
-                except (TypeError, ValueError):
-                    pass
-            nested = _spark_from_obj(value)
-            if nested:
-                return nested
-    elif isinstance(obj, list):
-        for item in obj:
-            nested = _spark_from_obj(item)
-            if nested:
-                return nested
-    elif isinstance(obj, str) and obj.startswith("{") and len(obj) < 8000:
-        try:
-            return _spark_from_obj(json.loads(obj))
-        except Exception:
-            return parse_spark_days(obj)
-    return parse_spark_days(str(obj or ""))
+                    nested = _direct_spark(json.loads(value))
+                except Exception:
+                    nested = None
+                if nested:
+                    return nested
+    return None
 
 
 NAME_KEYS = ("remark_name", "nick_name", "nickname", "display_name", "name")
@@ -238,13 +239,13 @@ def harvest_api_conversations(payload: Any, out: list[dict] | None = None) -> li
         ctype = payload.get("conversation_type")
         if ctype is None:
             ctype = payload.get("type")
-        spark = _spark_from_obj(payload)
         looks_conv = any(
             key in payload
             for key in ("conversation_short_id", "conversation_id", "conversation_type", "conversation_core_info")
         )
         looks_user = bool(_pick_name(payload)) and any(key in payload for key in ("sec_uid", "short_id"))
-        if name and name not in NOISE_NAMES and (looks_conv or looks_user or spark is not None):
+        spark = _direct_spark(payload) if looks_conv else None
+        if name and name not in NOISE_NAMES and (looks_conv or looks_user):
             kind = "group" if str(ctype) in {"2", "3", "10"} else "friend"
             if "群" in name:
                 kind = "group"
@@ -330,41 +331,8 @@ def _collect_dom(page) -> list[dict]:
                 spark = None
             if not is_plausible_spark(spark):
                 spark = None
-            spark = spark or parse_spark_near_name(name, text)
-            if not is_plausible_spark(spark):
-                spark = None
-            name = strip_spark_suffix(name, spark)
             kind = _row_kind(name, text, str((item or {}).get("kind") or ""))
             rows.append({"name": name, "kind": kind, "spark_days": spark})
-    return rows
-
-
-def _collect_from_locators(item_loc) -> list[dict]:
-    from core.tasks import _item_title
-
-    rows: list[dict] = []
-    if item_loc is None:
-        return rows
-    try:
-        elements = item_loc.all()
-    except Exception:
-        return rows
-    for element in elements:
-        try:
-            name = str(_item_title(element) or "").split("\n")[0].strip()
-        except Exception:
-            name = ""
-        if not name or name in NOISE_NAMES:
-            continue
-        try:
-            text = str(element.inner_text(timeout=800) or "")
-        except Exception:
-            text = name
-        spark = parse_spark_near_name(name, text) or parse_spark_days(text)
-        if not is_plausible_spark(spark):
-            spark = None
-        name = strip_spark_suffix(name, spark)
-        rows.append({"name": name, "kind": _row_kind(name, text), "spark_days": spark})
     return rows
 
 
@@ -419,7 +387,12 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
 
         items: list[dict] = []
         for _ in range(8):
-            items = merge_conversations(items, _collect_from_locators(item_loc), _collect_dom(page), api_rows)
+            api_names = [
+                {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None}
+                for row in api_rows
+                if row.get("name")
+            ]
+            items = merge_conversations(items, api_names, _collect_dom(page))
             moved = False
             try:
                 moved = bool(_scroll_list(scope, list_loc, item_loc))
@@ -434,7 +407,15 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
                 break
             time.sleep(0.35)
 
-        items = merge_conversations(items, _collect_from_locators(item_loc), _collect_dom(page), api_rows)
+        items = merge_conversations(
+            items,
+            [
+                {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None}
+                for row in api_rows
+                if row.get("name")
+            ],
+            _collect_dom(page),
+        )
         logger.info("读取会话列表 count=%s api=%s url=%s", len(items), len(api_rows), getattr(page, "url", ""))
         if not items:
             _dump_chat_debug(page, "picker")
