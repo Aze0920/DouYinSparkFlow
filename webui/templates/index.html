@@ -96,6 +96,20 @@
     </div>
   </div>
 
+  <div id="targetModal" class="modal-mask hidden" onclick="if(event.target===this)closeTargetPicker()">
+    <div class="modal-card target-card">
+      <h3>选择好友和群聊</h3>
+      <p class="sub" id="targetModalHint">点选要续火的会话。火花天数能读到就会显示。</p>
+      <input id="targetSearch" placeholder="搜索昵称或备注" oninput="renderTargetPickerList()" />
+      <div id="targetList" class="target-list"></div>
+      <div class="modal-actions wp-modal-actions">
+        <button class="btn-ghost" type="button" id="targetRefreshBtn" onclick="refreshTargetPicker()">检测火花天数</button>
+        <button class="btn-ghost" type="button" onclick="closeTargetPicker()">取消</button>
+        <button class="btn-primary" type="button" onclick="applyTargetPicker()">确定</button>
+      </div>
+    </div>
+  </div>
+
   <div id="rechargeModal" class="modal-mask hidden" onclick="if(event.target===this)closeRechargeModal()">
     <div class="modal-card">
       <h3>卡密充值</h3>
@@ -270,6 +284,14 @@
               <div class="card-sub">系统运行稳定</div>
             </article>
           </div>
+          <div class="cards admin-only hidden dash-admin-cards">
+            <article class="card" id="localVersionCard"><label>本地版本</label><strong id="localVersion">-</strong></article>
+            <article class="card" id="remoteVersionCard"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
+            <article class="card" id="accountCountCard">
+              <label>全部账号数量</label>
+              <strong id="accountCount">-</strong>
+            </article>
+          </div>
           <div class="dash-body">
             <section class="panel dash-panel">
               <div class="panel-head">
@@ -312,14 +334,6 @@
       </section>
 
       <section id="page-accounts" class="hidden">
-        <div class="cards admin-only hidden">
-          <article class="card" id="localVersionCard"><label>本地版本</label><strong id="localVersion">-</strong></article>
-          <article class="card" id="remoteVersionCard"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
-          <article class="card" id="accountCountCard">
-            <label>全部账号数量</label>
-            <strong id="accountCount">-</strong>
-          </article>
-        </div>
         <section class="panel">
           <div class="panel-head">
             <h2>抖音账号</h2>
@@ -638,6 +652,8 @@
     let profileCodeLeft = 0;
     let profileCodeTimer = 0;
     window.__accountCookies = {};
+    window.__accountChats = {};
+    window.__targetPicker = null;
 
     function toast(message, type = "ok") {
       const el = document.createElement("div");
@@ -1206,6 +1222,34 @@
       if (data.cookie_source === "qr") return "扫码 Cookie";
       return bound ? "已绑定 Cookie" : "未绑定 Cookie";
     }
+    function sparkLabelFor(uid, name) {
+      const items = ((window.__accountChats || {})[uid] || {}).items || [];
+      const hit = items.find((row) => row && row.name === name);
+      if (hit && hit.spark_days) return "火花 " + hit.spark_days + " 天";
+      return "";
+    }
+    function targetChipsHtml(targets, uid, index, operate) {
+      const names = (targets || []).map((x) => String(x || "").trim()).filter(Boolean);
+      if (!names.length) return `<span class="target-empty">还没选择，点下面按钮从会话列表里勾选</span>`;
+      return names.map((name) => {
+        const spark = sparkLabelFor(uid, name);
+        return `<span class="target-chip" data-name="${escapeAttr(name)}">${escapeHtml(name)}${spark ? `<small>${escapeHtml(spark)}</small>` : ""}${operate ? `<button type="button" onclick="removeTargetChip(${index}, this.parentNode.getAttribute('data-name'))">×</button>` : ""}</span>`;
+      }).join("");
+    }
+    function readTargetsJson(node) {
+      const el = node && node.querySelector(".targets-json");
+      if (!el) return [];
+      try {
+        const parsed = JSON.parse(el.value || "[]");
+        return Array.isArray(parsed) ? parsed.map((x) => String(x || "").trim()).filter(Boolean) : [];
+      } catch (e) {
+        return String(el.value || "").split(/\n+/).map((x) => x.trim()).filter(Boolean);
+      }
+    }
+    function writeTargetsJson(node, names) {
+      const el = node && node.querySelector(".targets-json");
+      if (el) el.value = JSON.stringify(names || []);
+    }
     function accountCard(data, index) {
       const name = data.username || "抖音账号";
       const uid = data.unique_id || "";
@@ -1236,9 +1280,12 @@
         <label>每天发送时间
           <input class="cron-time spark-action" type="time" name="cron-${index}-${escapeAttr(uid)}" autocomplete="off" value="${escapeAttr(cron)}" ${operate ? "" : "disabled"} />
         </label>
-        <label>目标好友（一行一个）
-          <textarea class="targets spark-action" ${operate ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea>
-        </label>
+        <div class="target-box">
+          <span class="target-label">目标好友</span>
+          <div class="target-chips">${targetChipsHtml(data.targets || [], uid, index, operate)}</div>
+          <button class="btn-ghost mini spark-action" type="button" onclick="openTargetPicker(${index})" ${operate && bound ? "" : "disabled"}>${bound ? "选择好友和群聊" : "请先登录后再选择"}</button>
+          <input type="hidden" class="targets-json" value="${escapeAttr(JSON.stringify(data.targets || []))}" />
+        </div>
         <label>消息模板
           <textarea class="message-template spark-action" rows="3" ${operate ? "" : "disabled"}>${escapeHtml(tpl)}</textarea>
         </label>
@@ -1276,7 +1323,7 @@
       return {
         username: node.querySelector(".username").value.trim(),
         unique_id: uniqueId,
-        targets: node.querySelector(".targets").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
+        targets: readTargetsJson(node),
         cron_hour: t.hour,
         cron_minute: t.minute,
         message_template: (node.querySelector(".message-template") && node.querySelector(".message-template").value) || "",
@@ -1288,6 +1335,116 @@
     }
     function collectAccounts() {
       return [...document.querySelectorAll(".account")].map(collectAccount).filter((item) => item.unique_id);
+    }
+    async function removeTargetChip(index, name) {
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
+      window.__accounts = collectAccounts();
+      const item = window.__accounts[index];
+      if (!item) return;
+      item.targets = (item.targets || []).filter((x) => x !== name);
+      renderAccounts();
+      await saveAccount(index, true);
+    }
+    function closeTargetPicker() {
+      if ($("targetModal")) $("targetModal").classList.add("hidden");
+      window.__targetPicker = null;
+    }
+    function renderTargetPickerList() {
+      const state = window.__targetPicker;
+      const box = $("targetList");
+      if (!state || !box) return;
+      const q = (($("targetSearch") && $("targetSearch").value) || "").trim().toLowerCase();
+      const selected = state.selected;
+      const items = (state.items || []).filter((row) => !q || String(row.name || "").toLowerCase().includes(q));
+      const friends = items.filter((row) => row.kind !== "group");
+      const groups = items.filter((row) => row.kind === "group");
+      const extra = [...selected].filter((name) => !(state.items || []).some((row) => row.name === name));
+      const section = (title, rows) => {
+        if (!rows.length) return "";
+        return `<div class="target-section">${escapeHtml(title)}</div>` + rows.map((row) => {
+          const name = row.name || row;
+          const kind = row.kind === "group" ? "群聊" : (row.kind ? "好友" : "已选");
+          const spark = row.spark_days ? ("火花 " + row.spark_days + " 天") : (row.kind ? "火花未知" : "");
+          const on = selected.has(name) ? " on" : "";
+          return `<button type="button" class="target-row${on}" onclick="toggleTargetRow(${JSON.stringify(name)})">
+            <span><b>${escapeHtml(name)}</b><small class="kind">${escapeHtml(kind)}</small></span>
+            <span class="spark">${escapeHtml(spark)}</span>
+          </button>`;
+        }).join("");
+      };
+      box.innerHTML = section("好友", friends) + section("群聊", groups) + section("已选但列表里没有", extra.map((name) => ({ name })))
+        || `<div class="target-empty">没有匹配的会话</div>`;
+      if ($("targetModalHint")) {
+        $("targetModalHint").textContent = "已选 " + selected.size + " 个。点一行即可开关。火花天数能读到就会显示。";
+      }
+    }
+    function toggleTargetRow(name) {
+      const state = window.__targetPicker;
+      if (!state) return;
+      if (state.selected.has(name)) state.selected.delete(name);
+      else state.selected.add(name);
+      renderTargetPickerList();
+    }
+    async function loadTargetPickerItems(force) {
+      const state = window.__targetPicker;
+      if (!state) return;
+      const uid = state.uid;
+      const cached = (window.__accountChats || {})[uid];
+      if (!force && cached && cached.items && cached.items.length && (Date.now() - (cached.at || 0) < 5 * 60 * 1000)) {
+        state.items = cached.items;
+        renderTargetPickerList();
+        return;
+      }
+      if ($("targetList")) $("targetList").innerHTML = `<div class="target-empty">正在读取会话列表，大约十几秒…</div>`;
+      if ($("targetRefreshBtn")) $("targetRefreshBtn").disabled = true;
+      try {
+        const data = await api("/api/account/conversations", {
+          method: "POST",
+          body: JSON.stringify({ unique_id: uid, cookies: window.__accountCookies[uid] || "" }),
+        });
+        const items = data.items || [];
+        window.__accountChats[uid] = { items, at: Date.now() };
+        state.items = items;
+        renderTargetPickerList();
+        toast(data.message || ("已读取 " + items.length + " 个会话"));
+      } catch (err) {
+        if ($("targetList")) $("targetList").innerHTML = `<div class="target-empty">${escapeHtml(err.message)}</div>`;
+        toast(err.message, "err");
+      } finally {
+        if ($("targetRefreshBtn")) $("targetRefreshBtn").disabled = false;
+      }
+    }
+    async function openTargetPicker(index) {
+      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
+      window.__accounts = collectAccounts();
+      const item = window.__accounts[index];
+      if (!item || !item.unique_id) { toast("请先登录这个账号", "err"); return; }
+      if (!(item.cookies || window.__accountCookies[item.unique_id])) {
+        toast("这个账号还没有 Cookie，请先登录", "err");
+        return;
+      }
+      window.__targetPicker = {
+        index,
+        uid: item.unique_id,
+        selected: new Set(item.targets || []),
+        items: [],
+      };
+      if ($("targetSearch")) $("targetSearch").value = "";
+      if ($("targetModal")) $("targetModal").classList.remove("hidden");
+      await loadTargetPickerItems(false);
+    }
+    function refreshTargetPicker() {
+      return loadTargetPickerItems(true);
+    }
+    async function applyTargetPicker() {
+      const state = window.__targetPicker;
+      if (!state) return;
+      window.__accounts = collectAccounts();
+      if (!window.__accounts[state.index]) return;
+      window.__accounts[state.index].targets = [...state.selected];
+      closeTargetPicker();
+      renderAccounts();
+      await saveAccount(state.index);
     }
     async function removeAccount(index) {
       if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
@@ -1738,7 +1895,7 @@
       if ($("addAccountModal")) $("addAccountModal").classList.add("hidden");
       try {
         await saveConfig(true, true);
-        toast("已添加 " + next.username + "，请填写目标好友");
+        toast("已添加 " + next.username + "，请选择目标好友");
       } catch (err) {
         toast(err.message, "err");
       }

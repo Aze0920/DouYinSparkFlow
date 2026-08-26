@@ -22,6 +22,8 @@ class SpaNavTests(unittest.TestCase):
         self.assertNotIn('id="profileModal"', INDEX)
         self.assertNotIn('id="wpBindCard"', INDEX)
         self.assertNotIn('id="expiresCard"', INDEX)
+        self.assertIn("dash-admin-cards", INDEX)
+        self.assertIn("选择好友和群聊", INDEX)
 
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)

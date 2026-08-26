@@ -681,6 +681,9 @@ body.spark-locked .spark-action {
   gap: 12px;
   padding: 18px;
 }
+.dash-admin-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
 .accounts-grid .account .targets {
   min-height: 120px;
   resize: vertical;
@@ -700,6 +703,50 @@ body.spark-locked .spark-action {
   grid-column: 1 / -1;
 }
 .account-id { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.target-box { display: grid; gap: 8px; }
+.target-label { color: var(--muted); font-size: 13px; }
+.target-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 32px; }
+.target-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: rgba(255, 122, 58, .12);
+  font-size: 12px;
+}
+.target-chip small { color: var(--ember); }
+.target-chip button {
+  width: auto;
+  padding: 0 2px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 1;
+}
+.target-empty { color: var(--muted); font-size: 12px; }
+.target-box .btn-ghost { width: auto; justify-self: start; }
+.target-card { width: min(520px, calc(100% - 24px)); max-height: 86vh; overflow: auto; }
+.target-list { display: grid; gap: 6px; max-height: 46vh; overflow: auto; margin: 12px 0; }
+.target-section { color: var(--muted); font-size: 12px; margin-top: 6px; }
+.target-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255,255,255,.03);
+  text-align: left;
+  width: 100%;
+}
+.target-row span { display: grid; gap: 2px; min-width: 0; }
+.target-row .kind { color: var(--muted); font-size: 11px; }
+.target-row .spark { color: var(--ember); font-size: 12px; font-weight: 700; flex-shrink: 0; }
+.target-row.on { border-color: rgba(255, 122, 58, .55); background: rgba(255, 122, 58, .12); }
 .account-head-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .account-head-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .ck-status {
@@ -878,6 +925,7 @@ body.spark-locked .spark-action {
   .login-page { min-height: 100dvh; }
   .login-card { padding: 26px 20px 22px; }
   .cards, .grid.two, .accounts-grid, .users-grid, .dash-body { grid-template-columns: 1fr; }
+  .dash-admin-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-hero { flex-direction: column; align-items: stretch; gap: 0; }
   .dash-hero-copy { display: none; }
   .dash-title { font-size: 28px; }

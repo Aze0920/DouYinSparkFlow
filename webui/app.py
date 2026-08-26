@@ -26,6 +26,7 @@ from webui.legal_docs import (
 )
 from webui.envfile import account_cron, cookie_key, default_cron, env_path, load_env, parse_accounts, read_tasks, write_env
 from webui.cookie_probe import parse_cookie_payload, probe_cookies
+from webui.chat_list import list_conversations
 from webui.qr_login import (
     cancel_qr_login,
     choose_verify_method,
@@ -1563,6 +1564,33 @@ def check_account_cookie(request: Request, payload: dict | None = None):
         got_uid,
     )
     return {**result, "ok": True}
+
+
+@app.post("/api/account/conversations")
+def list_account_conversations(request: Request, payload: dict | None = None):
+    user = require_spark(request)
+    _deny_if_browser_busy()
+    payload = payload or {}
+    unique_id = str(payload.get("unique_id") or "").strip()
+    if not unique_id:
+        raise HTTPException(status_code=400, detail="缺少抖音号")
+    _require_account_access(user, unique_id)
+    env = load_env()
+    raw = env.get(cookie_key(unique_id), "") or payload.get("cookies") or ""
+    if not raw:
+        raise HTTPException(status_code=400, detail="这个账号还没有 Cookie，请先登录")
+    try:
+        cookies = parse_cookie_payload(raw)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    result = list_conversations(cookies)
+    if not result.get("ok"):
+        raise HTTPException(
+            status_code=409 if "稍后再试" in (result.get("message") or "") else 400,
+            detail=result.get("message") or "读取会话列表失败",
+        )
+    logger.info("读取会话 unique_id=%s count=%s", unique_id, len(result.get("items") or []))
+    return {"ok": True, "unique_id": unique_id, **result}
 
 
 @app.post("/api/account/import-cookie")
