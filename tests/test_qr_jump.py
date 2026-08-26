@@ -28,9 +28,9 @@ class QrJumpTests(unittest.TestCase):
         self.assertEqual(fields["app_scheme"], "snssdk1128://webview?url=" + quote(url, safe=""))
         self.assertEqual(fields["app_scheme_ios"], fields["app_scheme"])
         self.assertEqual(fields["app_open_url"], "")
-        self.assertTrue(fields["app_open_url_android"].startswith("intent://aweme.snssdk.com/"))
-        self.assertIn("scheme=https", fields["app_open_url_android"])
-        self.assertIn("package=com.ss.android.ugc.aweme", fields["app_open_url_android"])
+        self.assertTrue(fields["app_open_url_android"].startswith("intent://webview?url="))
+        self.assertIn("scheme=snssdk1128", fields["app_open_url_android"])
+        self.assertIn("com.ss.android.ugc.aweme", fields["app_open_url_android"])
         self.assertNotIn("scan?", fields["app_scheme"])
         self.assertNotIn("from=webview", fields["app_scheme"])
         self.assertEqual(unquote(fields["app_scheme"].split("url=", 1)[1]), url)
@@ -43,7 +43,8 @@ class QrJumpTests(unittest.TestCase):
         self.assertTrue(fields["app_scheme"].startswith("snssdk1128://webview?url="))
         self.assertTrue(fields["app_scheme_ios"].startswith("snssdk1128://webview?url="))
         self.assertFalse(fields["app_scheme"].startswith("aweme://"))
-        self.assertTrue(fields["app_open_url_android"].startswith("intent://api.amemv.com/"))
+        self.assertTrue(fields["app_open_url_android"].startswith("intent://webview?url="))
+        self.assertIn("scheme=snssdk1128", fields["app_open_url_android"])
         self.assertNotIn("open/sdk/ul", fields["app_scheme"])
         self.assertNotIn("append_common_params", fields["app_scheme"])
 
@@ -54,7 +55,7 @@ class QrJumpTests(unittest.TestCase):
         self.assertEqual(fields["app_jump_url"], url)
         self.assertEqual(fields["app_open_url"], "")
         self.assertTrue(fields["app_scheme"].startswith("snssdk1128://webview?url="))
-        self.assertTrue(fields["app_open_url_android"].startswith("intent://v.douyin.com/"))
+        self.assertTrue(fields["app_open_url_android"].startswith("intent://webview?url="))
 
     def test_existing_scheme_kept(self):
         scheme = "snssdk1128://webview?url=https%3A%2F%2Faweme.snssdk.com%2Fx"

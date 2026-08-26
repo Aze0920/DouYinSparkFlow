@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="legal-page">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }} - SparkFlow</title>
+  <link rel="stylesheet" href="/static/app.css?v={{ version }}" />
+</head>
+<body class="legal-page">
+  <div class="legal-shell">
+    <header class="legal-top">
+      <a class="legal-brand" href="/">
+        <span class="spark-mark">✦</span>
+        <b>SparkFlow</b>
+      </a>
+      <nav class="legal-nav">
+        <a href="/terms"{% if doc == "terms" %} class="is-on"{% endif %}>服务条款</a>
+        <a href="/privacy"{% if doc == "privacy" %} class="is-on"{% endif %}>隐私政策</a>
+        <a href="/">返回首页</a>
+      </nav>
+    </header>
+    <article class="legal-card">
+      <span class="dash-pill">用户中心</span>
+      <h1>{{ title }}</h1>
+      <p class="legal-lead">{{ lead }}</p>
+      <div class="legal-body">
+        {{ body | safe }}
+      </div>
+      <p class="legal-updated">本文件最后更新于：{{ updated }}</p>
+    </article>
+  </div>
+</body>
+</html>

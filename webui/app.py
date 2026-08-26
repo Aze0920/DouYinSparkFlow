@@ -15,6 +15,15 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
+from webui.legal_docs import (
+    PRIVACY_HTML,
+    PRIVACY_LEAD,
+    PRIVACY_TITLE,
+    TERMS_HTML,
+    TERMS_LEAD,
+    TERMS_TITLE,
+    UPDATED as LEGAL_UPDATED,
+)
 from webui.envfile import account_cron, cookie_key, default_cron, env_path, load_env, parse_accounts, read_tasks, write_env
 from webui.cookie_probe import parse_cookie_payload, probe_cookies
 from webui.qr_login import (
@@ -140,6 +149,8 @@ async def log_api_calls(request: Request, call_next):
         "/settings",
         "/invite",
         "/accounts",
+        "/terms",
+        "/privacy",
         "/api/wechat/callback",
         "/api/notify/wxpusher/poll",
         "/api/notify/wxpusher/qr-image",
@@ -571,9 +582,38 @@ def spa_index(request: Request):
     )
 
 
+def legal_page(request: Request, doc: str):
+    if doc == "privacy":
+        title, lead, body = PRIVACY_TITLE, PRIVACY_LEAD, PRIVACY_HTML
+    else:
+        title, lead, body = TERMS_TITLE, TERMS_LEAD, TERMS_HTML
+    return templates.TemplateResponse(
+        "legal.html",
+        {
+            "request": request,
+            "version": read_version(),
+            "doc": doc,
+            "title": title,
+            "lead": lead,
+            "body": body,
+            "updated": LEGAL_UPDATED,
+        },
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
     return spa_index(request)
+
+
+@app.get("/terms", response_class=HTMLResponse)
+def terms_page(request: Request):
+    return legal_page(request, "terms")
+
+
+@app.get("/privacy", response_class=HTMLResponse)
+def privacy_page(request: Request):
+    return legal_page(request, "privacy")
 
 
 @app.get("/home", response_class=HTMLResponse)

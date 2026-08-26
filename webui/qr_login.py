@@ -156,15 +156,17 @@ def douyin_webview_scheme(url: str, prefix: str = "snssdk1128") -> str:
     return f"{prefix}://webview?url={quote(raw, safe='')}"
 
 
-def android_intent_https(url: str) -> str:
+def android_intent_webview(url: str) -> str:
     raw = str(url or "").strip()
-    parsed = urlparse(raw)
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+    if not raw.startswith(("http://", "https://")):
         return ""
-    hostpath = parsed.netloc + (parsed.path or "/")
-    if parsed.query:
-        hostpath += "?" + parsed.query
-    return "intent://" + hostpath + "#Intent;scheme=https;package=com.ss.android.ugc.aweme;end"
+    encoded = quote(raw, safe="")
+    return (
+        "intent://webview?url="
+        + encoded
+        + "#Intent;scheme=snssdk1128;package=com.ss.android.ugc.aweme;"
+        "action=android.intent.action.VIEW;category=android.intent.category.BROWSABLE;end"
+    )
 
 
 def douyin_app_scheme(url: str) -> str:
@@ -191,7 +193,7 @@ def _jump_fields(url: str) -> dict[str, str]:
             "app_open_url_android": jump,
         }
     scheme = douyin_webview_scheme(jump, "snssdk1128")
-    intent = android_intent_https(jump)
+    intent = android_intent_webview(jump)
     return {
         "app_jump_url": jump,
         "app_scheme": scheme,
