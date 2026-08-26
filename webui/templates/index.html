@@ -327,7 +327,6 @@
               <button class="btn-ghost spark-action" type="button" onclick="openAddAccount()">添加账号</button>
             </div>
           </div>
-          <p class="sub" id="accountQuota">账号额度会显示在这里。</p>
           <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。请到「我的」点会员到期，用卡密续期。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码、手机打开抖音，或粘贴 Cookie JSON。</p>
           <div id="accounts" class="accounts-grid"></div>
@@ -466,7 +465,6 @@
           <div class="panel-head">
             <h2>控制台用户</h2>
           </div>
-          <p class="sub">有效天数和账号数填 0 表示不限制。内置管理员 admin 不能删除。</p>
           <div class="grid two">
             <label>用户名<input id="newUsername" placeholder="请输入用户名" /></label>
             <label>密码<input id="newPassword" type="password" placeholder="请输入密码" /></label>
@@ -490,7 +488,6 @@
             <h2>生成卡密</h2>
             <button class="btn-ghost" type="button" onclick="return navTo(event, 'settings')">设置</button>
           </div>
-          <p class="sub">有效天数和账号数填 0 表示不限制。一张卡密只能注册一次。</p>
           <div class="grid two">
             <label>有效天数<input id="cardDays" type="number" min="0" max="3650" value="1" /></label>
             <label>可添加账号数<input id="cardMaxAccounts" type="number" min="0" max="100" value="1" /></label>
@@ -541,7 +538,6 @@
           <div class="panel-head">
             <h2>邀请</h2>
           </div>
-          <p class="sub">总开关关闭后，侧边栏不显示「邀请管理」，已发出的链接也会失效。总开关打开后，每个用户还要在自己的邀请页点「开启邀请」，两边都开才能邀请。对方必须绑定微信后才算邀请成功并发放天数。天数填 0 表示永久。邀请人如果已经是永久会员（含管理员），成功邀请后不会再加天数，对方仍按设置发放。</p>
           <div class="grid two">
             <label class="check-line span-2"><input id="inviteAdminEnabled" type="checkbox" /> 开启邀请</label>
             <label>邀请人获得天数<input id="inviteInviterDays" type="number" min="0" max="3650" value="1" /></label>
@@ -553,7 +549,6 @@
           <div class="panel-head">
             <h2>续火花并发</h2>
           </div>
-          <p class="sub">一个抖音账号占用一条线程，给多个好友发也在同一线程。最多 32。</p>
           <div class="grid two">
             <label>同时处理账号数
               <input id="maxTaskThreads" type="number" min="1" max="32" value="10" />
@@ -568,7 +563,6 @@
             <h2>WxPusher</h2>
             <span class="ck-status" id="wpStatus">未配置</span>
           </div>
-          <p class="sub">打开 <a href="https://wxpusher.zjiecode.com" target="_blank" rel="noreferrer">wxpusher.zjiecode.com</a> 注册应用，把 appToken 填在这里。每个登录用户自己到账号列表扫码绑定微信：admin 绑的号只收 admin 名下抖音号，test 绑的号只收 test 名下的。微信对话框收不到时，用 WxPusher App 看消息。</p>
           <div class="grid two">
             <label class="check-line"><input id="wpEnabled" type="checkbox" /> 启用 WxPusher</label>
             <label>appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
@@ -579,7 +573,6 @@
           <div class="panel-head">
             <h2>推送事件</h2>
           </div>
-          <p class="sub">勾选后，续火花完成、失败、抖音掉线会发给对应登录用户扫码绑定的微信；若同时启用了公众号，也会发模板消息。</p>
           <div class="grid two">
             <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
             <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
@@ -597,7 +590,6 @@
             <h2>微信公众号（管理员配置）</h2>
             <span class="ck-status" id="wxBindStatus">未绑定</span>
           </div>
-          <p class="sub">这是咱们自己的服务号模板通道，给管理员配。不启用就不会发公众号模板。日常推送优先用上面的 WxPusher。</p>
           <div class="grid two">
             <label class="check-line"><input id="wxEnabled" type="checkbox" /> 启用公众号推送</label>
             <label>AppID<input id="wxAppId" placeholder="wx 开头的公众号 AppID" autocomplete="off" /></label>
@@ -1019,13 +1011,13 @@
       });
       const titles = {
         home: ["仪表盘", "今天也要好好续火"],
-        accounts: ["账号列表", "添加、检测、配置抖音号"],
-        logs: ["运行日志", "任务输出会在这个页面自动刷新"],
-        users: ["用户管理", "填 0 表示天数或账号数不限制"],
-        cards: ["卡密管理", "填 0 表示天数或账号数不限制"],
-        invite: ["邀请管理", "把链接发给朋友，对方不用填卡密也能注册"],
-        settings: ["设置", "邀请、并发、WxPusher 和公众号推送"],
-        mine: ["我的", "密码、微信推送和账户信息"],
+        accounts: ["账号列表", ""],
+        logs: ["运行日志", ""],
+        users: ["用户管理", ""],
+        cards: ["卡密管理", ""],
+        invite: ["邀请管理", ""],
+        settings: ["设置", ""],
+        mine: ["我的", ""],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
