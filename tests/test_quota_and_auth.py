@@ -32,8 +32,10 @@ from webui.users import (
     parse_days,
     parse_max_accounts,
     parse_token,
+    public_user,
     save_users,
     to_iso,
+    touch_login,
     _hash_password,
     _legacy_hash_password,
 )
@@ -88,6 +90,19 @@ class AuthTokenTests(unittest.TestCase):
 
     def test_password_hash_differs_from_legacy(self):
         self.assertNotEqual(_hash_password("admin", "admin"), _legacy_hash_password("admin", "admin"))
+
+    def test_touch_login_shows_in_public_user(self):
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with patch.object(users_mod, "USERS_FILE", Path(tmp.name) / "users.json"):
+            save_users([make_user("alice", "pass1234", role="user", days=7, max_accounts=1)])
+            before = public_user(find_user("alice"))
+            self.assertEqual(before["last_login_label"], "-")
+            self.assertEqual(before["last_login_ip"], "-")
+            touch_login("alice", "203.0.113.9")
+            after = public_user(find_user("alice"))
+            self.assertNotEqual(after["last_login_label"], "-")
+            self.assertEqual(after["last_login_ip"], "203.0.113.9")
 
 
 class InviteTests(unittest.TestCase):

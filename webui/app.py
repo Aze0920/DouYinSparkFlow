@@ -5,7 +5,7 @@ import subprocess
 import sys
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import httpx
@@ -44,6 +44,7 @@ from webui.users import (
     parse_token,
     public_user,
     save_users,
+    touch_login,
     user_can_spark,
     username_taken,
     valid_username,
@@ -88,6 +89,8 @@ ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
 LOG_FILE = Path(APP_LOG_PATH)
 LOCK_FILE = ROOT / "logs" / "task.lock"
+STATS_FILE = ROOT / "config" / "spark_stats.json"
+_stats_lock = threading.Lock()
 DEFAULT_REPO = "Aze0920/DouYinSparkFlow"
 GIT_MIRROR_TEMPLATES = [
     "https://ghproxy.net/https://github.com/{repo}.git",
@@ -136,6 +139,7 @@ async def log_api_calls(request: Request, call_next):
         "/cards",
         "/settings",
         "/invite",
+        "/accounts",
         "/api/wechat/callback",
         "/api/notify/wxpusher/poll",
         "/api/notify/wxpusher/qr-image",
@@ -154,7 +158,7 @@ async def log_api_calls(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-XSS-Protection"] = "0"
-    if path.startswith("/api") or path in {"/", "/home", "/tasks", "/logs", "/users", "/cards", "/settings", "/invite"}:
+    if path.startswith("/api") or path in {"/", "/home", "/tasks", "/logs", "/users", "/cards", "/settings", "/invite", "/accounts"}:
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -304,6 +308,75 @@ def _filter_accounts(user: dict | None, accounts: list) -> list:
         return accounts
     name = str((user or {}).get("username") or "")
     return [item for item in accounts if _account_owner(item) == name]
+
+
+def _load_spark_stats() -> dict:
+    if not STATS_FILE.is_file():
+        return {}
+    try:
+        data = json.loads(STATS_FILE.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_spark_stats(data: dict) -> None:
+    STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _record_spark_run(unique_ids, ok: bool) -> None:
+    wanted = {str(item).strip() for item in (unique_ids or []) if str(item).strip()}
+    owners: set[str] = set()
+    for acc in parse_accounts(load_env()):
+        uid = str(acc.get("unique_id") or "").strip()
+        if wanted and uid not in wanted:
+            continue
+        owner = _account_owner(acc)
+        if owner:
+            owners.add(owner)
+    if not owners:
+        return
+    day = _now_local().strftime("%Y-%m-%d")
+    keep_after = (_now_local() - timedelta(days=14)).strftime("%Y-%m-%d")
+    key = "ok" if ok else "fail"
+    with _stats_lock:
+        data = _load_spark_stats()
+        for owner in owners:
+            days = data.setdefault(owner, {})
+            if not isinstance(days, dict):
+                days = {}
+                data[owner] = days
+            row = days.setdefault(day, {"ok": 0, "fail": 0})
+            if not isinstance(row, dict):
+                row = {"ok": 0, "fail": 0}
+                days[day] = row
+            row[key] = int(row.get(key) or 0) + 1
+            data[owner] = {k: v for k, v in days.items() if str(k) >= keep_after}
+        _save_spark_stats(data)
+
+
+def _spark_dashboard_stats(user: dict | None) -> dict:
+    name = str((user or {}).get("username") or "")
+    today = _now_local().strftime("%Y-%m-%d")
+    week = [(_now_local() - timedelta(days=i)).strftime("%Y-%m-%d") for i in range(7)]
+    with _stats_lock:
+        data = _load_spark_stats()
+    if _is_admin(user):
+        rows = [v for v in data.values() if isinstance(v, dict)]
+    else:
+        rows = [data.get(name) or {}]
+    today_ok = today_fail = week_ok = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        today_ok += int((row.get(today) or {}).get("ok") or 0) if isinstance(row.get(today), dict) else 0
+        today_fail += int((row.get(today) or {}).get("fail") or 0) if isinstance(row.get(today), dict) else 0
+        for day in week:
+            cell = row.get(day)
+            if isinstance(cell, dict):
+                week_ok += int(cell.get("ok") or 0)
+    return {"today_ok": today_ok, "today_fail": today_fail, "week_ok": week_ok}
 
 
 def _owned_tasks(user: dict | None, tasks: list) -> list:
@@ -505,6 +578,7 @@ def index(request: Request):
 
 @app.get("/home", response_class=HTMLResponse)
 @app.get("/tasks", response_class=HTMLResponse)
+@app.get("/accounts", response_class=HTMLResponse)
 @app.get("/logs", response_class=HTMLResponse)
 @app.get("/users", response_class=HTMLResponse)
 @app.get("/cards", response_class=HTMLResponse)
@@ -522,6 +596,26 @@ def me(request: Request):
     return {"ok": True, "authed": True, "user": public_user(user)}
 
 
+@app.post("/api/me/password")
+def change_my_password(request: Request, payload: dict):
+    user = require_auth(request)
+    old = str(payload.get("old_password") or "")
+    new = str(payload.get("new_password") or "")
+    if len(new) < 4:
+        raise HTTPException(status_code=400, detail="密码至少 4 位")
+    if not verify_user(str(user.get("username") or ""), old):
+        raise HTTPException(status_code=403, detail="当前密码不对")
+    users = load_users()
+    name = str(user.get("username") or "")
+    for item in users:
+        if item.get("username") == name:
+            item["password_hash"] = _hash_password(name, new)
+            save_users(users)
+            break
+    logger.info("用户修改密码 user=%s", name)
+    return {"ok": True}
+
+
 @app.post("/api/login")
 def login(request: Request, payload: dict):
     ip = _client_ip(request)
@@ -535,8 +629,9 @@ def login(request: Request, payload: dict):
     if not user:
         logger.warning("登录失败：用户名或密码错误 user=%s ip=%s", username, ip)
         raise HTTPException(status_code=403, detail="用户名或密码错误")
-    logger.info("控制台登录成功 user=%s role=%s", user.get("username"), user.get("role"))
-    resp = JSONResponse({"ok": True, "user": public_user(user)})
+    updated = touch_login(user["username"], ip) or user
+    logger.info("控制台登录成功 user=%s role=%s", updated.get("username"), updated.get("role"))
+    resp = JSONResponse({"ok": True, "user": public_user(updated)})
     resp.set_cookie("dsf_auth", make_token(user["username"]), **_auth_cookie_kwargs(request))
     return resp
 
@@ -908,7 +1003,7 @@ def test_notify_settings(request: Request, payload: dict | None = None):
     if want_wp and wxpusher.get("enabled"):
         uid = user_wxpusher_uid(admin.get("username") or "")
         if not uid:
-            failed.append("WxPusher：请先在总览扫码绑定微信")
+            failed.append("WxPusher：请先在账号列表扫码绑定微信")
         else:
             try:
                 send_wxpusher("SparkFlow 测试推送", "WxPusher 通道正常", uids=[uid])
@@ -1061,6 +1156,7 @@ def status(request: Request):
         "me": public_user(user),
         "allow_self_unbind": allow_self_unbind(),
         "invite_enabled": bool(invite_public_settings().get("enabled")),
+        "spark_stats": _spark_dashboard_stats(user),
     }
     if _is_admin(user):
         local = read_version()
@@ -1529,13 +1625,16 @@ def _run_task(unique_ids=None):
         _run_state["message"] = "执行完成" if proc.returncode == 0 else f"执行失败，退出码 {proc.returncode}"
         if proc.returncode == 0:
             logger.info("续火花任务执行完成")
+            _record_spark_run(ids or None, True)
             _notify_account_owners("task_done", "续火花完成", ids or None)
         else:
             logger.error("续火花任务失败 exit=%s", proc.returncode)
+            _record_spark_run(ids or None, False)
             _notify_account_owners("task_fail", "续火花失败", ids or None, extra=f"退出码 {proc.returncode}")
     except Exception as exc:
         _run_state["message"] = f"执行异常：{exc}"
         logger.exception("续火花任务异常")
+        _record_spark_run(ids or None, False)
         _notify_account_owners("task_fail", "续火花异常", ids or None, extra=str(exc))
     finally:
         _run_state["running"] = False

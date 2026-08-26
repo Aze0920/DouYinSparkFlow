@@ -111,6 +111,22 @@
     </div>
   </div>
 
+  <div id="profileModal" class="modal-mask hidden" onclick="if(event.target===this)closeProfileModal()">
+    <div class="modal-card">
+      <h3>账号设置</h3>
+      <p class="sub">修改控制台登录密码。微信推送也可从这里打开。</p>
+      <label>当前密码<input id="profileOldPass" type="password" autocomplete="current-password" /></label>
+      <label>新密码<input id="profileNewPass" type="password" autocomplete="new-password" /></label>
+      <label>再输入一次<input id="profileNewPass2" type="password" autocomplete="new-password" /></label>
+      <div id="profileError" class="error"></div>
+      <div class="modal-actions">
+        <button class="btn-ghost" type="button" onclick="closeProfileModal(); openWxpusherBind()">消息推送</button>
+        <button class="btn-ghost" type="button" onclick="closeProfileModal()">取消</button>
+        <button class="btn-primary" type="button" onclick="submitProfilePassword()">保存密码</button>
+      </div>
+    </div>
+  </div>
+
   <div id="loginPage" class="login-page hidden">
     <section class="login-box">
       <div class="login-card">
@@ -154,9 +170,13 @@
         </button>
       </div>
       <nav class="nav-list">
-        <a class="nav-btn active" href="/" data-page="home" title="总览" onclick="return navTo(event, 'home')">
+        <a class="nav-btn active" href="/" data-page="home" title="仪表盘" onclick="return navTo(event, 'home')">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 10.5 12 4l8 6.5V20a1.2 1.2 0 0 1-1.2 1.2h-4.8v-6H10v6H5.2A1.2 1.2 0 0 1 4 20z"/></svg></span>
-          <span class="nav-label">总览</span>
+          <span class="nav-label">仪表盘</span>
+        </a>
+        <a class="nav-btn" href="/accounts" data-page="accounts" title="账号列表" onclick="return navTo(event, 'accounts')">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="5" width="16" height="14" rx="2"/><path d="M8 9h8M8 12h8M8 15h5"/></svg></span>
+          <span class="nav-label">账号列表</span>
         </a>
         <a class="nav-btn admin-only hidden" href="/logs" data-page="logs" title="运行日志" onclick="return navTo(event, 'logs')">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M7 5h13M7 12h13M7 19h13"/><circle cx="4" cy="5" r="1.2" fill="currentColor"/><circle cx="4" cy="12" r="1.2" fill="currentColor"/><circle cx="4" cy="19" r="1.2" fill="currentColor"/></svg></span>
@@ -198,9 +218,9 @@
           <button class="menu-btn" type="button" onclick="toggleSidebar()" title="打开菜单" aria-label="打开菜单">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
           </button>
-          <div>
-            <h1 class="page-title" id="pageTitle">总览</h1>
-            <div class="sub" id="pageSub">查看运行状态与版本</div>
+          <div class="topbar-titles">
+            <h1 class="page-title" id="pageTitle">仪表盘</h1>
+            <div class="sub" id="pageSub">今天也要好好续火</div>
           </div>
         </div>
         <div class="row">
@@ -211,27 +231,106 @@
       </div>
 
       <section id="page-home">
+        <div class="dash">
+          <div class="dash-hero">
+            <div class="dash-hero-copy">
+              <span class="dash-pill">用户中心</span>
+              <h2 class="dash-title">仪表盘</h2>
+              <p class="dash-hello" id="dashHello">今天也要好好续火</p>
+            </div>
+            <article class="dash-user-card">
+              <div class="dash-user-avatar" id="dashUserAvatar">?</div>
+              <div class="dash-user-meta">
+                <strong id="dashUserName">未登录</strong>
+                <div class="dash-user-line">最近登录时间 <b id="dashLastLogin">-</b></div>
+                <div class="dash-user-line">最近登录 IP <b id="dashLastIp">-</b></div>
+              </div>
+            </article>
+          </div>
+          <div class="dash-stats">
+            <article class="dash-stat">
+              <div class="dash-stat-icon is-ember" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21c4.2-1.2 7-4.4 7-8.2 0-4.4-3.2-7.1-7-12-3.8 4.9-7 7.6-7 12 0 3.8 2.8 7 7 8.2z"/></svg></div>
+              <label>活跃账号</label>
+              <strong id="dashActiveCount">0</strong>
+              <div class="card-sub">续火账号总数</div>
+            </article>
+            <article class="dash-stat">
+              <div class="dash-stat-icon is-ok" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="m8.2 12.2 2.6 2.6 5-5.2"/></svg></div>
+              <label>今日续火成功</label>
+              <strong id="dashTodayOk">0</strong>
+              <div class="card-sub" id="dashTodayOkSub">今日运行无误</div>
+            </article>
+            <article class="dash-stat">
+              <div class="dash-stat-icon is-rose" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="m9 9 6 6M15 9l-6 6"/></svg></div>
+              <label>今日续火失败</label>
+              <strong id="dashTodayFail">0</strong>
+              <div class="card-sub" id="dashTodayFailSub">一切正常</div>
+            </article>
+            <article class="dash-stat">
+              <div class="dash-stat-icon is-blue" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 19V9M10 19V5M15 19v-7M20 19V8"/></svg></div>
+              <label>近 7 天成功</label>
+              <strong id="dashWeekOk">0</strong>
+              <div class="card-sub">系统运行稳定</div>
+            </article>
+          </div>
+          <div class="dash-body">
+            <section class="panel dash-panel">
+              <div class="panel-head">
+                <h2>我的续火账号</h2>
+                <a class="dash-more" href="/accounts" onclick="return navTo(event, 'accounts')">查看全部 →</a>
+              </div>
+              <p class="sub hidden" id="dashExpired">卡密已到期，续火花已暂停。点右侧「卡密激活」续期。</p>
+              <div id="dashAccountList" class="dash-account-list"></div>
+              <div class="dash-empty" id="dashEmpty">
+                <div class="dash-empty-icon" aria-hidden="true">✦</div>
+                <strong>还没有续火账号</strong>
+                <p>开通会员后，到账号列表添加第一个抖音号，开始全自动续火。</p>
+                <button class="btn-primary" type="button" onclick="openRechargeModal()">激活卡密</button>
+              </div>
+            </section>
+            <section class="panel dash-panel">
+              <div class="panel-head">
+                <h2>快速操作</h2>
+              </div>
+              <div class="dash-quick">
+                <button type="button" class="dash-quick-item" onclick="return navTo(event, 'accounts')">
+                  <span class="dash-quick-icon is-ember" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 21c4.2-1.2 7-4.4 7-8.2 0-4.4-3.2-7.1-7-12-3.8 4.9-7 7.6-7 12 0 3.8 2.8 7 7 8.2z"/></svg></span>
+                  <span class="dash-quick-copy"><b>续火账号管理</b><small>添加、续期、配置</small></span>
+                  <span class="dash-quick-arrow" aria-hidden="true">›</span>
+                </button>
+                <button type="button" class="dash-quick-item" onclick="openRechargeModal()">
+                  <span class="dash-quick-icon is-gold" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="14" r="3"/><path d="M10.8 12.2 20 4h-4.2L8 12"/></svg></span>
+                  <span class="dash-quick-copy"><b>卡密激活</b><small>一步完成激活开通</small></span>
+                  <span class="dash-quick-arrow" aria-hidden="true">›</span>
+                </button>
+                <button type="button" class="dash-quick-item" onclick="openProfileModal()">
+                  <span class="dash-quick-icon is-muted" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1.1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></span>
+                  <span class="dash-quick-copy"><b>账号设置</b><small>修改密码、绑定推送</small></span>
+                  <span class="dash-quick-arrow" aria-hidden="true">›</span>
+                </button>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section id="page-accounts" class="hidden">
         <div class="cards">
-          <article class="card">
-            <label>当前用户</label>
-            <strong id="homeUsername">-</strong>
-            <div class="card-sub" id="homeRole"></div>
-          </article>
           <article class="card card-click" id="expiresCard" onclick="openRechargeModal()">
             <label>到期时间</label>
             <strong id="homeExpires">-</strong>
             <div class="card-sub" id="homeRemain"></div>
+          </article>
+          <article class="card card-click" id="wpBindCard" onclick="openWxpusherBind()">
+            <label>消息推送</label>
+            <strong id="wpBindLabel">未绑定</strong>
+            <div class="card-sub hidden" id="wpBindHint"></div>
           </article>
           <article class="card admin-only hidden" id="localVersionCard"><label>本地版本</label><strong id="localVersion">-</strong></article>
           <article class="card admin-only hidden" id="remoteVersionCard"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
           <article class="card admin-only hidden" id="accountCountCard">
             <label>全部账号数量</label>
             <strong id="accountCount">-</strong>
-          </article>
-          <article class="card card-click" id="wpBindCard" onclick="openWxpusherBind()">
-            <label>消息推送</label>
-            <strong id="wpBindLabel">未绑定</strong>
-            <div class="card-sub hidden" id="wpBindHint"></div>
           </article>
         </div>
         <section class="panel">
@@ -402,7 +501,7 @@
             <h2>WxPusher</h2>
             <span class="ck-status" id="wpStatus">未配置</span>
           </div>
-          <p class="sub">打开 <a href="https://wxpusher.zjiecode.com" target="_blank" rel="noreferrer">wxpusher.zjiecode.com</a> 注册应用，把 appToken 填在这里。每个登录用户自己到总览扫码绑定微信：admin 绑的号只收 admin 名下抖音号，test 绑的号只收 test 名下的。微信对话框收不到时，用 WxPusher App 看消息。</p>
+          <p class="sub">打开 <a href="https://wxpusher.zjiecode.com" target="_blank" rel="noreferrer">wxpusher.zjiecode.com</a> 注册应用，把 appToken 填在这里。每个登录用户自己到账号列表扫码绑定微信：admin 绑的号只收 admin 名下抖音号，test 绑的号只收 test 名下的。微信对话框收不到时，用 WxPusher App 看消息。</p>
           <div class="grid two">
             <label class="check-line"><input id="wpEnabled" type="checkbox" /> 启用 WxPusher</label>
             <label>appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
@@ -597,11 +696,20 @@
       });
       if ($("expiredBanner")) {
         if (current && current.invite_pending) {
-          $("expiredBanner").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。点上面的「消息推送」扫码即可。";
+          $("expiredBanner").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。点「消息推送」扫码即可。";
           $("expiredBanner").classList.remove("hidden");
         } else {
           $("expiredBanner").textContent = "卡密已到期，续火花按钮已禁用。点上面的「到期时间」可用卡密续期。";
           $("expiredBanner").classList.toggle("hidden", ok);
+        }
+      }
+      if ($("dashExpired")) {
+        if (current && current.invite_pending) {
+          $("dashExpired").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。请到账号列表打开「消息推送」扫码。";
+          $("dashExpired").classList.remove("hidden");
+        } else {
+          $("dashExpired").textContent = "卡密已到期，续火花已暂停。点右侧「卡密激活」续期。";
+          $("dashExpired").classList.toggle("hidden", ok);
         }
       }
       updateAccountQuota();
@@ -625,9 +733,27 @@
       });
       if (!inviteEnabled && page === "invite") showPage("home", { replace: true });
     }
+    function timeGreeting() {
+      const h = new Date().getHours();
+      if (h < 6) return "凌晨好";
+      if (h < 11) return "早上好";
+      if (h < 14) return "中午好";
+      if (h < 18) return "下午好";
+      return "晚上好";
+    }
     function updateHomeProfile() {
-      if ($("homeUsername")) $("homeUsername").textContent = current ? (current.username || "-") : "-";
-      if ($("homeRole")) $("homeRole").textContent = current ? (isAdmin() ? "管理员" : "普通用户") : "";
+      const name = current ? (current.username || "-") : "未登录";
+      if ($("dashHello")) $("dashHello").textContent = "今天也要好好续火";
+      if ($("dashUserName")) {
+        $("dashUserName").textContent = current && current.username
+          ? (timeGreeting() + "，" + current.username)
+          : "未登录";
+      }
+      if ($("dashUserAvatar")) {
+        $("dashUserAvatar").textContent = current && current.username ? String(current.username).slice(0, 1).toUpperCase() : "?";
+      }
+      if ($("dashLastLogin")) $("dashLastLogin").textContent = current ? (current.last_login_label || "-") : "-";
+      if ($("dashLastIp")) $("dashLastIp").textContent = current ? (current.last_login_ip || "-") : "-";
       if ($("homeExpires")) {
         $("homeExpires").textContent = current
           ? (isAdmin() || current.permanent ? "永久" : (current.expires_label || "-"))
@@ -652,6 +778,66 @@
           : (current.permanent ? "当前为永久账户，无需充值" : "点击用卡密续期");
       }
       renderWxpusherCard();
+      renderDashboard();
+    }
+    function renderDashboard() {
+      const list = window.__accounts || [];
+      const active = list.filter((item) => item && (item.cookies_set || item.unique_id)).length;
+      if ($("dashActiveCount")) $("dashActiveCount").textContent = String(active);
+      const st = (window.__lastStatus && window.__lastStatus.spark_stats) || {};
+      const todayOk = Number(st.today_ok) || 0;
+      const todayFail = Number(st.today_fail) || 0;
+      const weekOk = Number(st.week_ok) || 0;
+      if ($("dashTodayOk")) $("dashTodayOk").textContent = String(todayOk);
+      if ($("dashTodayFail")) $("dashTodayFail").textContent = String(todayFail);
+      if ($("dashWeekOk")) $("dashWeekOk").textContent = String(weekOk);
+      if ($("dashTodayOkSub")) $("dashTodayOkSub").textContent = todayFail ? "今日有失败任务，请看账号列表" : "今日运行无误";
+      if ($("dashTodayFailSub")) $("dashTodayFailSub").textContent = todayFail ? "请检查 Cookie 或目标好友" : "一切正常";
+      const wrap = $("dashAccountList");
+      const empty = $("dashEmpty");
+      if (wrap) {
+        wrap.innerHTML = list.slice(0, 6).map((item) => {
+          const ck = cookieStatusMeta(item);
+          const title = item.username || "抖音账号";
+          const uid = item.unique_id ? "抖音号 " + item.unique_id : "尚未登录";
+          return `<button type="button" class="dash-account-row" onclick="return navTo(event, 'accounts')">
+            <span class="dash-account-name">${escapeHtml(title)}<small>${escapeHtml(uid)}</small></span>
+            <span class="ck-status ${ck.cls}">${ck.text}</span>
+          </button>`;
+        }).join("");
+      }
+      if (empty) empty.classList.toggle("hidden", list.length > 0);
+      if (wrap) wrap.classList.toggle("hidden", !list.length);
+    }
+    function openProfileModal() {
+      if ($("profileError")) $("profileError").textContent = "";
+      if ($("profileOldPass")) $("profileOldPass").value = "";
+      if ($("profileNewPass")) $("profileNewPass").value = "";
+      if ($("profileNewPass2")) $("profileNewPass2").value = "";
+      if ($("profileModal")) $("profileModal").classList.remove("hidden");
+    }
+    function closeProfileModal() {
+      if ($("profileModal")) $("profileModal").classList.add("hidden");
+    }
+    async function submitProfilePassword() {
+      const oldPass = ($("profileOldPass") && $("profileOldPass").value) || "";
+      const next = ($("profileNewPass") && $("profileNewPass").value) || "";
+      const again = ($("profileNewPass2") && $("profileNewPass2").value) || "";
+      if ($("profileError")) $("profileError").textContent = "";
+      if (next !== again) {
+        if ($("profileError")) $("profileError").textContent = "两次新密码不一致";
+        return;
+      }
+      try {
+        await api("/api/me/password", {
+          method: "POST",
+          body: JSON.stringify({ old_password: oldPass, new_password: next }),
+        });
+        closeProfileModal();
+        toast("密码已更新");
+      } catch (err) {
+        if ($("profileError")) $("profileError").textContent = err.message;
+      }
     }
     function renderWxpusherCard() {
       const bound = !!(current && current.wxpusher_bound);
@@ -665,10 +851,11 @@
       if ($("wpUnbindBtn")) $("wpUnbindBtn").classList.toggle("hidden", !bound || !allowSelfUnbind);
     }
     function pagePath(name) {
-      return { home: "/", logs: "/logs", users: "/users", cards: "/cards", invite: "/invite", settings: "/settings" }[name] || "/";
+      return { home: "/", accounts: "/accounts", logs: "/logs", users: "/users", cards: "/cards", invite: "/invite", settings: "/settings" }[name] || "/";
     }
     function pathToPage(pathname) {
       const p = String(pathname || "/").replace(/\/+$/, "") || "/";
+      if (p === "/accounts") return "accounts";
       if (p === "/logs") return "logs";
       if (p === "/users") return "users";
       if (p === "/cards") return "cards";
@@ -686,18 +873,21 @@
     function showPage(name, opts) {
       opts = opts || {};
       if (name === "tasks") name = "home";
-      if (!["home", "logs", "users", "cards", "invite", "settings"].includes(name)) name = "home";
-      if (current && !isAdmin() && name !== "home" && name !== "invite") name = "home";
+      if (!["home", "accounts", "logs", "users", "cards", "invite", "settings"].includes(name)) name = "home";
+      if (current && !isAdmin() && name !== "home" && name !== "accounts" && name !== "invite") name = "home";
       if (name === "invite" && !inviteEnabled) name = "home";
       page = name;
-      ["home", "logs", "users", "cards", "invite", "settings"].forEach((key) => {
-        $("page-" + key).classList.toggle("hidden", key !== name);
+      ["home", "accounts", "logs", "users", "cards", "invite", "settings"].forEach((key) => {
+        const el = $("page-" + key);
+        if (el) el.classList.toggle("hidden", key !== name);
       });
+      document.documentElement.classList.toggle("page-home", name === "home");
       document.querySelectorAll(".nav-btn").forEach((btn) => {
         btn.classList.toggle("active", btn.dataset.page === name);
       });
       const titles = {
-        home: ["总览", ""],
+        home: ["仪表盘", "今天也要好好续火"],
+        accounts: ["账号列表", "添加、检测、配置抖音号"],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "填 0 表示天数或账号数不限制"],
         cards: ["卡密管理", "填 0 表示天数或账号数不限制"],
@@ -713,6 +903,7 @@
         if (opts.replace) history.replaceState(state, "", path);
         else history.pushState(state, "", path);
       }
+      if (name === "home") renderDashboard();
       if (name === "logs") loadLogs();
       if (name === "users" && isAdmin()) loadUsers();
       if (name === "cards" && isAdmin()) loadCards();
@@ -824,6 +1015,7 @@
         applyRole();
       }
       if ($("updateBtn")) $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
+      renderDashboard();
     }
     async function checkStatus() {
       const data = await api("/api/status");
@@ -932,12 +1124,13 @@
       </div>`;
     }
     function renderAccounts() {
-      $("accounts").innerHTML = (window.__accounts || []).map(accountCard).join("");
-      $("noAccounts").classList.toggle("hidden", !!(window.__accounts && window.__accounts.length));
+      if ($("accounts")) $("accounts").innerHTML = (window.__accounts || []).map(accountCard).join("");
+      if ($("noAccounts")) $("noAccounts").classList.toggle("hidden", !!(window.__accounts && window.__accounts.length));
       updateAccountQuota();
       const st = window.__lastStatus;
       if (st) setBusy(st.running, st.run_message || "空闲", st.running_ids || []);
       applySparkLock();
+      renderDashboard();
     }
     async function loadConfig() {
       const cfg = await api("/api/config");
@@ -2088,7 +2281,7 @@
         $("toggleInviteBtn").title = (expired && !userOn) ? "会员已过期，续期后才能开启邀请" : "";
       }
       if ($("inviteHint")) {
-        if (expired) $("inviteHint").textContent = "会员已过期，不能邀请，固定链接暂时失效。点总览「到期时间」用卡密续期后，不用换链接。还能正常登录。";
+        if (expired) $("inviteHint").textContent = "会员已过期，不能邀请，固定链接暂时失效。点账号列表「到期时间」用卡密续期后，不用换链接。还能正常登录。";
         else if (!userOn) $("inviteHint").textContent = "点右侧按钮开启后，把固定链接发给朋友，对方不用填卡密就能注册。关掉邀请后同一条链接会失效，再打开还是这条链接。";
         else if (data.permanent) $("inviteHint").textContent = "把固定链接发给朋友，对方不用填卡密就能注册。你已是永久会员，邀请成功不会再给你加天数。";
         else $("inviteHint").textContent = "把固定链接发给朋友，对方不用填卡密就能注册。你的会员过期后链接会失效，续期后不用换链接。";

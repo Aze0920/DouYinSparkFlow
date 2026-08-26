@@ -313,6 +313,28 @@ def _mask_tail(value) -> str:
     return "••••" + raw[-4:]
 
 
+def _format_login_time(value) -> str:
+    dt = parse_iso(value)
+    if not dt:
+        return "-"
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M")
+
+
+def touch_login(username: str, ip: str = "") -> dict | None:
+    name = str(username or "").strip()
+    if not name:
+        return None
+    users = load_users()
+    for item in users:
+        if item.get("username") != name:
+            continue
+        item["last_login_at"] = to_iso(now_utc())
+        item["last_login_ip"] = str(ip or "").strip()
+        save_users(users)
+        return item
+    return None
+
+
 def public_user(user: dict) -> dict:
     created = parse_iso(user.get("created_at"))
     exp = parse_iso(user.get("expires_at"))
@@ -335,6 +357,9 @@ def public_user(user: dict) -> dict:
         "wxpusher_mask": _mask_tail(user.get("wxpusher_uid")),
         "wxpusher_bound_at": user.get("wxpusher_bound_at") or "",
         "protected": is_protected_username(user.get("username") or ""),
+        "last_login_at": user.get("last_login_at") or "",
+        "last_login_label": _format_login_time(user.get("last_login_at")),
+        "last_login_ip": str(user.get("last_login_ip") or "").strip() or "-",
     }
 
 
