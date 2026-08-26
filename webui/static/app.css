@@ -608,6 +608,15 @@ body.spark-locked .spark-action {
 }
 .wp-modal-actions { flex-wrap: wrap; justify-content: flex-end; }
 .wp-modal-actions button { width: auto; }
+.modal-card input { width: 100%; margin-top: 8px; }
+.invite-link-box {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 12px 0 4px;
+}
+.invite-link-box input { flex: 1; min-width: 160px; }
+.invite-link-box button { width: auto; }
 .error { color: var(--rose); min-height: 18px; }
 
 @media (max-width: 860px) {

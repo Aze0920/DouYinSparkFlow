@@ -10,4 +10,5 @@ config/.env
 config/users.json
 config/cards.json
 config/notify.json
+config/invite.json
 config/auth_secret

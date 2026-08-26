@@ -31,6 +31,7 @@ from webui.qr_login import (
 from webui.users import (
     admin_count,
     account_limit,
+    apply_card_benefits,
     extend_user,
     find_user,
     is_protected_username,
@@ -54,6 +55,14 @@ from webui.cards import (
     delete_card,
     list_public_cards,
     public_card,
+)
+from webui.invite import (
+    apply_invite_register,
+    ensure_invite_code,
+    my_invite_payload,
+    preview_invite,
+    public_settings as invite_public_settings,
+    save_invite_settings,
 )
 from webui.notify import (
     apply_wxpusher_callback,
@@ -124,6 +133,7 @@ async def log_api_calls(request: Request, call_next):
         "/users",
         "/cards",
         "/settings",
+        "/invite",
         "/api/wechat/callback",
         "/api/notify/wxpusher/poll",
         "/api/notify/wxpusher/qr-image",
@@ -142,7 +152,7 @@ async def log_api_calls(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["X-XSS-Protection"] = "0"
-    if path.startswith("/api") or path in {"/", "/home", "/tasks", "/logs", "/users", "/cards", "/settings"}:
+    if path.startswith("/api") or path in {"/", "/home", "/tasks", "/logs", "/users", "/cards", "/settings", "/invite"}:
         response.headers["Cache-Control"] = "no-store"
     return response
 
@@ -207,6 +217,14 @@ def _client_ip(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return "unknown"
+
+
+def _request_origin(request: Request) -> str:
+    proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",")[0].strip()
+    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc or "").split(",")[0].strip()
+    if not host:
+        return str(request.base_url).rstrip("/")
+    return f"{proto}://{host}".rstrip("/")
 
 
 def _rate_allow(key: str, limit: int, window: float) -> bool:
@@ -489,6 +507,7 @@ def index(request: Request):
 @app.get("/users", response_class=HTMLResponse)
 @app.get("/cards", response_class=HTMLResponse)
 @app.get("/settings", response_class=HTMLResponse)
+@app.get("/invite", response_class=HTMLResponse)
 def spa_pages(request: Request):
     return spa_index(request)
 
@@ -528,6 +547,7 @@ def register(request: Request, payload: dict):
     username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
     card_code = str(payload.get("card") or payload.get("card_code") or "").strip()
+    invite_code = str(payload.get("invite") or payload.get("invite_code") or "").strip()
     if not valid_username(username):
         raise HTTPException(status_code=400, detail="用户名用 2-24 位字母、数字、下划线或短横线")
     if is_protected_username(username):
@@ -536,27 +556,60 @@ def register(request: Request, payload: dict):
         raise HTTPException(status_code=400, detail="密码至少 4 位")
     if username_taken(username):
         raise HTTPException(status_code=400, detail="用户名已存在")
-    try:
-        card = consume_card(card_code, username)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    users = load_users()
-    user = make_user(
-        username,
-        password,
-        role="user",
-        days=card.get("days"),
-        max_accounts=card.get("max_accounts"),
-        card_code=card.get("code") or card_code,
-    )
-    users.append(user)
-    save_users(users)
+    if invite_code:
+        try:
+            user = apply_invite_register(username, password, invite_code)
+        except ValueError as exc:
+            if card_code:
+                try:
+                    card = consume_card(card_code, username)
+                except ValueError as card_exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from card_exc
+                users = load_users()
+                user = make_user(
+                    username,
+                    password,
+                    role="user",
+                    days=card.get("days"),
+                    max_accounts=card.get("max_accounts"),
+                    card_code=card.get("code") or card_code,
+                )
+                users.append(user)
+                save_users(users)
+            else:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        else:
+            logger.info(
+                "邀请注册 user=%s expires=%s inviter=%s",
+                username,
+                user.get("expires_at"),
+                user.get("invited_by"),
+            )
+            resp = JSONResponse({"ok": True, "user": public_user(user)})
+            resp.set_cookie("dsf_auth", make_token(user["username"]), **_auth_cookie_kwargs(request))
+            return resp
+    else:
+        try:
+            card = consume_card(card_code, username)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        users = load_users()
+        user = make_user(
+            username,
+            password,
+            role="user",
+            days=card.get("days"),
+            max_accounts=card.get("max_accounts"),
+            card_code=card.get("code") or card_code,
+        )
+        users.append(user)
+        save_users(users)
     logger.info(
         "前台注册账号 user=%s expires=%s max_accounts=%s card=%s",
         username,
         user.get("expires_at"),
         user.get("max_accounts"),
-        card.get("code"),
+        user.get("card_code"),
     )
     resp = JSONResponse({"ok": True, "user": public_user(user)})
     resp.set_cookie("dsf_auth", make_token(user["username"]), **_auth_cookie_kwargs(request))
@@ -715,6 +768,87 @@ def delete_card_api(request: Request, payload: dict | None = None):
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "cards": list_public_cards()}
+
+
+@app.get("/api/invite/preview")
+def invite_preview(request: Request, code: str = ""):
+    if not _rate_allow(f"invite-preview:{_client_ip(request)}", 30, 60):
+        raise HTTPException(status_code=429, detail="尝试太频繁，请稍后再试")
+    return preview_invite(code)
+
+
+@app.get("/api/invite/me")
+def invite_me(request: Request):
+    user = require_auth(request)
+    return {"ok": True, **my_invite_payload(user, _request_origin(request))}
+
+
+@app.post("/api/invite/refresh")
+def invite_refresh(request: Request):
+    user = require_auth(request)
+    try:
+        ensure_invite_code(user.get("username") or "", rotate=True)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **my_invite_payload(find_user(user.get("username") or "") or user, _request_origin(request))}
+
+
+@app.get("/api/settings/invite")
+def get_invite_settings(request: Request):
+    require_admin(request)
+    return {"ok": True, **invite_public_settings()}
+
+
+@app.post("/api/settings/invite")
+def post_invite_settings(request: Request, payload: dict | None = None):
+    admin = require_admin(request)
+    data = save_invite_settings(payload or {})
+    logger.info(
+        "已保存邀请设置 admin=%s enabled=%s inviter_days=%s invitee_days=%s",
+        admin.get("username"),
+        data.get("enabled"),
+        data.get("inviter_days"),
+        data.get("invitee_days"),
+    )
+    return {"ok": True, **data}
+
+
+@app.post("/api/recharge")
+def recharge(request: Request, payload: dict | None = None):
+    user = require_auth(request)
+    if user.get("role") == "admin":
+        raise HTTPException(status_code=400, detail="管理员无需充值")
+    ip = _client_ip(request)
+    if not _rate_allow(f"recharge:{ip}", 8, 600):
+        raise HTTPException(status_code=429, detail="尝试太频繁，请稍后再试")
+    payload = payload or {}
+    card_code = str(payload.get("card") or payload.get("card_code") or "").strip()
+    name = str(user.get("username") or "").strip()
+    try:
+        card = consume_card(card_code, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    users = load_users()
+    saved = None
+    for item in users:
+        if item.get("username") != name:
+            continue
+        apply_card_benefits(item, card)
+        if card.get("code"):
+            item["card_code"] = card.get("code")
+        saved = item
+        break
+    if not saved:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    save_users(users)
+    logger.info(
+        "卡密充值 user=%s days=%s max_accounts=%s card=%s",
+        name,
+        card.get("days"),
+        card.get("max_accounts"),
+        card.get("code"),
+    )
+    return {"ok": True, "user": public_user(saved)}
 
 
 @app.get("/api/settings/notify")

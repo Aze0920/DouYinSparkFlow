@@ -93,6 +93,19 @@
     </div>
   </div>
 
+  <div id="rechargeModal" class="modal-mask hidden" onclick="if(event.target===this)closeRechargeModal()">
+    <div class="modal-card">
+      <h3>卡密充值</h3>
+      <p class="sub">输入卡密延长会员或提升账号额度。过期后也能充值。已是永久会员时不会改成限期，但卡密里更高的账号额度仍会生效；充值成功后邀请链接会重新有效。</p>
+      <input id="rechargeCard" placeholder="卡密，例如 DSF-XXXX-XXXX-XXXX" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();submitRecharge();}" />
+      <div id="rechargeError" class="error"></div>
+      <div class="modal-actions">
+        <button class="btn-ghost" type="button" onclick="closeRechargeModal()">取消</button>
+        <button class="btn-primary" type="button" onclick="submitRecharge()">确认充值</button>
+      </div>
+    </div>
+  </div>
+
   <div id="loginPage" class="login-page hidden">
     <section class="login-box">
       <div class="login-card">
@@ -109,9 +122,11 @@
           <div id="loginError" class="error"></div>
         </form>
         <form class="hidden" id="registerForm" onsubmit="return doRegister(event)">
+          <p class="login-slogan hidden" id="inviteRegHint"></p>
           <input id="regUser" placeholder="请输入用户名" autocomplete="username" />
           <input id="regPass" type="password" placeholder="请输入密码" autocomplete="new-password" />
           <input id="regPass2" type="password" placeholder="再输入一次密码" autocomplete="new-password" />
+          <input id="regInvite" type="hidden" />
           <input id="regCard" placeholder="卡密，例如 DSF-XXXX-XXXX-XXXX" autocomplete="off" />
           <button class="btn-primary" type="submit">注册并进入</button>
           <button class="btn-ghost" type="button" onclick="showLoginForm()">已有账号？去登录</button>
@@ -149,6 +164,10 @@
         <a class="nav-btn admin-only hidden" href="/cards" data-page="cards" title="卡密管理" onclick="return navTo(event, 'cards')">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="6.5" width="18" height="11" rx="2.2"/><path d="M7 12h.01M11 12h6"/></svg></span>
           <span class="nav-label">卡密管理</span>
+        </a>
+        <a class="nav-btn" href="/invite" data-page="invite" title="邀请管理" onclick="return navTo(event, 'invite')">
+          <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="8" r="3"/><path d="M2.8 19a5.2 5.2 0 0 1 10.4 0"/><path d="M16 8h6M19 5v6"/><path d="M15.5 19a5 5 0 0 1 6.2-3.2"/></svg></span>
+          <span class="nav-label">邀请管理</span>
         </a>
         <a class="nav-btn admin-only hidden" href="/settings" data-page="settings" title="设置" onclick="return navTo(event, 'settings')">
           <span class="nav-icon" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9c.3.6.9 1 1.5 1.1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></span>
@@ -193,7 +212,7 @@
             <strong id="homeUsername">-</strong>
             <div class="card-sub" id="homeRole"></div>
           </article>
-          <article class="card">
+          <article class="card card-click" id="expiresCard" onclick="openRechargeModal()">
             <label>到期时间</label>
             <strong id="homeExpires">-</strong>
             <div class="card-sub" id="homeRemain"></div>
@@ -219,9 +238,43 @@
             </div>
           </div>
           <p class="sub" id="accountQuota">账号额度会显示在这里。</p>
-          <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。如需继续使用请联系管理员获取卡密。</p>
+          <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。点上面的「到期时间」可用卡密续期。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码登录，也可以只粘贴 Cookie JSON，昵称和抖音号会自动抓取。</p>
           <div id="accounts" class="accounts-grid"></div>
+        </section>
+      </section>
+
+      <section id="page-invite" class="hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>我的邀请</h2>
+            <span class="ck-status" id="inviteStatus">未开启</span>
+          </div>
+          <p class="sub" id="inviteHint">管理员开启邀请后，把链接发给朋友，对方不用填卡密就能注册。你的会员过期后链接会失效，但还能登录。</p>
+          <div class="invite-link-box">
+            <input id="inviteLink" readonly placeholder="开启邀请且会员有效时，这里会生成链接" />
+            <button class="btn-primary" id="copyInviteBtn" type="button" onclick="copyInviteLink()">复制链接</button>
+            <button class="btn-ghost" id="refreshInviteBtn" type="button" onclick="refreshInviteLink()">刷新链接</button>
+          </div>
+          <p class="sub" id="inviteReward"></p>
+        </section>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>邀请记录</h2>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table" style="min-width: 520px">
+              <thead>
+                <tr>
+                  <th>被邀请人</th>
+                  <th>对方获得</th>
+                  <th>你获得</th>
+                  <th>时间</th>
+                </tr>
+              </thead>
+              <tbody id="inviteTableBody"></tbody>
+            </table>
+          </div>
         </section>
       </section>
 
@@ -314,6 +367,19 @@
       </section>
 
       <section id="page-settings" class="hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>邀请</h2>
+          </div>
+          <p class="sub">开启后，有效会员可以把邀请链接发给朋友，对方不用填卡密。会员过期后不能邀请，链接同时失效，但还能登录。天数填 0 表示永久。邀请人如果已经是永久会员（含管理员），成功邀请后不会再加天数，对方仍按设置发放。</p>
+          <div class="grid two">
+            <label class="check-line"><input id="inviteEnabled" type="checkbox" /> 开启邀请</label>
+            <span></span>
+            <label>邀请人获得天数<input id="inviteInviterDays" type="number" min="0" max="3650" value="1" /></label>
+            <label>被邀请人获得天数<input id="inviteInviteeDays" type="number" min="0" max="3650" value="1" /></label>
+            <label class="span-2">&nbsp;<button class="btn-primary" type="button" onclick="saveInviteSettings()">保存邀请设置</button></label>
+          </div>
+        </section>
         <section class="panel">
           <div class="panel-head">
             <h2>续火花并发</h2>
@@ -533,9 +599,22 @@
           : "-";
       }
       if ($("homeRemain")) {
-        $("homeRemain").textContent = current
-          ? (isAdmin() || current.permanent ? "不过期" : (current.remain_label || ""))
-          : "";
+        if (!current) {
+          $("homeRemain").textContent = "";
+        } else if (isAdmin()) {
+          $("homeRemain").textContent = "不过期";
+        } else if (current.permanent) {
+          $("homeRemain").textContent = "不过期 · 可点此用卡密提升额度";
+        } else {
+          $("homeRemain").textContent = (current.remain_label || "") + " · 点击续期";
+        }
+      }
+      if ($("expiresCard")) {
+        const canRecharge = !!(current && !isAdmin());
+        $("expiresCard").classList.toggle("card-click", canRecharge);
+        $("expiresCard").title = !canRecharge
+          ? ""
+          : (current.permanent ? "点击用卡密提升额度" : "点击用卡密续期");
       }
       renderWxpusherCard();
     }
@@ -551,13 +630,14 @@
       if ($("wpUnbindBtn")) $("wpUnbindBtn").classList.toggle("hidden", !bound);
     }
     function pagePath(name) {
-      return { home: "/", logs: "/logs", users: "/users", cards: "/cards", settings: "/settings" }[name] || "/";
+      return { home: "/", logs: "/logs", users: "/users", cards: "/cards", invite: "/invite", settings: "/settings" }[name] || "/";
     }
     function pathToPage(pathname) {
       const p = String(pathname || "/").replace(/\/+$/, "") || "/";
       if (p === "/logs") return "logs";
       if (p === "/users") return "users";
       if (p === "/cards") return "cards";
+      if (p === "/invite") return "invite";
       if (p === "/settings") return "settings";
       return "home";
     }
@@ -571,10 +651,10 @@
     function showPage(name, opts) {
       opts = opts || {};
       if (name === "tasks") name = "home";
-      if (!["home", "logs", "users", "cards", "settings"].includes(name)) name = "home";
-      if (current && !isAdmin() && name !== "home") name = "home";
+      if (!["home", "logs", "users", "cards", "invite", "settings"].includes(name)) name = "home";
+      if (current && !isAdmin() && name !== "home" && name !== "invite") name = "home";
       page = name;
-      ["home", "logs", "users", "cards", "settings"].forEach((key) => {
+      ["home", "logs", "users", "cards", "invite", "settings"].forEach((key) => {
         $("page-" + key).classList.toggle("hidden", key !== name);
       });
       document.querySelectorAll(".nav-btn").forEach((btn) => {
@@ -585,7 +665,8 @@
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "填 0 表示天数或账号数不限制"],
         cards: ["卡密管理", "填 0 表示天数或账号数不限制"],
-        settings: ["设置", "并发、WxPusher 和公众号推送"],
+        invite: ["邀请管理", "把链接发给朋友，对方不用填卡密也能注册"],
+        settings: ["设置", "邀请、并发、WxPusher 和公众号推送"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
@@ -600,6 +681,7 @@
       if (name === "users" && isAdmin()) loadUsers();
       if (name === "cards" && isAdmin()) loadCards();
       if (name === "settings" && isAdmin()) loadNotifySettings();
+      if (name === "invite") loadInvitePage();
     }
     window.addEventListener("popstate", () => {
       showPage(pathToPage(location.pathname), { skipHistory: true });
@@ -652,6 +734,7 @@
             username,
             password,
             card: ($("regCard") && $("regCard").value) || "",
+            invite: ($("regInvite") && $("regInvite").value) || "",
           }),
         });
         current = data.user;
@@ -1695,6 +1778,7 @@
       if (page === "logs") await loadLogs();
       if (page === "users") await loadUsers();
       if (page === "cards") await loadCards();
+      if (page === "invite") await loadInvitePage();
       if (page === "settings") await loadNotifySettings();
     }
     function fillNotifySettings(data) {
@@ -1731,6 +1815,142 @@
       try {
         const cfg = await api("/api/config");
         if ($("maxTaskThreads")) $("maxTaskThreads").value = String(cfg.max_task_threads || 10);
+      } catch (e) {}
+      try {
+        const invite = await api("/api/settings/invite");
+        fillInviteSettings(invite);
+      } catch (e) {}
+    }
+    function fillInviteSettings(data) {
+      if ($("inviteEnabled")) $("inviteEnabled").checked = !!data.enabled;
+      if ($("inviteInviterDays")) $("inviteInviterDays").value = String(data.inviter_days ?? 1);
+      if ($("inviteInviteeDays")) $("inviteInviteeDays").value = String(data.invitee_days ?? 1);
+    }
+    async function saveInviteSettings() {
+      try {
+        const data = await api("/api/settings/invite", {
+          method: "POST",
+          body: JSON.stringify({
+            enabled: !!( $("inviteEnabled") && $("inviteEnabled").checked ),
+            inviter_days: parseQuotaNumber($("inviteInviterDays"), 1),
+            invitee_days: parseQuotaNumber($("inviteInviteeDays"), 1),
+          }),
+        });
+        fillInviteSettings(data);
+        toast("邀请设置已保存");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    function renderInvitePage(data) {
+      const enabled = !!data.enabled;
+      const allowed = !!data.can_invite;
+      if ($("inviteStatus")) {
+        $("inviteStatus").textContent = !enabled ? "未开启" : (allowed ? "可邀请" : "已过期");
+        $("inviteStatus").className = "ck-status " + (!enabled ? "ck-unknown" : (allowed ? "ck-ok" : "ck-bad"));
+      }
+      if ($("inviteHint")) {
+        if (!enabled) $("inviteHint").textContent = "管理员还没有开启邀请。";
+        else if (!allowed) $("inviteHint").textContent = "会员已过期，不能邀请，链接也失效了。点总览「到期时间」用卡密续期后即可继续邀请。还能正常登录。";
+        else if (data.permanent) $("inviteHint").textContent = "把链接发给朋友，对方不用填卡密就能注册。你已是永久会员，邀请成功不会再给你加天数。";
+        else $("inviteHint").textContent = "把链接发给朋友，对方不用填卡密就能注册。你的会员过期后链接会失效。";
+      }
+      let link = allowed ? (data.link || "") : "";
+      if (allowed && link && link.startsWith("/")) link = location.origin + link;
+      if ($("inviteLink")) {
+        $("inviteLink").value = link;
+        $("inviteLink").placeholder = !enabled
+          ? "管理员还没有开启邀请"
+          : (allowed ? "开启邀请且会员有效时，这里会生成链接" : "会员已过期，邀请链接已失效");
+      }
+      if ($("copyInviteBtn")) $("copyInviteBtn").disabled = !allowed || !link;
+      if ($("refreshInviteBtn")) $("refreshInviteBtn").disabled = !allowed;
+      if ($("inviteReward")) $("inviteReward").textContent = data.reward_hint || "";
+      const body = $("inviteTableBody");
+      if (body) {
+        const rows = data.records || [];
+        body.innerHTML = rows.length
+          ? rows.map((item) => `<tr>
+              <td>${escapeHtml(item.invitee || "")}</td>
+              <td>${escapeHtml(item.invitee_days_label || (item.invitee_days === 0 ? "永久" : ((item.invitee_days || 0) + " 天")))}</td>
+              <td>${escapeHtml(item.inviter_days_label || (item.inviter_already_permanent ? "未加时长" : (item.inviter_days === 0 ? "永久" : ((item.inviter_days || 0) + " 天"))))}</td>
+              <td>${escapeHtml(item.created_label || "-")}</td>
+            </tr>`).join("")
+          : `<tr><td class="empty-cell" colspan="4">还没有邀请记录。</td></tr>`;
+      }
+    }
+    async function loadInvitePage() {
+      try {
+        const data = await api("/api/invite/me");
+        renderInvitePage(data);
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function copyInviteLink() {
+      const text = ($("inviteLink") && $("inviteLink").value) || "";
+      if (!text) {
+        toast("现在不能邀请，请先确认会员有效且已开启邀请", "err");
+        return;
+      }
+      copyText(text);
+    }
+    async function refreshInviteLink() {
+      try {
+        const data = await api("/api/invite/refresh", { method: "POST", body: "{}" });
+        renderInvitePage(data);
+        toast("已生成新链接，旧链接失效");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    function openRechargeModal() {
+      if (!current || isAdmin()) return;
+      if ($("rechargeError")) $("rechargeError").textContent = "";
+      if ($("rechargeCard")) $("rechargeCard").value = "";
+      if ($("rechargeModal")) $("rechargeModal").classList.remove("hidden");
+      setTimeout(() => { if ($("rechargeCard")) $("rechargeCard").focus(); }, 50);
+    }
+    function closeRechargeModal() {
+      if ($("rechargeModal")) $("rechargeModal").classList.add("hidden");
+    }
+    async function submitRecharge() {
+      if ($("rechargeError")) $("rechargeError").textContent = "";
+      const card = ($("rechargeCard") && $("rechargeCard").value) || "";
+      try {
+        const data = await api("/api/recharge", {
+          method: "POST",
+          body: JSON.stringify({ card }),
+        });
+        if (data.user) {
+          current = Object.assign(current || {}, data.user);
+          applyRole();
+        }
+        closeRechargeModal();
+        toast("充值成功，有效期 " + ((data.user && data.user.remain_label) || ""));
+        try { await checkStatus(); } catch (e) {}
+        if (page === "invite") {
+          try { await loadInvitePage(); } catch (e) {}
+        }
+      } catch (err) {
+        if ($("rechargeError")) $("rechargeError").textContent = err.message;
+      }
+    }
+    async function applyInviteFromUrl() {
+      const params = new URLSearchParams(location.search);
+      const code = (params.get("invite") || params.get("code") || "").trim();
+      if (!code) return;
+      if ($("regInvite")) $("regInvite").value = code;
+      showRegisterForm();
+      try {
+        const data = await api("/api/invite/preview?code=" + encodeURIComponent(code));
+        if ($("inviteRegHint")) {
+          $("inviteRegHint").classList.remove("hidden");
+          $("inviteRegHint").textContent = data.valid
+            ? ("来自「" + (data.inviter || "好友") + "」的邀请，注册后获得 " + (data.invitee_days_label || "会员"))
+            : (data.reason || "邀请已过期，请填写卡密注册");
+        }
+        if ($("regCard")) $("regCard").classList.toggle("hidden", !!data.valid);
       } catch (e) {}
     }
     async function saveNotifySettings() {
@@ -1940,6 +2160,7 @@
         const me = await api("/api/me");
         if (!me.authed) {
           $("loginPage").classList.remove("hidden");
+          await applyInviteFromUrl();
         } else {
           current = me.user;
           $("app").classList.remove("hidden");
@@ -1948,6 +2169,7 @@
         }
       } catch (e) {
         $("loginPage").classList.remove("hidden");
+        try { await applyInviteFromUrl(); } catch (err) {}
       }
     })();
   </script>

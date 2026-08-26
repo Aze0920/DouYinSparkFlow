@@ -369,10 +369,27 @@ def extend_user(user: dict, days: int) -> dict:
         user["permanent"] = True
         user["expires_at"] = None
         return user
+    if is_permanent(user):
+        return user
     start = now_utc()
     current_exp = parse_iso(user.get("expires_at"))
     if current_exp and current_exp > start:
         start = current_exp
     user["expires_at"] = to_iso(start + timedelta(days=days_n))
     user["permanent"] = False
+    return user
+
+
+def apply_card_benefits(user: dict, card: dict | None) -> dict:
+    card = card or {}
+    days_n = parse_days(card.get("days"), default=1)
+    extend_user(user, days_n)
+    if user.get("role") == "admin":
+        return user
+    acc = parse_max_accounts(card.get("max_accounts"), default=1)
+    cur = account_limit(user)
+    if acc == 0:
+        user["max_accounts"] = 0
+    elif cur != 0:
+        user["max_accounts"] = max(cur, acc)
     return user
