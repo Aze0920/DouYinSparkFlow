@@ -96,7 +96,7 @@
   <div id="rechargeModal" class="modal-mask hidden" onclick="if(event.target===this)closeRechargeModal()">
     <div class="modal-card">
       <h3>卡密充值</h3>
-      <p class="sub">输入卡密延长会员或提升账号额度。过期后也能充值。已是永久会员时不会改成限期，但卡密里更高的账号额度仍会生效；充值成功后邀请链接会重新有效。</p>
+      <p class="sub">输入卡密延长会员。过期后也能充值；充值成功后邀请链接会重新有效。</p>
       <input id="rechargeCard" placeholder="卡密，例如 DSF-XXXX-XXXX-XXXX" autocomplete="off" onkeydown="if(event.key==='Enter'){event.preventDefault();submitRecharge();}" />
       <div id="rechargeError" class="error"></div>
       <div class="modal-actions">
@@ -248,13 +248,13 @@
         <section class="panel">
           <div class="panel-head">
             <h2>我的邀请</h2>
+            <label class="check-line"><input id="myInviteEnabled" type="checkbox" onchange="toggleMyInvite()" /> 开启邀请</label>
             <span class="ck-status" id="inviteStatus">未开启</span>
           </div>
-          <p class="sub" id="inviteHint">管理员开启邀请后，把链接发给朋友，对方不用填卡密就能注册。你的会员过期后链接会失效，但还能登录。</p>
+          <p class="sub" id="inviteHint">打开开关后，把固定链接发给朋友，对方不用填卡密就能注册。链接不会变；你关闭邀请或会员过期后，同一条链接会失效。</p>
           <div class="invite-link-box">
-            <input id="inviteLink" readonly placeholder="开启邀请且会员有效时，这里会生成链接" />
+            <input id="inviteLink" readonly placeholder="开启邀请后，这里会显示固定链接" />
             <button class="btn-primary" id="copyInviteBtn" type="button" onclick="copyInviteLink()">复制链接</button>
-            <button class="btn-ghost" id="refreshInviteBtn" type="button" onclick="refreshInviteLink()">刷新链接</button>
           </div>
           <p class="sub" id="inviteReward"></p>
         </section>
@@ -371,10 +371,8 @@
           <div class="panel-head">
             <h2>邀请</h2>
           </div>
-          <p class="sub">开启后，有效会员可以把邀请链接发给朋友，对方不用填卡密。会员过期后不能邀请，链接同时失效，但还能登录。天数填 0 表示永久。邀请人如果已经是永久会员（含管理员），成功邀请后不会再加天数，对方仍按设置发放。</p>
+          <p class="sub">这里只配置邀请成功后双方获得的天数。对方必须绑定微信后才算邀请成功并发放天数。每个用户在「邀请管理」里自己开关邀请，链接固定不变。天数填 0 表示永久。邀请人如果已经是永久会员（含管理员），成功邀请后不会再加天数，对方仍按设置发放。</p>
           <div class="grid two">
-            <label class="check-line"><input id="inviteEnabled" type="checkbox" /> 开启邀请</label>
-            <span></span>
             <label>邀请人获得天数<input id="inviteInviterDays" type="number" min="0" max="3650" value="1" /></label>
             <label>被邀请人获得天数<input id="inviteInviteeDays" type="number" min="0" max="3650" value="1" /></label>
             <label class="span-2">&nbsp;<button class="btn-primary" type="button" onclick="saveInviteSettings()">保存邀请设置</button></label>
@@ -403,6 +401,7 @@
           <div class="grid two">
             <label class="check-line"><input id="wpEnabled" type="checkbox" /> 启用 WxPusher</label>
             <label>appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
+            <label class="check-line span-2"><input id="wpAllowUnbind" type="checkbox" checked /> 允许用户自行解绑微信</label>
           </div>
         </section>
         <section class="panel">
@@ -456,6 +455,7 @@
   <script>
     const $ = (id) => document.getElementById(id);
     let current = null;
+    let allowSelfUnbind = true;
     let pollBusy = false;
     let page = "home";
     let qrTimer = null;
@@ -477,10 +477,22 @@
       $("toasts").appendChild(el);
       setTimeout(() => el.remove(), 2800);
     }
+    function notice(title, text) {
+      $("modalTitle").textContent = title;
+      $("modalText").textContent = text;
+      if ($("modalCancel")) $("modalCancel").classList.add("hidden");
+      $("modal").classList.remove("hidden");
+      const done = () => {
+        $("modal").classList.add("hidden");
+        if ($("modalCancel")) $("modalCancel").classList.remove("hidden");
+      };
+      $("modalOk").onclick = done;
+    }
     function ask(title, text) {
       return new Promise((resolve) => {
         $("modalTitle").textContent = title;
         $("modalText").textContent = text;
+        if ($("modalCancel")) $("modalCancel").classList.remove("hidden");
         $("modal").classList.remove("hidden");
         const done = (ok) => {
           $("modal").classList.add("hidden");
@@ -549,6 +561,7 @@
       return !current.expired && current.can_spark !== false;
     }
     function sparkLockMsg(action = "无法操作") {
+      if (current && current.invite_pending) return "请先绑定微信，绑定成功后才发放会员天数";
       return "卡密已到期，" + action;
     }
     function unlimitedAccounts() {
@@ -575,7 +588,15 @@
         el.disabled = !ok;
         el.title = ok ? "" : sparkLockMsg();
       });
-      if ($("expiredBanner")) $("expiredBanner").classList.toggle("hidden", ok);
+      if ($("expiredBanner")) {
+        if (current && current.invite_pending) {
+          $("expiredBanner").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。点上面的「消息推送」扫码即可。";
+          $("expiredBanner").classList.remove("hidden");
+        } else {
+          $("expiredBanner").textContent = "卡密已到期，续火花按钮已禁用。点上面的「到期时间」可用卡密续期。";
+          $("expiredBanner").classList.toggle("hidden", ok);
+        }
+      }
       updateAccountQuota();
     }
     function applyRole() {
@@ -604,17 +625,17 @@
         } else if (isAdmin()) {
           $("homeRemain").textContent = "不过期";
         } else if (current.permanent) {
-          $("homeRemain").textContent = "不过期 · 可点此用卡密提升额度";
+          $("homeRemain").textContent = "永久账户，无需充值";
         } else {
           $("homeRemain").textContent = (current.remain_label || "") + " · 点击续期";
         }
       }
       if ($("expiresCard")) {
-        const canRecharge = !!(current && !isAdmin());
-        $("expiresCard").classList.toggle("card-click", canRecharge);
-        $("expiresCard").title = !canRecharge
+        const showTip = !!(current && !isAdmin());
+        $("expiresCard").classList.toggle("card-click", showTip);
+        $("expiresCard").title = !showTip
           ? ""
-          : (current.permanent ? "点击用卡密提升额度" : "点击用卡密续期");
+          : (current.permanent ? "当前为永久账户，无需充值" : "点击用卡密续期");
       }
       renderWxpusherCard();
     }
@@ -627,7 +648,7 @@
         $("wpBindHint").classList.add("hidden");
       }
       if ($("wpTestBtn")) $("wpTestBtn").classList.toggle("hidden", !bound);
-      if ($("wpUnbindBtn")) $("wpUnbindBtn").classList.toggle("hidden", !bound);
+      if ($("wpUnbindBtn")) $("wpUnbindBtn").classList.toggle("hidden", !bound || !allowSelfUnbind);
     }
     function pagePath(name) {
       return { home: "/", logs: "/logs", users: "/users", cards: "/cards", invite: "/invite", settings: "/settings" }[name] || "/";
@@ -742,7 +763,9 @@
         $("app").classList.remove("hidden");
         applyRole();
         await boot();
-        toast("注册成功，有效期 " + (current.remain_label || "") + "，" + (current.account_limit_label || ""));
+        toast(current && current.invite_pending
+          ? "注册成功，请先绑定微信，绑定成功后才会发放会员天数"
+          : ("注册成功，有效期 " + (current.remain_label || "") + "，" + (current.account_limit_label || "")));
       } catch (err) {
         $("registerError").textContent = err.message;
       }
@@ -779,6 +802,7 @@
         $("accountCount").textContent = data.total_accounts == null ? "-" : String(data.total_accounts);
       }
       setBusy(data.running, data.run_message || "空闲", data.running_ids || []);
+      if (typeof data.allow_self_unbind === "boolean") allowSelfUnbind = data.allow_self_unbind;
       if (data.me) {
         current = Object.assign(current || {}, data.me);
         applyRole();
@@ -1552,6 +1576,7 @@
           <label>账号额度<input data-user="${escapeAttr(u.username)}" class="max-accounts" type="number" min="0" max="100" value="${escapeAttr(String(accountsValue))}" /></label>`}
           <div class="account-actions">
             <button class="btn-ghost" type="button" onclick="saveUser('${escapeAttr(u.username)}')">保存</button>
+            <button class="btn-ghost" type="button" ${u.wxpusher_bound ? "" : "disabled"} onclick="adminUnbindWx('${escapeAttr(u.username)}')">解绑微信</button>
             ${protectedUser ? "" : `<button class="btn-run" type="button" onclick="removeUser('${escapeAttr(u.username)}')">删除</button>`}
           </div>
         </div>`;
@@ -1616,6 +1641,24 @@
         await api("/api/users/delete", { method: "POST", body: JSON.stringify({ username }) });
         toast("已删除");
         await loadUsers();
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    async function adminUnbindWx(username) {
+      const ok = await ask("解绑微信", "确定解绑 " + username + " 的微信吗？解绑后该用户收不到推送。");
+      if (!ok) return;
+      try {
+        await api("/api/users/unbind-wxpusher", {
+          method: "POST",
+          body: JSON.stringify({ username }),
+        });
+        toast("已解绑微信");
+        await loadUsers();
+        if (current && current.username === username) {
+          applyWxpusherBind({ bound: false, mask: "" });
+          try { await checkStatus(); } catch (e) {}
+        }
       } catch (err) {
         toast(err.message, "err");
       }
@@ -1797,6 +1840,7 @@
       if ($("wxEnabled")) $("wxEnabled").checked = !!wx.enabled;
       if ($("wpEnabled")) $("wpEnabled").checked = !!wp.enabled;
       if ($("wpAppToken")) $("wpAppToken").value = wp.app_token || "";
+      if ($("wpAllowUnbind")) $("wpAllowUnbind").checked = wp.allow_self_unbind !== false;
       if ($("wxEventDone")) $("wxEventDone").checked = events.task_done !== false;
       if ($("wxEventFail")) $("wxEventFail").checked = events.task_fail !== false;
       if ($("wxEventOffline")) $("wxEventOffline").checked = events.cookie_offline !== false;
@@ -1822,7 +1866,6 @@
       } catch (e) {}
     }
     function fillInviteSettings(data) {
-      if ($("inviteEnabled")) $("inviteEnabled").checked = !!data.enabled;
       if ($("inviteInviterDays")) $("inviteInviterDays").value = String(data.inviter_days ?? 1);
       if ($("inviteInviteeDays")) $("inviteInviteeDays").value = String(data.invitee_days ?? 1);
     }
@@ -1831,7 +1874,6 @@
         const data = await api("/api/settings/invite", {
           method: "POST",
           body: JSON.stringify({
-            enabled: !!( $("inviteEnabled") && $("inviteEnabled").checked ),
             inviter_days: parseQuotaNumber($("inviteInviterDays"), 1),
             invitee_days: parseQuotaNumber($("inviteInviteeDays"), 1),
           }),
@@ -1843,28 +1885,31 @@
       }
     }
     function renderInvitePage(data) {
-      const enabled = !!data.enabled;
+      const userOn = !!data.user_enabled;
+      const expired = !!data.expired;
       const allowed = !!data.can_invite;
+      if ($("myInviteEnabled")) {
+        $("myInviteEnabled").checked = userOn;
+        $("myInviteEnabled").disabled = expired;
+        $("myInviteEnabled").title = expired ? "会员已过期，续期后才能开启邀请" : "";
+      }
       if ($("inviteStatus")) {
-        $("inviteStatus").textContent = !enabled ? "未开启" : (allowed ? "可邀请" : "已过期");
-        $("inviteStatus").className = "ck-status " + (!enabled ? "ck-unknown" : (allowed ? "ck-ok" : "ck-bad"));
+        $("inviteStatus").textContent = expired ? "已过期" : (userOn ? "已开启" : "未开启");
+        $("inviteStatus").className = "ck-status " + (expired ? "ck-bad" : (userOn ? "ck-ok" : "ck-unknown"));
       }
       if ($("inviteHint")) {
-        if (!enabled) $("inviteHint").textContent = "管理员还没有开启邀请。";
-        else if (!allowed) $("inviteHint").textContent = "会员已过期，不能邀请，链接也失效了。点总览「到期时间」用卡密续期后即可继续邀请。还能正常登录。";
-        else if (data.permanent) $("inviteHint").textContent = "把链接发给朋友，对方不用填卡密就能注册。你已是永久会员，邀请成功不会再给你加天数。";
-        else $("inviteHint").textContent = "把链接发给朋友，对方不用填卡密就能注册。你的会员过期后链接会失效。";
+        if (expired) $("inviteHint").textContent = "会员已过期，不能邀请，固定链接暂时失效。点总览「到期时间」用卡密续期后，不用换链接。还能正常登录。";
+        else if (!userOn) $("inviteHint").textContent = "打开开关后，把固定链接发给朋友，对方不用填卡密就能注册。关掉邀请后同一条链接会失效，再打开还是这条链接。";
+        else if (data.permanent) $("inviteHint").textContent = "把固定链接发给朋友，对方不用填卡密就能注册。你已是永久会员，邀请成功不会再给你加天数。";
+        else $("inviteHint").textContent = "把固定链接发给朋友，对方不用填卡密就能注册。你的会员过期后链接会失效，续期后不用换链接。";
       }
-      let link = allowed ? (data.link || "") : "";
-      if (allowed && link && link.startsWith("/")) link = location.origin + link;
+      let link = data.link || "";
+      if (link && link.startsWith("/")) link = location.origin + link;
       if ($("inviteLink")) {
         $("inviteLink").value = link;
-        $("inviteLink").placeholder = !enabled
-          ? "管理员还没有开启邀请"
-          : (allowed ? "开启邀请且会员有效时，这里会生成链接" : "会员已过期，邀请链接已失效");
+        $("inviteLink").placeholder = "开启邀请后即可复制固定链接";
       }
       if ($("copyInviteBtn")) $("copyInviteBtn").disabled = !allowed || !link;
-      if ($("refreshInviteBtn")) $("refreshInviteBtn").disabled = !allowed;
       if ($("inviteReward")) $("inviteReward").textContent = data.reward_hint || "";
       const body = $("inviteTableBody");
       if (body) {
@@ -1890,22 +1935,31 @@
     async function copyInviteLink() {
       const text = ($("inviteLink") && $("inviteLink").value) || "";
       if (!text) {
-        toast("现在不能邀请，请先确认会员有效且已开启邀请", "err");
+        toast("请先开启邀请", "err");
         return;
       }
       copyText(text);
     }
-    async function refreshInviteLink() {
+    async function toggleMyInvite() {
+      const on = !!( $("myInviteEnabled") && $("myInviteEnabled").checked );
       try {
-        const data = await api("/api/invite/refresh", { method: "POST", body: "{}" });
+        const data = await api("/api/invite/toggle", {
+          method: "POST",
+          body: JSON.stringify({ enabled: on }),
+        });
         renderInvitePage(data);
-        toast("已生成新链接，旧链接失效");
+        toast(on ? "已开启邀请" : "已关闭邀请");
       } catch (err) {
+        if ($("myInviteEnabled")) $("myInviteEnabled").checked = !on;
         toast(err.message, "err");
       }
     }
     function openRechargeModal() {
       if (!current || isAdmin()) return;
+      if (current.permanent) {
+        notice("无需充值", "当前为永久账户，无需充值");
+        return;
+      }
       if ($("rechargeError")) $("rechargeError").textContent = "";
       if ($("rechargeCard")) $("rechargeCard").value = "";
       if ($("rechargeModal")) $("rechargeModal").classList.remove("hidden");
@@ -1947,7 +2001,7 @@
         if ($("inviteRegHint")) {
           $("inviteRegHint").classList.remove("hidden");
           $("inviteRegHint").textContent = data.valid
-            ? ("来自「" + (data.inviter || "好友") + "」的邀请，注册后获得 " + (data.invitee_days_label || "会员"))
+            ? ("来自「" + (data.inviter || "好友") + "」的邀请，注册后请绑定微信，成功后获得 " + (data.invitee_days_label || "会员"))
             : (data.reason || "邀请已过期，请填写卡密注册");
         }
         if ($("regCard")) $("regCard").classList.toggle("hidden", !!data.valid);
@@ -1961,6 +2015,7 @@
             wxpusher: {
               enabled: !!( $("wpEnabled") && $("wpEnabled").checked ),
               app_token: ($("wpAppToken") && $("wpAppToken").value) || "",
+              allow_self_unbind: !!( $("wpAllowUnbind") && $("wpAllowUnbind").checked ),
             },
             wechat: {
               enabled: !!( $("wxEnabled") && $("wxEnabled").checked ),
@@ -1982,6 +2037,10 @@
           }),
         });
         fillNotifySettings(data);
+        if (typeof (data.wxpusher || {}).allow_self_unbind === "boolean") {
+          allowSelfUnbind = data.wxpusher.allow_self_unbind;
+          renderWxpusherCard();
+        }
         toast("设置已保存");
       } catch (err) {
         toast(err.message, "err");
@@ -2006,6 +2065,7 @@
     }
     function applyWxpusherBind(data) {
       if (!current || !data) return;
+      if (typeof data.allow_self_unbind === "boolean") allowSelfUnbind = data.allow_self_unbind;
       if (typeof data.bound === "boolean") current.wxpusher_bound = data.bound;
       if (data.mask) current.wxpusher_mask = data.mask;
       if (data.bound === false) current.wxpusher_mask = "";
@@ -2098,6 +2158,15 @@
       if (!wpBindOpen) return;
       try {
         const data = await api("/api/notify/wxpusher/poll");
+        if (data.error) {
+          if (window.__wpLastError !== data.error) {
+            window.__wpLastError = data.error;
+            toast(data.error, "err");
+          }
+          if ($("wpModalStatus")) $("wpModalStatus").textContent = data.error;
+        } else {
+          window.__wpLastError = "";
+        }
         if (data.bound && !data.waiting) {
           applyWxpusherBind(data);
           hideWxpusherQr();
@@ -2105,7 +2174,11 @@
           if ($("wpModalHint")) $("wpModalHint").textContent = "已绑到登录账号「" + who + "」";
           if ($("wpModalStatus")) $("wpModalStatus").textContent = "已绑定。";
           toast("微信推送已绑定");
+          try { await checkStatus(); } catch (e) {}
           try { await loadConfig(); } catch (e) {}
+          if (page === "invite") {
+            try { await loadInvitePage(); } catch (e) {}
+          }
           return;
         }
         if (data.expired) {
@@ -2113,7 +2186,7 @@
           toast("二维码已过期，请刷新", "err");
           return;
         }
-        if ($("wpModalStatus")) $("wpModalStatus").textContent = "等待扫码…";
+        if (!data.error && $("wpModalStatus")) $("wpModalStatus").textContent = "等待扫码…";
       } catch (e) {}
       if (wpBindOpen) wpBindTimer = setTimeout(pollWxpusherBind, 10000);
     }

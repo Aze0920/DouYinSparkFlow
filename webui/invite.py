@@ -27,7 +27,6 @@ _lock = threading.Lock()
 def default_invite_data() -> dict:
     return {
         "settings": {
-            "enabled": False,
             "inviter_days": 1,
             "invitee_days": 1,
         },
@@ -49,7 +48,6 @@ def load_invite() -> dict:
         return data
     settings = dict(data["settings"])
     incoming = raw.get("settings") if isinstance(raw.get("settings"), dict) else {}
-    settings["enabled"] = bool(incoming.get("enabled", settings["enabled"]))
     settings["inviter_days"] = parse_days(incoming.get("inviter_days"), default=1)
     settings["invitee_days"] = parse_days(incoming.get("invitee_days"), default=1)
     codes = raw.get("codes") if isinstance(raw.get("codes"), dict) else {}
@@ -73,7 +71,6 @@ def public_settings(data: dict | None = None) -> dict:
     inviter_days = parse_days(settings.get("inviter_days"), default=1)
     invitee_days = parse_days(settings.get("invitee_days"), default=1)
     return {
-        "enabled": bool(settings.get("enabled")),
         "inviter_days": inviter_days,
         "invitee_days": invitee_days,
         "inviter_days_label": "永久" if inviter_days == 0 else f"{inviter_days} 天",
@@ -88,15 +85,6 @@ def award_days_label(days, skipped: bool = False) -> str:
         return "-"
     n = parse_days(days, default=0)
     return "永久" if n == 0 else f"{n} 天"
-
-
-def can_invite(user: dict | None, data: dict | None = None) -> bool:
-    if not user:
-        return False
-    settings = public_settings(data)
-    if not settings["enabled"]:
-        return False
-    return not is_expired(user)
 
 
 def _new_code(existing: set[str]) -> str:
@@ -115,45 +103,101 @@ def _code_for_user(data: dict, username: str) -> str:
     return ""
 
 
-def ensure_invite_code(username: str, rotate: bool = False) -> dict:
+def _row_enabled(row) -> bool:
+    if not isinstance(row, dict):
+        return False
+    if "enabled" not in row:
+        return True
+    return bool(row.get("enabled"))
+
+
+def _lookup_row(data: dict, code: str):
+    key = "".join(ch for ch in str(code or "").upper() if ch.isalnum())
+    if not key:
+        return "", None
+    codes = data.get("codes") or {}
+    row = codes.get(key) or codes.get(key.lower())
+    if row:
+        return key, row
+    for ck, item in codes.items():
+        if str(ck).upper() == key:
+            return str(ck), item
+    return key, None
+
+
+def _ensure_code_locked(data: dict, name: str) -> tuple[str, bool]:
+    current = _code_for_user(data, name)
+    if current:
+        return current, False
+    codes = dict(data.get("codes") or {})
+    code = _new_code({str(k).upper() for k in codes})
+    codes[code] = {
+        "username": name,
+        "created_at": to_iso(now_utc()),
+        "enabled": False,
+    }
+    data["codes"] = codes
+    return code, True
+
+
+def _user_enabled(data: dict, username: str) -> bool:
+    code = _code_for_user(data, username)
+    if not code:
+        return False
+    return _row_enabled((data.get("codes") or {}).get(code))
+
+
+def can_invite(user: dict | None, data: dict | None = None) -> bool:
+    if not user:
+        return False
+    if is_expired(user):
+        return False
+    return _user_enabled(data or load_invite(), str(user.get("username") or ""))
+
+
+def ensure_invite_code(username: str) -> dict:
     name = str(username or "").strip()
     user = find_user(name)
     if not user:
         raise ValueError("用户不存在")
     with _lock:
         data = load_invite()
-        if not can_invite(user, data):
-            if is_expired(user):
-                raise ValueError("会员已过期，续期后才能邀请")
-            raise ValueError("管理员还没有开启邀请")
+        code, created = _ensure_code_locked(data, name)
+        if created:
+            save_invite(data)
+        return {"code": code, "user_enabled": _user_enabled(data, name), **public_settings(data)}
+
+
+def set_user_invite_enabled(username: str, enabled: bool) -> dict:
+    name = str(username or "").strip()
+    user = find_user(name)
+    if not user:
+        raise ValueError("用户不存在")
+    if enabled and is_expired(user):
+        raise ValueError("会员已过期，续期后才能邀请")
+    with _lock:
+        data = load_invite()
+        code, _created = _ensure_code_locked(data, name)
+        row = dict((data.get("codes") or {}).get(code) or {})
+        row["username"] = name
+        if not row.get("created_at"):
+            row["created_at"] = to_iso(now_utc())
+        row["enabled"] = bool(enabled)
         codes = dict(data.get("codes") or {})
-        current = _code_for_user(data, name)
-        if current and not rotate:
-            return {"code": current, **public_settings(data)}
-        if current:
-            codes.pop(current, None)
-        existing = {str(k).upper() for k in codes}
-        code = _new_code(existing)
-        codes[code] = {"username": name, "created_at": to_iso(now_utc())}
+        codes[code] = row
         data["codes"] = codes
         save_invite(data)
-        return {"code": code, **public_settings(data)}
+        return {"code": code, "user_enabled": bool(enabled), **public_settings(data)}
 
 
 def resolve_invite(code: str) -> tuple[dict, dict]:
-    key = "".join(ch for ch in str(code or "").upper() if ch.isalnum())
-    if not key:
-        raise ValueError("邀请码无效")
     data = load_invite()
     settings = public_settings(data)
-    if not settings["enabled"]:
-        raise ValueError("邀请未开启")
-    row = (data.get("codes") or {}).get(key) or (data.get("codes") or {}).get(key.lower())
-    if not row:
-        # case-insensitive scan
-        row = next((item for ck, item in (data.get("codes") or {}).items() if str(ck).upper() == key), None)
+    _key, row = _lookup_row(data, code)
     if not row:
         raise ValueError("邀请码无效或已失效")
+    if not _row_enabled(row):
+        raise ValueError("邀请未开启")
     inviter = find_user(str(row.get("username") or ""))
     if not inviter:
         raise ValueError("邀请已过期")
@@ -182,6 +226,7 @@ def record_invite(
     inviter_days,
     invitee_days: int,
     inviter_already_permanent: bool = False,
+    status: str = "pending",
 ) -> None:
     with _lock:
         data = load_invite()
@@ -194,9 +239,55 @@ def record_invite(
                 "inviter_days": None if inviter_already_permanent else inviter_days,
                 "invitee_days": invitee_days,
                 "inviter_already_permanent": bool(inviter_already_permanent),
+                "status": status,
                 "created_at": to_iso(now_utc()),
             },
         )
+        data["records"] = records[:2000]
+        save_invite(data)
+
+
+def _mark_invite_rewarded(
+    inviter: str,
+    invitee: str,
+    inviter_days,
+    invitee_days: int,
+    inviter_already_permanent: bool = False,
+) -> None:
+    inviter_name = str(inviter or "").strip()
+    invitee_name = str(invitee or "").strip()
+    with _lock:
+        data = load_invite()
+        records = list(data.get("records") or [])
+        updated = False
+        for item in records:
+            if str(item.get("inviter") or "") != inviter_name:
+                continue
+            if str(item.get("invitee") or "") != invitee_name:
+                continue
+            if str(item.get("status") or "rewarded") not in {"pending", ""}:
+                continue
+            item["status"] = "rewarded"
+            item["inviter_days"] = None if inviter_already_permanent else inviter_days
+            item["invitee_days"] = invitee_days
+            item["inviter_already_permanent"] = bool(inviter_already_permanent)
+            item["rewarded_at"] = to_iso(now_utc())
+            updated = True
+            break
+        if not updated:
+            records.insert(
+                0,
+                {
+                    "inviter": inviter_name,
+                    "invitee": invitee_name,
+                    "inviter_days": None if inviter_already_permanent else inviter_days,
+                    "invitee_days": invitee_days,
+                    "inviter_already_permanent": bool(inviter_already_permanent),
+                    "status": "rewarded",
+                    "created_at": to_iso(now_utc()),
+                    "rewarded_at": to_iso(now_utc()),
+                },
+            )
         data["records"] = records[:2000]
         save_invite(data)
 
@@ -215,11 +306,44 @@ def apply_invite_register(username: str, password: str, code: str) -> dict:
         username,
         password,
         role="user",
-        days=invitee_days,
+        days=1,
         max_accounts=1,
         card_code="",
     )
+    user["permanent"] = False
+    user["expires_at"] = to_iso(now_utc())
     user["invited_by"] = inviter_name
+    user["invite_pending"] = True
+    user["invite_rewarded"] = False
+    user["invitee_reward_days"] = invitee_days
+    user["inviter_reward_days"] = inviter_days
+    users.append(user)
+    save_users(users)
+    record_invite(
+        inviter_name,
+        username.strip(),
+        inviter_days,
+        invitee_days,
+        inviter_already_permanent=is_permanent(inviter),
+        status="pending",
+    )
+    return user
+
+
+def complete_invite_on_bind(username: str) -> dict | None:
+    name = str(username or "").strip()
+    if not name:
+        return None
+    users = load_users()
+    invitee = next((item for item in users if item.get("username") == name), None)
+    if not invitee:
+        return None
+    if not invitee.get("invite_pending") or invitee.get("invite_rewarded"):
+        return invitee
+    invitee_days = parse_days(invitee.get("invitee_reward_days"), default=1)
+    inviter_days = parse_days(invitee.get("inviter_reward_days"), default=1)
+    inviter_name = str(invitee.get("invited_by") or "")
+    extend_user(invitee, invitee_days)
     inviter_already_permanent = False
     awarded_inviter_days = inviter_days
     for item in users:
@@ -232,48 +356,53 @@ def apply_invite_register(username: str, password: str, code: str) -> dict:
             extend_user(item, inviter_days)
             awarded_inviter_days = inviter_days
         break
-    users.append(user)
+    invitee["invite_pending"] = False
+    invitee["invite_rewarded"] = True
+    invitee["invite_rewarded_at"] = to_iso(now_utc())
     save_users(users)
-    record_invite(
+    _mark_invite_rewarded(
         inviter_name,
-        username.strip(),
+        name,
         awarded_inviter_days,
         invitee_days,
         inviter_already_permanent=inviter_already_permanent,
     )
-    return user
+    return invitee
 
 
 def my_invite_payload(user: dict, origin: str = "") -> dict:
-    data = load_invite()
-    settings = public_settings(data)
     name = str((user or {}).get("username") or "")
-    code = _code_for_user(data, name)
-    allowed = can_invite(user, data)
+    with _lock:
+        data = load_invite()
+        code = ""
+        if name:
+            code, created = _ensure_code_locked(data, name)
+            if created:
+                save_invite(data)
+        settings = public_settings(data)
+        user_enabled = _user_enabled(data, name) if name else False
+        records_src = list(data.get("records") or [])
+    allowed = bool(user) and (not is_expired(user)) and user_enabled
     expired = is_expired(user)
-    if allowed and not code:
-        try:
-            ensured = ensure_invite_code(name, rotate=False)
-            code = ensured.get("code") or ""
-            settings = public_settings()
-        except ValueError:
-            code = ""
     origin = str(origin or "").rstrip("/")
     link = f"{origin}/?invite={code}" if code and origin else (f"/?invite={code}" if code else "")
     records = []
-    for item in data.get("records") or []:
+    for item in records_src:
         if str(item.get("inviter") or "") != name:
             continue
         created = parse_iso(item.get("created_at"))
         skipped = bool(item.get("inviter_already_permanent"))
+        status = str(item.get("status") or "rewarded")
+        pending = status == "pending"
         records.append(
             {
                 "invitee": item.get("invitee") or "",
                 "inviter_days": item.get("inviter_days"),
                 "invitee_days": item.get("invitee_days"),
                 "inviter_already_permanent": skipped,
-                "inviter_days_label": award_days_label(item.get("inviter_days"), skipped=skipped),
-                "invitee_days_label": award_days_label(item.get("invitee_days")),
+                "status": status,
+                "inviter_days_label": "待绑定微信" if pending else award_days_label(item.get("inviter_days"), skipped=skipped),
+                "invitee_days_label": "待绑定微信" if pending else award_days_label(item.get("invitee_days")),
                 "created_at": item.get("created_at") or "",
                 "created_label": created.astimezone().strftime("%Y-%m-%d %H:%M") if created else "-",
             }
@@ -281,36 +410,40 @@ def my_invite_payload(user: dict, origin: str = "") -> dict:
         if len(records) >= 100:
             break
     permanent = is_permanent(user)
-    if not settings["enabled"]:
-        reward_hint = ""
-    elif not allowed:
+    if expired:
         reward_hint = (
-            f"续期后可继续邀请。对方将获得 {settings['invitee_days_label']}。"
+            f"会员已过期，链接暂时无效。续期后不用换链接。对方将获得 {settings['invitee_days_label']}。"
+            f"已邀请 {len(records)} 人。"
+        )
+    elif not user_enabled:
+        reward_hint = (
+            f"打开上方开关后，把固定链接发给朋友即可。对方绑定微信后才发放天数，将获得 {settings['invitee_days_label']}。"
             f"已邀请 {len(records)} 人。"
         )
     elif permanent:
         reward_hint = (
-            f"你已是永久会员，邀请成功不会再增加天数。对方获得 {settings['invitee_days_label']}。"
+            f"你已是永久会员，邀请成功不会再增加天数。对方绑定微信后才发放奖励，对方获得 {settings['invitee_days_label']}。"
             f"已邀请 {len(records)} 人。"
         )
     elif settings["inviter_days"] == 0:
         reward_hint = (
-            f"邀请成功：你将获得永久会员，对方获得 {settings['invitee_days_label']}。"
+            f"对方绑定微信后才算邀请成功：你将获得永久会员，对方获得 {settings['invitee_days_label']}。"
             f"已邀请 {len(records)} 人。"
         )
     else:
         reward_hint = (
-            f"邀请成功：你获得 {settings['inviter_days_label']}，对方获得 {settings['invitee_days_label']}。"
+            f"对方绑定微信后才算邀请成功：你获得 {settings['inviter_days_label']}，对方获得 {settings['invitee_days_label']}。"
             f"已邀请 {len(records)} 人。"
         )
     return {
         **settings,
+        "user_enabled": user_enabled,
         "can_invite": allowed,
         "expired": expired,
         "permanent": permanent,
         "remain_label": remaining_label(user),
-        "code": code if allowed else "",
-        "link": link if allowed else "",
+        "code": code,
+        "link": link,
         "link_expired": bool(code) and not allowed,
         "reward_hint": reward_hint,
         "records": records,
@@ -323,8 +456,6 @@ def save_invite_settings(payload: dict | None) -> dict:
     with _lock:
         data = load_invite()
         settings = dict(data.get("settings") or {})
-        if "enabled" in payload:
-            settings["enabled"] = bool(payload.get("enabled"))
         if "inviter_days" in payload:
             settings["inviter_days"] = parse_days(payload.get("inviter_days"), default=1)
         if "invitee_days" in payload:

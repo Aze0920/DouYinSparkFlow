@@ -34,6 +34,7 @@ from webui.users import (
     apply_card_benefits,
     extend_user,
     find_user,
+    is_permanent,
     is_protected_username,
     load_users,
     make_token,
@@ -58,11 +59,11 @@ from webui.cards import (
 )
 from webui.invite import (
     apply_invite_register,
-    ensure_invite_code,
     my_invite_payload,
     preview_invite,
     public_settings as invite_public_settings,
     save_invite_settings,
+    set_user_invite_enabled,
 )
 from webui.notify import (
     apply_wxpusher_callback,
@@ -80,6 +81,7 @@ from webui.notify import (
     user_wxpusher_uid,
     verify_wechat_signature,
     wxpusher_qr_image,
+    allow_self_unbind,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -732,6 +734,24 @@ def delete_user(request: Request, payload: dict):
     return {"ok": True, "users": [public_user(u) for u in users]}
 
 
+@app.post("/api/users/unbind-wxpusher")
+def admin_unbind_wxpusher(request: Request, payload: dict | None = None):
+    require_admin(request)
+    payload = payload or {}
+    username = str(payload.get("username") or "").strip()
+    target = find_user(username)
+    if not target:
+        raise HTTPException(status_code=404, detail="用户不存在")
+    if not str(target.get("wxpusher_uid") or "").strip():
+        raise HTTPException(status_code=400, detail="该用户未绑定微信")
+    try:
+        saved = unbind_user_wxpusher(username)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("管理员解绑微信 user=%s", username)
+    return {"ok": True, **public_wxpusher(saved), "users": [public_user(u) for u in load_users()]}
+
+
 @app.get("/api/cards")
 def list_cards_api(request: Request):
     require_admin(request)
@@ -783,13 +803,16 @@ def invite_me(request: Request):
     return {"ok": True, **my_invite_payload(user, _request_origin(request))}
 
 
-@app.post("/api/invite/refresh")
-def invite_refresh(request: Request):
+@app.post("/api/invite/toggle")
+def invite_toggle(request: Request, payload: dict | None = None):
     user = require_auth(request)
+    payload = payload or {}
+    enabled = bool(payload.get("enabled"))
     try:
-        ensure_invite_code(user.get("username") or "", rotate=True)
+        set_user_invite_enabled(user.get("username") or "", enabled)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    logger.info("用户邀请开关 user=%s enabled=%s", user.get("username"), enabled)
     return {"ok": True, **my_invite_payload(find_user(user.get("username") or "") or user, _request_origin(request))}
 
 
@@ -804,9 +827,8 @@ def post_invite_settings(request: Request, payload: dict | None = None):
     admin = require_admin(request)
     data = save_invite_settings(payload or {})
     logger.info(
-        "已保存邀请设置 admin=%s enabled=%s inviter_days=%s invitee_days=%s",
+        "已保存邀请天数 admin=%s inviter_days=%s invitee_days=%s",
         admin.get("username"),
-        data.get("enabled"),
         data.get("inviter_days"),
         data.get("invitee_days"),
     )
@@ -816,8 +838,8 @@ def post_invite_settings(request: Request, payload: dict | None = None):
 @app.post("/api/recharge")
 def recharge(request: Request, payload: dict | None = None):
     user = require_auth(request)
-    if user.get("role") == "admin":
-        raise HTTPException(status_code=400, detail="管理员无需充值")
+    if user.get("role") == "admin" or is_permanent(user):
+        raise HTTPException(status_code=400, detail="当前为永久账户，无需充值")
     ip = _client_ip(request)
     if not _rate_allow(f"recharge:{ip}", 8, 600):
         raise HTTPException(status_code=429, detail="尝试太频繁，请稍后再试")
@@ -956,6 +978,8 @@ def cancel_wxpusher_bind(request: Request):
 @app.post("/api/notify/wxpusher/unbind")
 def unbind_wxpusher(request: Request):
     user = require_auth(request)
+    if not allow_self_unbind():
+        raise HTTPException(status_code=403, detail="管理员已关闭自行解绑")
     name = user.get("username") or ""
     try:
         saved = unbind_user_wxpusher(name)
@@ -1034,6 +1058,7 @@ def status(request: Request):
         "running_ids": list(_run_state.get("running_ids") or []),
         "accounts": _filter_accounts(user, accounts),
         "me": public_user(user),
+        "allow_self_unbind": allow_self_unbind(),
     }
     if _is_admin(user):
         local = read_version()

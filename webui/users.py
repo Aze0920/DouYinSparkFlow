@@ -330,6 +330,7 @@ def public_user(user: dict) -> dict:
         "max_accounts": account_limit(user),
         "account_limit_label": account_limit_label(user),
         "card_code": user.get("card_code") or "",
+        "invite_pending": bool(user.get("invite_pending") and not user.get("invite_rewarded")),
         "wxpusher_bound": bool(str(user.get("wxpusher_uid") or "").strip()),
         "wxpusher_mask": _mask_tail(user.get("wxpusher_uid")),
         "wxpusher_bound_at": user.get("wxpusher_bound_at") or "",

@@ -287,6 +287,11 @@ input:focus, textarea:focus, select:focus {
   box-shadow: 0 0 0 3px rgba(255, 122, 58, .14);
 }
 button { cursor: pointer; }
+button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  filter: grayscale(0.35);
+}
 .btn-primary {
   background: linear-gradient(90deg, #ff8a4a, #ffd089);
   color: #2a1608;
@@ -461,7 +466,7 @@ body.spark-locked .spark-action {
 }
 .account-actions {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-top: auto;
 }

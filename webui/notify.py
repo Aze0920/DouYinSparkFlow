@@ -52,6 +52,7 @@ def default_notify() -> dict:
             "enabled": False,
             "app_token": "",
             "uids": "",
+            "allow_self_unbind": True,
         },
     }
 
@@ -113,6 +114,10 @@ def save_notify(payload: dict) -> dict:
         wxpusher["app_token"] = str(incoming_wp.get("app_token") or "").strip()
     if "uids" in incoming_wp:
         wxpusher["uids"] = str(incoming_wp.get("uids") or "").strip()
+    if "allow_self_unbind" in incoming_wp:
+        wxpusher["allow_self_unbind"] = bool(incoming_wp.get("allow_self_unbind"))
+    if "allow_self_unbind" not in wxpusher:
+        wxpusher["allow_self_unbind"] = True
     data = {"wechat": wechat, "wxpusher": wxpusher, "events": events}
     NOTIFY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
@@ -134,6 +139,10 @@ def public_notify(data: dict | None = None) -> dict:
     wechat["app_secret_set"] = bool(secret)
     wxpusher = dict(data.get("wxpusher") or {})
     wp_token = str(wxpusher.get("app_token") or "").strip()
+    if "allow_self_unbind" not in wxpusher:
+        wxpusher["allow_self_unbind"] = True
+    else:
+        wxpusher["allow_self_unbind"] = bool(wxpusher.get("allow_self_unbind"))
     return {
         "wechat": wechat,
         "wxpusher": wxpusher,
@@ -153,12 +162,34 @@ def mask_uid(uid: str) -> str:
     return "••••" + raw[-4:]
 
 
+def allow_self_unbind() -> bool:
+    raw = (load_notify().get("wxpusher") or {}).get("allow_self_unbind")
+    if raw is None:
+        return True
+    return bool(raw)
+
+
+def find_wxpusher_owner(uid: str, except_username: str = "") -> dict | None:
+    key = str(uid or "").strip()
+    if not key:
+        return None
+    skip = str(except_username or "").strip()
+    for item in load_users():
+        if str(item.get("wxpusher_uid") or "").strip() != key:
+            continue
+        if skip and str(item.get("username") or "").strip() == skip:
+            continue
+        return item
+    return None
+
+
 def public_wxpusher(user: dict | None) -> dict:
     uid = str((user or {}).get("wxpusher_uid") or "").strip()
     return {
         "bound": bool(uid),
         "mask": mask_uid(uid) if uid else "",
         "bound_at": str((user or {}).get("wxpusher_bound_at") or ""),
+        "allow_self_unbind": allow_self_unbind(),
     }
 
 
@@ -169,8 +200,13 @@ def user_wxpusher_uid(username: str) -> str:
 
 def set_user_wxpusher(username: str, uid: str) -> dict | None:
     name = str(username or "").strip()
+    uid = str(uid or "").strip()
     if not name:
         return None
+    if uid:
+        owner = find_wxpusher_owner(uid, except_username=name)
+        if owner:
+            raise ValueError("该微信已绑定过")
     users = load_users()
     found = None
     for item in users:
@@ -184,6 +220,24 @@ def set_user_wxpusher(username: str, uid: str) -> dict | None:
         return None
     save_users(users)
     return found
+
+
+def bind_user_wxpusher(username: str, uid: str) -> dict:
+    name = str(username or "").strip()
+    uid = str(uid or "").strip()
+    if not uid:
+        raise ValueError("未获取到微信")
+    saved = set_user_wxpusher(name, uid)
+    if not saved:
+        raise ValueError("用户不存在")
+    try:
+        from webui.invite import complete_invite_on_bind
+
+        complete_invite_on_bind(name)
+        saved = find_user(name) or saved
+    except Exception:
+        logger.exception("发放邀请奖励失败 user=%s", name)
+    return saved
 
 
 def _close_session(session: dict | None) -> None:
@@ -530,8 +584,23 @@ def poll_wxpusher_qr(username: str) -> dict:
         if not uid or int(data.get("code") or 0) != 1000:
             left = max(0, int(float(session.get("expire") or 0) - now))
             return {"ok": True, "waiting": True, "expired": False, "expire_in": left, **bound}
-        _close_session(_bind_sessions.pop(name, None))
-    saved = set_user_wxpusher(name, uid)
+    try:
+        saved = bind_user_wxpusher(name, uid)
+    except ValueError as exc:
+        left = 0
+        with _bind_lock:
+            session = _bind_sessions.get(name)
+            if _session_alive(session):
+                left = max(0, int(float(session.get("expire") or 0) - time.time()))
+        return {
+            "ok": False,
+            "waiting": True,
+            "expired": False,
+            "expire_in": left,
+            "error": str(exc),
+            **public_wxpusher(find_user(name)),
+        }
+    cancel_wxpusher_qr(name)
     logger.info("WxPusher 扫码绑定成功 user=%s", name)
     return {"ok": True, "waiting": False, "bound": True, **public_wxpusher(saved)}
 
@@ -574,9 +643,11 @@ def apply_wxpusher_callback(payload: dict | None) -> dict:
         return {"ok": True, "bound": False}
     if not uid or int(result.get("code") or 0) != 1000:
         return {"ok": True, "bound": False}
-    saved = set_user_wxpusher(extra, uid)
-    if not saved:
-        return {"ok": True, "bound": False}
+    try:
+        saved = bind_user_wxpusher(extra, uid)
+    except ValueError as exc:
+        logger.warning("WxPusher 回调绑定拒绝 extra=%s: %s", extra, exc)
+        return {"ok": True, "bound": False, "error": str(exc)}
     with _bind_lock:
         _close_session(_bind_sessions.pop(extra, None))
     logger.info("WxPusher 回调绑定成功 user=%s", extra)

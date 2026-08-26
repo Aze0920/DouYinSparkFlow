@@ -13,10 +13,12 @@ from webui.cards import public_card
 from webui.invite import (
     apply_invite_register,
     can_invite,
-    ensure_invite_code,
+    complete_invite_on_bind,
     preview_invite,
     save_invite_settings,
+    set_user_invite_enabled,
 )
+from webui.notify import set_user_wxpusher
 from webui.users import (
     account_limit,
     extend_user,
@@ -100,28 +102,36 @@ class InviteTests(unittest.TestCase):
         self.addCleanup(self.users_patch.stop)
         self.addCleanup(self.invite_patch.stop)
         save_users([make_user("host", "pass1234", role="user", days=7, max_accounts=1)])
-        save_invite_settings({"enabled": True, "inviter_days": 3, "invitee_days": 2})
+        save_invite_settings({"inviter_days": 3, "invitee_days": 2})
+        self.host_code = set_user_invite_enabled("host", True)["code"]
 
-    def test_invite_register_rewards_both_sides(self):
-        code = ensure_invite_code("host")["code"]
-        guest = apply_invite_register("guest", "pass1234", code)
+    def test_invite_register_rewards_after_wechat_bind(self):
+        guest = apply_invite_register("guest", "pass1234", self.host_code)
         self.assertEqual(guest.get("invited_by"), "host")
+        self.assertTrue(guest.get("invite_pending"))
+        self.assertTrue(is_expired(guest))
+        host_before = find_user("host")
+        exp_before = host_before.get("expires_at")
+        rec = invite_mod.load_invite()["records"][0]
+        self.assertEqual(rec.get("status"), "pending")
+        complete_invite_on_bind("guest")
+        guest = find_user("guest")
+        self.assertFalse(guest.get("invite_pending"))
+        self.assertTrue(guest.get("invite_rewarded"))
         self.assertFalse(is_expired(guest))
         host = find_user("host")
-        self.assertTrue(can_invite(host))
-        preview = preview_invite(code)
-        self.assertTrue(preview["valid"])
-        self.assertEqual(preview["invitee_days"], 2)
-        self.assertFalse(is_permanent(host))
+        self.assertGreater(host.get("expires_at") or "", exp_before or "")
         rec = invite_mod.load_invite()["records"][0]
-        self.assertFalse(rec.get("inviter_already_permanent"))
+        self.assertEqual(rec.get("status"), "rewarded")
         self.assertEqual(rec.get("inviter_days"), 3)
+        self.assertEqual(rec.get("invitee_days"), 2)
 
     def test_permanent_inviter_does_not_gain_days(self):
         save_users([make_user("host", "pass1234", role="user", days=0, max_accounts=1)])
-        code = ensure_invite_code("host")["code"]
-        guest = apply_invite_register("guest", "pass1234", code)
-        self.assertEqual(guest.get("invited_by"), "host")
+        guest = apply_invite_register("guest", "pass1234", self.host_code)
+        self.assertTrue(is_expired(guest))
+        complete_invite_on_bind("guest")
+        guest = find_user("guest")
         self.assertFalse(is_permanent(guest))
         host = find_user("host")
         self.assertTrue(is_permanent(host))
@@ -132,17 +142,29 @@ class InviteTests(unittest.TestCase):
         self.assertEqual(rec.get("invitee_days"), 2)
 
     def test_timed_inviter_zero_reward_becomes_permanent(self):
-        save_invite_settings({"enabled": True, "inviter_days": 0, "invitee_days": 2})
-        code = ensure_invite_code("host")["code"]
-        apply_invite_register("guest4", "pass1234", code)
+        save_invite_settings({"inviter_days": 0, "invitee_days": 2})
+        apply_invite_register("guest4", "pass1234", self.host_code)
+        host = find_user("host")
+        self.assertFalse(is_permanent(host))
+        complete_invite_on_bind("guest4")
         host = find_user("host")
         self.assertTrue(is_permanent(host))
         rec = invite_mod.load_invite()["records"][0]
         self.assertFalse(rec.get("inviter_already_permanent"))
         self.assertEqual(rec.get("inviter_days"), 0)
 
+    def test_wxpusher_uid_only_one_account(self):
+        save_users([
+            make_user("host", "pass1234", role="user", days=7, max_accounts=1),
+            make_user("other", "pass1234", role="user", days=7, max_accounts=1),
+        ])
+        set_user_wxpusher("host", "UID-ONE")
+        with self.assertRaises(ValueError) as ctx:
+            set_user_wxpusher("other", "UID-ONE")
+        self.assertIn("已绑定", str(ctx.exception))
+        set_user_wxpusher("host", "UID-ONE")
+
     def test_expired_member_cannot_invite(self):
-        code = ensure_invite_code("host")["code"]
         users = users_mod.load_users()
         for item in users:
             if item.get("username") == "host":
@@ -152,20 +174,23 @@ class InviteTests(unittest.TestCase):
         host = find_user("host")
         self.assertTrue(is_expired(host))
         self.assertFalse(can_invite(host))
-        preview = preview_invite(code)
+        preview = preview_invite(self.host_code)
         self.assertFalse(preview["valid"])
         with self.assertRaises(ValueError):
-            apply_invite_register("guest2", "pass1234", code)
+            apply_invite_register("guest2", "pass1234", self.host_code)
         with self.assertRaises(ValueError):
-            ensure_invite_code("host", rotate=True)
+            set_user_invite_enabled("host", True)
 
-    def test_disabled_invite_rejects_link(self):
-        code = ensure_invite_code("host")["code"]
-        save_invite_settings({"enabled": False})
-        preview = preview_invite(code)
+    def test_user_can_turn_off_invite_without_changing_link(self):
+        set_user_invite_enabled("host", False)
+        preview = preview_invite(self.host_code)
         self.assertFalse(preview["valid"])
         with self.assertRaises(ValueError):
-            apply_invite_register("guest3", "pass1234", code)
+            apply_invite_register("guest3", "pass1234", self.host_code)
+        again = set_user_invite_enabled("host", True)
+        self.assertEqual(again["code"], self.host_code)
+        preview = preview_invite(self.host_code)
+        self.assertTrue(preview["valid"])
 
 
 if __name__ == "__main__":
