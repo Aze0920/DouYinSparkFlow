@@ -26,7 +26,7 @@ from webui.legal_docs import (
 )
 from webui.envfile import account_cron, cookie_key, default_cron, env_path, load_env, parse_accounts, read_tasks, write_env
 from webui.cookie_probe import parse_cookie_payload, probe_cookies
-from webui.chat_list import list_conversations
+from webui.chat_list import clean_avatar_url, list_conversations
 from webui.qr_login import (
     cancel_qr_login,
     choose_verify_method,
@@ -1306,6 +1306,38 @@ def _task_from_account(account: dict, env: dict, existing: dict | None = None) -
         row["cookie_status"] = status
     if owner:
         row["owner"] = owner
+    avatar = clean_avatar_url(account.get("avatar") if "avatar" in account else existing.get("avatar") or "")
+    if avatar:
+        row["avatar"] = avatar
+    if "target_avatars" in account:
+        raw_avatars = account.get("target_avatars") or {}
+    else:
+        raw_avatars = existing.get("target_avatars") or {}
+    if isinstance(raw_avatars, dict):
+        avatars = {}
+        for key, val in raw_avatars.items():
+            name = str(key or "").strip()
+            url = clean_avatar_url(val)
+            if name and url:
+                avatars[name] = url
+        if avatars:
+            row["target_avatars"] = avatars
+    if "target_sparks" in account:
+        raw_sparks = account.get("target_sparks") or {}
+    else:
+        raw_sparks = existing.get("target_sparks") or {}
+    if isinstance(raw_sparks, dict):
+        sparks = {}
+        for key, val in raw_sparks.items():
+            name = str(key or "").strip()
+            try:
+                days = int(val)
+            except (TypeError, ValueError):
+                continue
+            if name and 1 <= days <= 3660 and not (1900 <= days <= 2099):
+                sparks[name] = days
+        if sparks:
+            row["target_sparks"] = sparks
     return row
 
 
@@ -1546,6 +1578,9 @@ def check_account_cookie(request: Request, payload: dict | None = None):
             if result.get("cookie_status") == "ok" and got_name and got_name != "抖音账号":
                 item["username"] = got_name
                 account_name = got_name
+            got_avatar = clean_avatar_url(result.get("avatar") or "")
+            if result.get("cookie_status") == "ok" and got_avatar:
+                item["avatar"] = got_avatar
             tasks[index] = item
             write_env({"TASKS": tasks})
             break

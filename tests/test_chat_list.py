@@ -1,6 +1,7 @@
 import unittest
 
 from webui.chat_list import (
+    clean_avatar_url,
     harvest_api_conversations,
     is_plausible_spark,
     merge_conversations,
@@ -129,6 +130,19 @@ class ChatListTests(unittest.TestCase):
         self.assertIn("flame_icon", EXTRACT_JS)
         self.assertIn("conversationConversationItemtitle", EXTRACT_JS)
         self.assertIn('data-e2e="conversation-item"', EXTRACT_JS)
+        self.assertIn("aweme-avatar", EXTRACT_JS)
+
+    def test_avatar_url_is_https_only(self):
+        self.assertEqual(clean_avatar_url("data:image/png;base64,xxxx"), "")
+        self.assertEqual(clean_avatar_url("javascript:alert(1)"), "")
+        url = clean_avatar_url("https://p3.douyinpic.com/img/aweme-avatar/tos-cn.webp")
+        self.assertTrue(url.startswith("https://"))
+
+    def test_merge_keeps_avatar(self):
+        rows = merge_conversations(
+            [{"name": "王洁", "kind": "friend", "spark_days": 711, "avatar": "https://p3.douyinpic.com/a.webp"}],
+        )
+        self.assertEqual(rows[0]["avatar"], "https://p3.douyinpic.com/a.webp")
 
     def test_harvest_ignores_nested_message_numbers(self):
         payload = {

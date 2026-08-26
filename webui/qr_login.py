@@ -218,6 +218,7 @@ _state: dict[str, Any] = {
     "app_open_url_android": "",
     "username": "",
     "unique_id": "",
+    "avatar": "",
     "cookies": [],
     "replace_index": -1,
     "started_at": 0,
@@ -281,6 +282,7 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "app_open_url_android": _state.get("app_open_url_android") or "",
             "username": _state.get("username") or "",
             "unique_id": _state.get("unique_id") or "",
+            "avatar": _state.get("avatar") or "",
             "replace_index": int(_state.get("replace_index") or -1),
             "started_at": _state.get("started_at") or 0,
             "verify_methods": list(_state.get("verify_methods") or []),
@@ -1349,8 +1351,43 @@ def _cookies_for_save(context) -> list[dict[str, Any]]:
     return out
 
 
+def _http_avatar(url: str) -> str:
+    raw = str(url or "").strip()
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    if not re.match(r"^https?://", raw, re.I):
+        return ""
+    if re.search(r"(javascript:|data:|blob:)", raw, re.I):
+        return ""
+    return raw[:800]
+
+
+def _avatar_from_value(val: Any) -> str:
+    if isinstance(val, str):
+        return _http_avatar(val)
+    if isinstance(val, dict):
+        urls = val.get("url_list") or val.get("urlList") or []
+        if isinstance(urls, list) and urls:
+            found = _avatar_from_value(urls[0])
+            if found:
+                return found
+        return _avatar_from_value(val.get("url") or val.get("uri") or "")
+    if isinstance(val, list) and val:
+        return _avatar_from_value(val[0])
+    return ""
+
+
+def _avatar_from_dict(obj: dict) -> str:
+    for key in ("avatar_thumb", "avatar_medium", "avatar_larger", "avatar_url", "avatar"):
+        found = _avatar_from_value(obj.get(key))
+        if found:
+            return found
+    return ""
+
+
 def _walk_user(obj: Any, found: dict[str, str] | None = None) -> dict[str, str]:
-    found = found if found is not None else {"username": "", "unique_id": ""}
+    found = found if found is not None else {"username": "", "unique_id": "", "avatar": ""}
+    found.setdefault("avatar", "")
     if isinstance(obj, dict):
         nick = (
             obj.get("nickname")
@@ -1377,14 +1414,17 @@ def _walk_user(obj: Any, found: dict[str, str] | None = None) -> dict[str, str]:
             text = str(uid).strip()
             if not found["unique_id"] or not is_display_unique_id(found["unique_id"]):
                 found["unique_id"] = text
+        av = _avatar_from_dict(obj)
+        if av and not found.get("avatar"):
+            found["avatar"] = av
         for value in obj.values():
             _walk_user(value, found)
-            if found["username"] and found["unique_id"]:
+            if found["username"] and found["unique_id"] and found.get("avatar"):
                 return found
     elif isinstance(obj, list):
         for value in obj:
             _walk_user(value, found)
-            if found["username"] and found["unique_id"]:
+            if found["username"] and found["unique_id"] and found.get("avatar"):
                 return found
     return found
 
@@ -1450,6 +1490,7 @@ def _try_page_user(page) -> dict[str, str]:
               return {
                 username: nick ? nick[1] : "",
                 unique_id: uid ? uid[1] : "",
+                avatar: (document.querySelector('img[src*="aweme-avatar"]') || {}).src || "",
               };
             }"""
         ) or {}
@@ -1459,7 +1500,7 @@ def _try_page_user(page) -> dict[str, str]:
 
 
 def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
-    found = {"username": "", "unique_id": ""}
+    found = {"username": "", "unique_id": "", "avatar": ""}
     probes = [
         (HOME + "/passport/web/account/info/", None),
         (HOME + "/webcast/user/me/", {"aid": "1128"}),
@@ -1475,6 +1516,8 @@ def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
             found["username"] = got["username"]
         if got.get("unique_id") and is_display_unique_id(got.get("unique_id")) and not found["unique_id"]:
             found["unique_id"] = got["unique_id"]
+        if got.get("avatar") and not found.get("avatar"):
+            found["avatar"] = got["avatar"]
         if found["username"] and found["unique_id"]:
             logger.info("已抓到账号资料 username=%s unique_id=%s", found["username"], found["unique_id"])
             break
@@ -1495,6 +1538,8 @@ def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
                 found["username"] = got["username"]
             if got.get("unique_id") and is_display_unique_id(got.get("unique_id")) and not found["unique_id"]:
                 found["unique_id"] = got["unique_id"]
+            if got.get("avatar") and not found.get("avatar"):
+                found["avatar"] = got["avatar"]
             if found["username"] and found["unique_id"]:
                 break
 
@@ -2126,6 +2171,7 @@ def _worker(replace_index: int):
             message="登录成功，已自动抓取用户名、抖音号和 Cookie",
             username=profile.get("username") or "抖音账号",
             unique_id=profile.get("unique_id") or "",
+            avatar=profile.get("avatar") or "",
             cookies=cookies,
             qr_base64="",
             qr_url="",

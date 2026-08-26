@@ -179,6 +179,7 @@ def probe_cookies(cookies: list[dict[str, Any]]) -> dict[str, Any]:
             "valid": valid,
             "username": username,
             "unique_id": unique_id,
+            "avatar": str(profile.get("avatar") or "").strip(),
             "cookies": saved,
             "message": message,
         }

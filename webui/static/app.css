@@ -702,28 +702,106 @@ body.spark-locked .spark-action {
 .account-actions .btn-run-account {
   grid-column: 1 / -1;
 }
-.account-id { color: var(--muted); font-size: 12px; margin-top: 4px; }
+.accounts-grid .account-head {
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.account-head-copy {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  min-height: 52px;
+}
+.account-head-copy strong {
+  flex: 2;
+  display: flex;
+  align-items: flex-end;
+  font-size: 17px;
+  line-height: 1.15;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.account-id {
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.dy-avatar-wrap {
+  position: relative;
+  flex-shrink: 0;
+  width: 52px;
+  height: 52px;
+}
+.dy-avatar-wrap.account-avatar { width: 52px; height: 52px; }
+.target-row .dy-avatar-wrap,
+.target-friend-row .dy-avatar-wrap {
+  width: 36px;
+  height: 36px;
+}
+.dy-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+  background: #15202b;
+}
+.dy-avatar-fallback {
+  display: grid;
+  place-items: center;
+  color: var(--gold);
+  font-weight: 800;
+  background: rgba(255, 122, 58, .18);
+}
+.dy-avatar.hidden, .dy-avatar-fallback.hidden { display: none; }
 .target-box { display: grid; gap: 8px; }
 .target-label { color: var(--muted); font-size: 13px; }
-.target-chips { display: flex; flex-wrap: wrap; gap: 6px; min-height: 32px; }
-.target-chip {
-  display: inline-flex;
-  align-items: center;
+.target-friend-list {
+  display: grid;
   gap: 6px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--line);
-  background: rgba(255, 122, 58, .12);
-  font-size: 12px;
+  max-height: 270px;
+  overflow: auto;
+  padding-right: 2px;
 }
-.target-chip small { color: var(--ember); }
-.target-chip button {
+.target-friend-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 48px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: rgba(255,255,255,.03);
+}
+.target-friend-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 700;
+}
+.target-friend-days {
+  color: var(--ember);
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.target-friend-del {
   width: auto;
-  padding: 0 2px;
+  min-width: 28px;
+  padding: 4px 8px;
   border: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 16px;
   line-height: 1;
 }
 .target-empty { color: var(--muted); font-size: 12px; }

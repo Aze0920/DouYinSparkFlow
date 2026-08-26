@@ -33,6 +33,10 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("sparkCacheStale", INDEX)
         self.assertIn('data-name="${escapeAttr(name)}"', INDEX)
         self.assertNotIn("toggleTargetRow(${JSON.stringify(name)})", INDEX)
+        self.assertIn("function avatarImg", INDEX)
+        self.assertIn("target-friend-list", INDEX)
+        self.assertIn("account-head-copy", INDEX)
+        self.assertIn("max-height: 270px", CSS)
 
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)

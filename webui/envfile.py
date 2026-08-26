@@ -189,6 +189,9 @@ def parse_accounts(env: dict) -> list:
                 "owner": str(task.get("owner") or "").strip(),
                 "cookies_set": cookies_ok,
                 "cookie_count": len(parsed) if cookies_ok else 0,
+                "avatar": str(task.get("avatar") or "").strip(),
+                "target_avatars": task.get("target_avatars") if isinstance(task.get("target_avatars"), dict) else {},
+                "target_sparks": task.get("target_sparks") if isinstance(task.get("target_sparks"), dict) else {},
             }
         )
     return accounts

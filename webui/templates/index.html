@@ -1231,18 +1231,42 @@
       if (data.cookie_source === "qr") return "扫码 Cookie";
       return bound ? "已绑定 Cookie" : "未绑定 Cookie";
     }
-    function sparkLabelFor(uid, name) {
-      const items = ((window.__accountChats || {})[uid] || {}).items || [];
-      const hit = items.find((row) => row && row.name === name);
-      if (hit && hit.spark_days) return "火花 " + hit.spark_days + " 天";
-      return "";
+    function avatarImg(url, letter, extraClass) {
+      const ch = escapeHtml(String(letter || "?").slice(0, 1));
+      const cls = extraClass ? (" " + extraClass) : "";
+      const src = String(url || "").trim();
+      if (/^https?:\/\//i.test(src) && !/^data:/i.test(src) && !/^javascript:/i.test(src)) {
+        return `<span class="dy-avatar-wrap${cls}"><img class="dy-avatar" src="${escapeAttr(src)}" alt="" referrerpolicy="no-referrer" onerror="this.classList.add('hidden');this.nextElementSibling.classList.remove('hidden')"><span class="dy-avatar dy-avatar-fallback hidden">${ch}</span></span>`;
+      }
+      return `<span class="dy-avatar-wrap${cls}"><span class="dy-avatar dy-avatar-fallback">${ch}</span></span>`;
     }
-    function targetChipsHtml(targets, uid, index, operate) {
+    function friendMeta(uid, name, account) {
+      const chat = ((window.__accountChats || {})[uid] || {}).items || [];
+      const hit = chat.find((row) => row && row.name === name) || {};
+      const avatars = (account && account.target_avatars) || {};
+      const sparks = (account && account.target_sparks) || {};
+      return {
+        avatar: hit.avatar || avatars[name] || "",
+        spark_days: plausibleSpark(hit.spark_days) || plausibleSpark(sparks[name]) || 0,
+      };
+    }
+    function sparkLabelFor(uid, name) {
+      const account = (window.__accounts || []).find((item) => item && item.unique_id === uid) || {};
+      const days = friendMeta(uid, name, account).spark_days;
+      return days ? ("火花 " + days + " 天") : "";
+    }
+    function targetListHtml(targets, uid, index, operate, account) {
       const names = (targets || []).map((x) => String(x || "").trim()).filter(Boolean);
-      if (!names.length) return `<span class="target-empty">还没选择，点下面按钮从会话列表里勾选</span>`;
+      if (!names.length) return `<div class="target-empty">还没选择，点下面按钮从会话列表里勾选</div>`;
       return names.map((name) => {
-        const spark = sparkLabelFor(uid, name);
-        return `<span class="target-chip" data-name="${escapeAttr(name)}">${escapeHtml(name)}${spark ? `<small>${escapeHtml(spark)}</small>` : ""}${operate ? `<button type="button" onclick="removeTargetChip(${index}, this.parentNode.getAttribute('data-name'))">×</button>` : ""}</span>`;
+        const meta = friendMeta(uid, name, account);
+        const spark = meta.spark_days ? (meta.spark_days + " 天") : "";
+        return `<div class="target-friend-row" data-name="${escapeAttr(name)}">
+          ${avatarImg(meta.avatar, name)}
+          <span class="target-friend-name">${escapeHtml(name)}</span>
+          <span class="target-friend-days">${escapeHtml(spark)}</span>
+          ${operate ? `<button type="button" class="target-friend-del" onclick="removeTargetChip(${index}, this.parentNode.getAttribute('data-name'))">×</button>` : ""}
+        </div>`;
       }).join("");
     }
     function readTargetsJson(node) {
@@ -1269,9 +1293,10 @@
       const tpl = data.message_template || window.__defaultTemplate || "";
       return `<div class="account" data-index="${index}">
         <div class="account-head">
-          <div>
+          ${avatarImg(data.avatar, name, "account-avatar")}
+          <div class="account-head-copy">
             <strong>${escapeHtml(name)}</strong>
-            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"}</div>
+            <div class="account-id">${uid ? escapeHtml(uid) : "尚未登录"}</div>
           </div>
           <div class="account-head-right">
             <span class="ck-status ${ck.cls}">${ck.text}</span>
@@ -1283,16 +1308,19 @@
         </div>
         <input type="hidden" class="username" value="${escapeAttr(name)}" />
         <input type="hidden" class="unique-id" value="${escapeAttr(uid)}" />
+        <input type="hidden" class="account-avatar-url" value="${escapeAttr(data.avatar || "")}" />
         <input type="hidden" class="cookie-source" value="${escapeAttr(data.cookie_source || "")}" />
         <input type="hidden" class="cookie-status" value="${escapeAttr(data.cookie_status || "")}" />
         <input type="hidden" class="cookies-set" value="${bound ? "1" : ""}" />
         <input type="hidden" class="account-owner" value="${escapeAttr(data.owner || "")}" />
+        <input type="hidden" class="target-avatars-json" value="${escapeAttr(JSON.stringify(data.target_avatars || {}))}" />
+        <input type="hidden" class="target-sparks-json" value="${escapeAttr(JSON.stringify(data.target_sparks || {}))}" />
         <label>每天发送时间
           <input class="cron-time spark-action" type="time" name="cron-${index}-${escapeAttr(uid)}" autocomplete="off" value="${escapeAttr(cron)}" ${operate ? "" : "disabled"} />
         </label>
         <div class="target-box">
           <span class="target-label">目标好友</span>
-          <div class="target-chips">${targetChipsHtml(data.targets || [], uid, index, operate)}</div>
+          <div class="target-friend-list">${targetListHtml(data.targets || [], uid, index, operate, data)}</div>
           <button class="btn-ghost mini spark-action" type="button" onclick="openTargetPicker(${index})" ${operate && bound ? "" : "disabled"}>${bound ? "选择好友和群聊" : "请先登录后再选择"}</button>
           <input type="hidden" class="targets-json" value="${escapeAttr(JSON.stringify(data.targets || []))}" />
         </div>
@@ -1327,6 +1355,16 @@
       });
       renderAccounts();
     }
+    function readHiddenJson(node, sel, fallback) {
+      const el = node && node.querySelector(sel);
+      if (!el) return fallback;
+      try {
+        const parsed = JSON.parse(el.value || "");
+        return parsed && typeof parsed === "object" ? parsed : fallback;
+      } catch (e) {
+        return fallback;
+      }
+    }
     function collectAccount(node) {
       const uniqueId = node.querySelector(".unique-id").value.trim();
       const t = parseCronTime((node.querySelector(".cron-time") && node.querySelector(".cron-time").value) || "09:00");
@@ -1342,6 +1380,9 @@
         owner: (node.querySelector(".account-owner") && node.querySelector(".account-owner").value) || "",
         cookies_set: !!(node.querySelector(".cookies-set") && node.querySelector(".cookies-set").value === "1") || !!(uniqueId && window.__accountCookies[uniqueId]),
         cookies: window.__accountCookies[uniqueId] || "",
+        avatar: (node.querySelector(".account-avatar-url") && node.querySelector(".account-avatar-url").value) || "",
+        target_avatars: readHiddenJson(node, ".target-avatars-json", {}),
+        target_sparks: readHiddenJson(node, ".target-sparks-json", {}),
       };
     }
     function collectAccounts() {
@@ -1417,6 +1458,7 @@
           const on = selected.has(name);
           return `<button type="button" class="target-row${on ? " on" : ""}" data-name="${escapeAttr(name)}">
             <span class="target-check">${on ? "✓" : ""}</span>
+            ${avatarImg(row.avatar, name)}
             <span class="target-main"><b>${escapeHtml(name)}</b><small class="kind">${escapeHtml(kind)}</small></span>
             <span class="spark">${escapeHtml(spark)}</span>
           </button>`;
@@ -1455,6 +1497,19 @@
         const items = data.items || [];
         window.__accountChats[uid] = { items, at: Date.now() };
         state.items = items;
+        const acc = window.__accounts[state.index];
+        if (acc) {
+          if (data.self_avatar) acc.avatar = data.self_avatar;
+          const avatars = Object.assign({}, acc.target_avatars || {});
+          const sparks = Object.assign({}, acc.target_sparks || {});
+          items.forEach((row) => {
+            if (!row || !row.name) return;
+            if (row.avatar) avatars[row.name] = row.avatar;
+            if (plausibleSpark(row.spark_days)) sparks[row.name] = plausibleSpark(row.spark_days);
+          });
+          acc.target_avatars = avatars;
+          acc.target_sparks = sparks;
+        }
         renderTargetPickerList();
         toast(data.message || ("已读取 " + items.length + " 个会话"));
       } catch (err) {
@@ -1493,6 +1548,18 @@
       window.__accounts = collectAccounts();
       if (!window.__accounts[state.index]) return;
       window.__accounts[state.index].targets = [...state.selected];
+      const avatars = {};
+      const sparks = {};
+      const prevA = window.__accounts[state.index].target_avatars || {};
+      const prevS = window.__accounts[state.index].target_sparks || {};
+      state.selected.forEach((name) => {
+        const row = (state.items || []).find((item) => item && item.name === name) || {};
+        if (row.avatar || prevA[name]) avatars[name] = row.avatar || prevA[name];
+        const days = plausibleSpark(row.spark_days) || plausibleSpark(prevS[name]);
+        if (days) sparks[name] = days;
+      });
+      window.__accounts[state.index].target_avatars = avatars;
+      window.__accounts[state.index].target_sparks = sparks;
       closeTargetPicker();
       renderAccounts();
       await saveAccount(state.index);
@@ -1916,10 +1983,14 @@
         cron_minute: 0,
         cookie_source: data.cookie_source || "qr",
         cookie_status: "ok",
+        avatar: data.avatar || "",
       };
       const idx = Number(data.replace_index);
       if (Number.isInteger(idx) && idx >= 0 && idx < window.__accounts.length) {
         next.targets = window.__accounts[idx].targets || [];
+        next.target_avatars = window.__accounts[idx].target_avatars || {};
+        next.target_sparks = window.__accounts[idx].target_sparks || {};
+        next.avatar = data.avatar || window.__accounts[idx].avatar || "";
         next.cron_hour = Number.isFinite(Number(window.__accounts[idx].cron_hour)) ? window.__accounts[idx].cron_hour : 9;
         next.cron_minute = Number.isFinite(Number(window.__accounts[idx].cron_minute)) ? window.__accounts[idx].cron_minute : 0;
         const oldId = window.__accounts[idx].unique_id;
@@ -1928,6 +1999,9 @@
       } else if (window.__accounts.some((item) => item.unique_id === uniqueId)) {
         const exist = window.__accounts.findIndex((item) => item.unique_id === uniqueId);
         next.targets = window.__accounts[exist].targets || [];
+        next.target_avatars = window.__accounts[exist].target_avatars || {};
+        next.target_sparks = window.__accounts[exist].target_sparks || {};
+        next.avatar = data.avatar || window.__accounts[exist].avatar || "";
         next.cron_hour = Number.isFinite(Number(window.__accounts[exist].cron_hour)) ? window.__accounts[exist].cron_hour : 9;
         next.cron_minute = Number.isFinite(Number(window.__accounts[exist].cron_minute)) ? window.__accounts[exist].cron_minute : 0;
         window.__accounts[exist] = next;
@@ -2137,6 +2211,9 @@
           if (data.valid && !data.mismatch) window.__accounts[index].cookies_set = true;
           if (data.valid && data.username && data.username !== "抖音账号" && !data.mismatch) {
             window.__accounts[index].username = data.username;
+          }
+          if (data.valid && !data.mismatch && data.avatar) {
+            window.__accounts[index].avatar = data.avatar;
           }
         }
         renderAccounts();

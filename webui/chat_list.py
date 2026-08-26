@@ -49,9 +49,21 @@ EXTRACT_JS = """() => {
   return items.map((el) => {
     const name = titleOf(el).split('\\n').map((x) => x.trim()).filter(Boolean)[0] || '';
     const spark = readStreak(el);
+    const img = el.querySelector('.commonIMAvataravatarContainer img, .semi-avatar img, img[src*="aweme-avatar"], img[src*="douyinpic.com"]');
+    const avatar = img ? String(img.currentSrc || img.src || img.getAttribute('src') || '').trim() : '';
     const isGroup = /群/.test(name);
-    return { name, kind: isGroup ? 'group' : 'friend', spark_days: spark };
+    return { name, kind: isGroup ? 'group' : 'friend', spark_days: spark, avatar };
   }).filter((row) => row.name);
+}"""
+
+EXTRACT_SELF_AVATAR_JS = """() => {
+  const imgs = Array.from(document.querySelectorAll('img[src*="aweme-avatar"], img[src*="douyinpic.com/img/"]'));
+  for (const img of imgs) {
+    if (img.closest('[data-e2e="conversation-item"], [class*="conversationItemwrapper"]')) continue;
+    const src = String(img.currentSrc || img.src || img.getAttribute('src') || '').trim();
+    if (/^https?:\\/\\//i.test(src) && !/^data:/i.test(src)) return src;
+  }
+  return '';
 }"""
 
 SCROLL_JS = """() => {
@@ -98,6 +110,17 @@ def is_plausible_spark(n: Any) -> bool:
     if 1900 <= days <= 2099:
         return False
     return True
+
+
+def clean_avatar_url(url: str) -> str:
+    raw = str(url or "").strip()
+    if raw.startswith("//"):
+        raw = "https:" + raw
+    if not re.match(r"^https?://", raw, re.I):
+        return ""
+    if re.search(r"(javascript:|data:|blob:)", raw, re.I):
+        return ""
+    return raw[:800]
 
 
 def parse_spark_days(text: str) -> int | None:
@@ -273,9 +296,12 @@ def merge_conversations(*groups: list[dict]) -> list[dict]:
                 spark = parse_spark_days(str(spark or ""))
             if not is_plausible_spark(spark):
                 spark = None
-            row = by_name.get(name) or {"name": name, "kind": kind, "spark_days": None}
+            row = by_name.get(name) or {"name": name, "kind": kind, "spark_days": None, "avatar": ""}
             if kind == "group":
                 row["kind"] = "group"
+            avatar = clean_avatar_url((item or {}).get("avatar") or "")
+            if avatar:
+                row["avatar"] = avatar
             if spark:
                 current = int(row.get("spark_days") or 0)
                 if not is_plausible_spark(current) or spark > current:
@@ -332,7 +358,12 @@ def _collect_dom(page) -> list[dict]:
             if not is_plausible_spark(spark):
                 spark = None
             kind = _row_kind(name, text, str((item or {}).get("kind") or ""))
-            rows.append({"name": name, "kind": kind, "spark_days": spark})
+            rows.append({
+                "name": name,
+                "kind": kind,
+                "spark_days": spark,
+                "avatar": clean_avatar_url((item or {}).get("avatar") or ""),
+            })
     return rows
 
 
@@ -388,7 +419,7 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         items: list[dict] = []
         for _ in range(8):
             api_names = [
-                {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None}
+                {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None, "avatar": ""}
                 for row in api_rows
                 if row.get("name")
             ]
@@ -410,21 +441,27 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         items = merge_conversations(
             items,
             [
-                {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None}
+                {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None, "avatar": ""}
                 for row in api_rows
                 if row.get("name")
             ],
             _collect_dom(page),
         )
         logger.info("读取会话列表 count=%s api=%s url=%s", len(items), len(api_rows), getattr(page, "url", ""))
+        self_avatar = ""
+        try:
+            self_avatar = clean_avatar_url(page.evaluate(EXTRACT_SELF_AVATAR_JS) or "")
+        except Exception:
+            self_avatar = ""
         if not items:
             _dump_chat_debug(page, "picker")
             return {
                 "ok": False,
                 "items": [],
+                "self_avatar": self_avatar,
                 "message": "私信页没出现好友列表。Cookie 检测过首页不等于网页私信能打开，请确认这个号能打开抖音网页私信",
             }
-        return {"ok": True, "items": items, "message": f"已读取 {len(items)} 个会话"}
+        return {"ok": True, "items": items, "self_avatar": self_avatar, "message": f"已读取 {len(items)} 个会话"}
     except Exception as exc:
         logger.exception("读取会话列表失败")
         return {"ok": False, "items": [], "message": f"读取失败：{exc}"}
