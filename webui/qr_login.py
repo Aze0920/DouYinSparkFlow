@@ -210,8 +210,8 @@ def _jump_fields(url: str) -> dict[str, str]:
         return {
             "app_jump_url": jump,
             "app_scheme": scheme,
-            "app_scheme_ios": douyin_universal_link(scheme_ios),
-            "app_open_url": scheme_ios,
+            "app_scheme_ios": scheme_ios,
+            "app_open_url": douyin_universal_link(scheme_ios),
             "app_open_url_android": scheme,
         }
     target = with_inapp_params(jump) if is_login_landing_url(jump) else jump
@@ -221,8 +221,8 @@ def _jump_fields(url: str) -> dict[str, str]:
     return {
         "app_jump_url": jump,
         "app_scheme": scheme,
-        "app_scheme_ios": douyin_universal_link(scheme_ios),
-        "app_open_url": scheme_ios,
+        "app_scheme_ios": scheme_ios,
+        "app_open_url": douyin_universal_link(scheme_ios),
         "app_open_url_android": intent or scheme,
     }
 

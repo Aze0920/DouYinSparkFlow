@@ -1688,4 +1688,4 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.getenv("WEB_PORT", "8787"))
-    uvicorn.run("webui.app:app", host="0.0.0.0", port=port, reload=False)
+    uvicorn.run("webui.app:app", host="0.0.0.0", port=port, reload=False, timeout_keep_alive=15)

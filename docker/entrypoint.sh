@@ -80,7 +80,7 @@ chmod 0644 /etc/cron.d/douyin-spark-flow
 echo "[docker] timezone: ${TZ:-UTC}"
 echo "[docker] cron schedule: ${CRON_SCHEDULE} (+${CRON_SECOND}s)"
 echo "[docker] starting web ui on :8787"
-python -m uvicorn webui.app:app --host 0.0.0.0 --port 8787 &
+python -m uvicorn webui.app:app --host 0.0.0.0 --port 8787 --timeout-keep-alive 15 &
 echo "[docker] container started, waiting for scheduled runs"
 
 exec cron -f
