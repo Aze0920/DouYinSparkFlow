@@ -71,14 +71,14 @@
   <div id="wpModal" class="modal-mask hidden" onclick="if(event.target===this)closeWxpusherBind()">
     <div class="modal-card qr-card">
       <h3>微信扫码开启推送</h3>
-      <p class="sub" id="wpModalHint">用微信扫下面的码，会绑到当前这个登录账号。这个账号下的抖音号只会发到这个微信。</p>
-      <div class="wp-qr-wrap">
+      <p class="sub" id="wpModalHint">用微信扫下面的码，会绑到当前这个登录账号。</p>
+      <div class="wp-qr-wrap" id="wpQrWrap">
         <img id="wpQrImage" class="qr-image hidden" alt="WxPusher 绑定二维码" referrerpolicy="no-referrer" />
         <div id="wpQrLoading">正在生成二维码…</div>
       </div>
       <p class="sub" id="wpModalStatus"></p>
       <div class="modal-actions wp-modal-actions">
-        <button class="btn-ghost" type="button" onclick="refreshWxpusherQr()">刷新二维码</button>
+        <button class="btn-ghost" type="button" id="wpRefreshBtn" onclick="refreshWxpusherQr()">刷新二维码</button>
         <button class="btn-ghost" type="button" id="wpTestBtn" onclick="testWxpusherBind()">发送测试</button>
         <button class="btn-ghost" type="button" id="wpUnbindBtn" onclick="unbindWxpusher()">解绑</button>
         <button class="btn-primary" type="button" onclick="closeWxpusherBind()">关闭</button>
@@ -170,7 +170,7 @@
           <article class="card card-click" id="wpBindCard" onclick="openWxpusherBind()">
             <label>消息推送</label>
             <strong id="wpBindLabel">未绑定</strong>
-            <div class="card-sub" id="wpBindHint">微信扫码，只收你名下抖音号的消息</div>
+            <div class="card-sub hidden" id="wpBindHint"></div>
           </article>
         </div>
         <section class="panel">
@@ -440,13 +440,11 @@
     }
     function renderWxpusherCard() {
       const bound = !!(current && current.wxpusher_bound);
-      const who = (current && current.username) || "当前用户";
       const mask = (current && current.wxpusher_mask) || "";
       if ($("wpBindLabel")) $("wpBindLabel").textContent = bound ? ("已绑定" + (mask ? " · " + mask : "")) : "未绑定";
       if ($("wpBindHint")) {
-        $("wpBindHint").textContent = bound
-          ? ("「" + who + "」名下的抖音号会发到这个微信")
-          : ("点这里，用微信扫码绑到「" + who + "」");
+        $("wpBindHint").textContent = "";
+        $("wpBindHint").classList.add("hidden");
       }
       if ($("wpTestBtn")) $("wpTestBtn").classList.toggle("hidden", !bound);
       if ($("wpUnbindBtn")) $("wpUnbindBtn").classList.toggle("hidden", !bound);
@@ -1596,6 +1594,16 @@
       if (data.bound === false) current.wxpusher_mask = "";
       renderWxpusherCard();
     }
+    function hideWxpusherQr() {
+      if ($("wpQrWrap")) $("wpQrWrap").classList.add("hidden");
+      if ($("wpQrImage")) $("wpQrImage").classList.add("hidden");
+      if ($("wpQrLoading")) $("wpQrLoading").classList.add("hidden");
+      if ($("wpRefreshBtn")) $("wpRefreshBtn").classList.add("hidden");
+    }
+    function showWxpusherQrArea() {
+      if ($("wpQrWrap")) $("wpQrWrap").classList.remove("hidden");
+      if ($("wpRefreshBtn")) $("wpRefreshBtn").classList.remove("hidden");
+    }
     function showWxpusherQr(url) {
       const img = $("wpQrImage");
       const loading = $("wpQrLoading");
@@ -1621,13 +1629,21 @@
     }
     async function openWxpusherBind() {
       const who = (current && current.username) || "当前用户";
+      const bound = !!(current && current.wxpusher_bound);
       if ($("wpModalHint")) {
-        $("wpModalHint").textContent =
-          "用微信扫下面的码，会绑到登录账号「" + who + "」。这个账号下的抖音号只会发到这个微信，别人的号不会发过来。";
+        $("wpModalHint").textContent = bound
+          ? ("已绑到登录账号「" + who + "」")
+          : ("用微信扫下面的码，会绑到登录账号「" + who + "」");
       }
       if ($("wpModal")) $("wpModal").classList.remove("hidden");
       wpBindOpen = true;
       renderWxpusherCard();
+      if (bound) {
+        hideWxpusherQr();
+        if ($("wpModalStatus")) $("wpModalStatus").textContent = "已绑定。";
+        return;
+      }
+      showWxpusherQrArea();
       await refreshWxpusherQr();
     }
     async function closeWxpusherBind() {
@@ -1641,6 +1657,7 @@
     async function refreshWxpusherQr() {
       if (!current) return;
       stopWxpusherPoll();
+      showWxpusherQrArea();
       if ($("wpModalStatus")) $("wpModalStatus").textContent = "请用微信扫码，大约 10 秒内完成绑定。";
       try {
         const data = await api("/api/notify/wxpusher/qr", {
@@ -1666,7 +1683,10 @@
         const data = await api("/api/notify/wxpusher/poll");
         if (data.bound && !data.waiting) {
           applyWxpusherBind(data);
-          if ($("wpModalStatus")) $("wpModalStatus").textContent = "已绑定。这个登录账号下的抖音号会发到这个微信。";
+          hideWxpusherQr();
+          const who = (current && current.username) || "当前用户";
+          if ($("wpModalHint")) $("wpModalHint").textContent = "已绑到登录账号「" + who + "」";
+          if ($("wpModalStatus")) $("wpModalStatus").textContent = "已绑定。";
           toast("微信推送已绑定");
           try { await loadConfig(); } catch (e) {}
           return;

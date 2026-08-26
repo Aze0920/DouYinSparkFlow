@@ -20,6 +20,8 @@ WP_POLL_MIN = 10
 WP_CREATE_QR = "https://wxpusher.zjiecode.com/api/fun/create/qrcode"
 WP_SCAN_UID = "https://wxpusher.zjiecode.com/api/fun/scan-qrcode-uid"
 WP_SEND = "https://wxpusher.zjiecode.com/api/send/message"
+WP_USER_LIST = "https://wxpusher.zjiecode.com/api/fun/wxuser/v2"
+WP_REMOVE = "https://wxpusher.zjiecode.com/api/fun/remove"
 
 _token_cache = {"token": "", "expire": 0}
 _bind_lock = threading.Lock()
@@ -209,6 +211,61 @@ def _app_token() -> str:
     if not token:
         raise RuntimeError("请管理员先在设置里填写 WxPusher appToken")
     return token
+
+
+def _wxpusher_token() -> str:
+    token = str((load_notify().get("wxpusher") or {}).get("app_token") or "").strip()
+    if not token:
+        raise RuntimeError("请管理员先在设置里填写 WxPusher appToken")
+    return token
+
+
+def remove_wxpusher_uid(uid: str) -> int:
+    uid = str(uid or "").strip()
+    if not uid:
+        return 0
+    token = _wxpusher_token()
+    with httpx.Client(timeout=10.0) as client:
+        resp = client.get(
+            WP_USER_LIST,
+            params={"appToken": token, "page": 1, "pageSize": 100, "uid": uid},
+        )
+        data = resp.json()
+        if int(data.get("code") or 0) != 1000:
+            raise RuntimeError(data.get("msg") or "查询 WxPusher 用户失败")
+        payload = data.get("data") if isinstance(data.get("data"), dict) else {}
+        records = payload.get("records") or []
+        ids = []
+        for item in records:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("uid") or "").strip() != uid:
+                continue
+            rec_id = item.get("id")
+            if rec_id in (None, ""):
+                continue
+            ids.append(rec_id)
+        if not ids:
+            logger.info("WxPusher 后台没有可删除的关注 uid=%s", uid)
+            return 0
+        removed = 0
+        for rec_id in ids:
+            resp = client.delete(WP_REMOVE, params={"appToken": token, "id": rec_id})
+            result = resp.json()
+            if int(result.get("code") or 0) != 1000:
+                raise RuntimeError(result.get("msg") or "WxPusher 删除用户失败")
+            removed += 1
+            logger.info("已从 WxPusher 删除关注 id=%s uid=%s", rec_id, uid)
+    return removed
+
+
+def unbind_user_wxpusher(username: str) -> dict | None:
+    name = str(username or "").strip()
+    uid = user_wxpusher_uid(name)
+    if uid:
+        remove_wxpusher_uid(uid)
+    cancel_wxpusher_qr(name)
+    return set_user_wxpusher(name, "")
 
 
 def verify_wechat_signature(signature: str, timestamp: str, nonce: str) -> bool:

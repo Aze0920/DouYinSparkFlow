@@ -62,8 +62,8 @@ from webui.notify import (
     save_notify,
     send_wechat,
     send_wxpusher,
-    set_user_wxpusher,
     start_wxpusher_qr,
+    unbind_user_wxpusher,
     user_wxpusher_uid,
     verify_wechat_signature,
     wxpusher_qr_image,
@@ -736,8 +736,10 @@ def cancel_wxpusher_bind(request: Request):
 def unbind_wxpusher(request: Request):
     user = require_auth(request)
     name = user.get("username") or ""
-    cancel_wxpusher_qr(name)
-    saved = set_user_wxpusher(name, "")
+    try:
+        saved = unbind_user_wxpusher(name)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     logger.info("已解绑 WxPusher user=%s", name)
     return {"ok": True, **public_wxpusher(saved)}
 
