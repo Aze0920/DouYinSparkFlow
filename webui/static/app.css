@@ -858,10 +858,44 @@ body.spark-locked .spark-action {
   html, body { overflow: auto; height: auto; }
   .login-page { min-height: 100dvh; }
   .login-card { padding: 26px 20px 22px; }
-  .cards, .grid.two, .accounts-grid, .users-grid, .dash-stats, .dash-body { grid-template-columns: 1fr; }
-  .dash-hero { flex-direction: column; align-items: stretch; }
+  .cards, .grid.two, .accounts-grid, .users-grid, .dash-body { grid-template-columns: 1fr; }
+  .dash-hero { flex-direction: column; align-items: stretch; gap: 0; }
+  .dash-hero-copy { display: none; }
   .dash-title { font-size: 28px; }
   .dash-user-card { min-width: 0; }
+  .dash-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .dash-stat {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "num icon"
+      "label icon"
+      "sub sub";
+    align-items: start;
+    column-gap: 8px;
+    padding: 14px 12px 12px;
+  }
+  .dash-stat-icon { grid-area: icon; }
+  .dash-stat strong {
+    grid-area: num;
+    font-size: 26px;
+    line-height: 1.1;
+  }
+  .dash-stat label {
+    grid-area: label;
+    margin: 6px 0 0;
+    font-size: 12px;
+  }
+  .dash-stat .card-sub {
+    grid-area: sub;
+    margin-top: 8px;
+    min-height: 0;
+    font-size: 11px;
+  }
+  .dash-panel { min-height: 0; }
   .menu-btn { display: grid; }
   .sidebar-toggle { display: none; }
   .sidebar {
