@@ -1208,8 +1208,17 @@
       const mm = Number.isFinite(m) ? Math.min(59, Math.max(0, m)) : 0;
       return String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0");
     }
+    function accountHasCookie(data) {
+      if (!data) return false;
+      const uid = String(data.unique_id || "").trim();
+      if (!uid) return false;
+      if (data.cookies_set) return true;
+      if (data.cookies) return true;
+      if (window.__accountCookies && window.__accountCookies[uid]) return true;
+      return false;
+    }
     function cookieStatusMeta(data) {
-      const bound = !!(data.unique_id && (data.cookies_set || data.cookies || window.__accountCookies[data.unique_id]));
+      const bound = accountHasCookie(data);
       const status = data.cookie_status || "";
       if (status === "ok") return { text: "正常", cls: "ck-ok" };
       if (status === "bad") return { text: "异常", cls: "ck-bad" };
@@ -1217,7 +1226,7 @@
       return { text: "未登录", cls: "ck-unknown" };
     }
     function cookieSourceText(data) {
-      const bound = !!(data.unique_id && (data.cookies_set || data.cookies || window.__accountCookies[data.unique_id]));
+      const bound = accountHasCookie(data);
       if (data.cookie_source === "json") return "JSON Cookie";
       if (data.cookie_source === "qr") return "扫码 Cookie";
       return bound ? "已绑定 Cookie" : "未绑定 Cookie";
@@ -1253,7 +1262,7 @@
     function accountCard(data, index) {
       const name = data.username || "抖音账号";
       const uid = data.unique_id || "";
-      const bound = !!(uid && (data.cookies_set || data.cookies || window.__accountCookies[uid]));
+      const bound = accountHasCookie(data);
       const cron = formatCron(data.cron_hour, data.cron_minute);
       const operate = canSpark();
       const ck = cookieStatusMeta(data);
@@ -1276,6 +1285,7 @@
         <input type="hidden" class="unique-id" value="${escapeAttr(uid)}" />
         <input type="hidden" class="cookie-source" value="${escapeAttr(data.cookie_source || "")}" />
         <input type="hidden" class="cookie-status" value="${escapeAttr(data.cookie_status || "")}" />
+        <input type="hidden" class="cookies-set" value="${bound ? "1" : ""}" />
         <input type="hidden" class="account-owner" value="${escapeAttr(data.owner || "")}" />
         <label>每天发送时间
           <input class="cron-time spark-action" type="time" name="cron-${index}-${escapeAttr(uid)}" autocomplete="off" value="${escapeAttr(cron)}" ${operate ? "" : "disabled"} />
@@ -1330,6 +1340,7 @@
         cookie_source: (node.querySelector(".cookie-source") && node.querySelector(".cookie-source").value) || "",
         cookie_status: (node.querySelector(".cookie-status") && node.querySelector(".cookie-status").value) || "",
         owner: (node.querySelector(".account-owner") && node.querySelector(".account-owner").value) || "",
+        cookies_set: !!(node.querySelector(".cookies-set") && node.querySelector(".cookies-set").value === "1") || !!(uniqueId && window.__accountCookies[uniqueId]),
         cookies: window.__accountCookies[uniqueId] || "",
       };
     }
@@ -1419,7 +1430,7 @@
       window.__accounts = collectAccounts();
       const item = window.__accounts[index];
       if (!item || !item.unique_id) { toast("请先登录这个账号", "err"); return; }
-      if (!(item.cookies || window.__accountCookies[item.unique_id])) {
+      if (!accountHasCookie(item)) {
         toast("这个账号还没有 Cookie，请先登录", "err");
         return;
       }
@@ -2083,6 +2094,7 @@
         window.__accounts = collectAccounts();
         if (window.__accounts[index]) {
           window.__accounts[index].cookie_status = data.cookie_status || (data.valid && !data.mismatch ? "ok" : "bad");
+          if (data.valid && !data.mismatch) window.__accounts[index].cookies_set = true;
           if (data.valid && data.username && data.username !== "抖音账号" && !data.mismatch) {
             window.__accounts[index].username = data.username;
           }

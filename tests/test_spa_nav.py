@@ -24,6 +24,9 @@ class SpaNavTests(unittest.TestCase):
         self.assertNotIn('id="expiresCard"', INDEX)
         self.assertIn("dash-admin-cards", INDEX)
         self.assertIn("选择好友和群聊", INDEX)
+        self.assertIn("function accountHasCookie", INDEX)
+        self.assertIn('class="cookies-set"', INDEX)
+        self.assertIn("accountHasCookie(item)", INDEX)
 
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)
