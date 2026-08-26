@@ -34,6 +34,28 @@ class ChatListTests(unittest.TestCase):
         self.assertEqual(by_name["思文"]["spark_days"], 9)
         self.assertEqual(by_name["同事群"]["kind"], "group")
 
+    def test_harvest_nested_user_info(self):
+        payload = {
+            "data": {
+                "conversation_list": [
+                    {
+                        "conversation_short_id": "11",
+                        "conversation_type": 1,
+                        "user_info": {"nickname": "王洁", "remark_name": "洁洁", "sec_uid": "x"},
+                    },
+                    {
+                        "conversation_short_id": "22",
+                        "conversation_type": 2,
+                        "conversation_core_info": {"name": "家庭群"},
+                    },
+                ]
+            }
+        }
+        rows = harvest_api_conversations(payload)
+        by_name = {item["name"]: item for item in rows}
+        self.assertEqual(by_name["洁洁"]["kind"], "friend")
+        self.assertEqual(by_name["家庭群"]["kind"], "group")
+
 
 if __name__ == "__main__":
     unittest.main()

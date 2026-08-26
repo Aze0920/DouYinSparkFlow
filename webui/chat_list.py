@@ -9,7 +9,7 @@ from typing import Any
 from core.browser import get_browser
 from utils.logger import setup_logger
 from webui.cookie_probe import _probe_lock
-from webui.qr_login import CHAT, UA
+from webui.qr_login import CHAT
 
 logger = setup_logger("app", "DEBUG")
 
@@ -98,16 +98,41 @@ def _spark_from_obj(obj: Any) -> int | None:
     return parse_spark_days(str(obj or ""))
 
 
+NAME_KEYS = ("remark_name", "nick_name", "nickname", "display_name", "name")
+NOISE_NAMES = {"私信", "消息", "搜索", "发起聊天", "没有消息", "陌生人消息"}
+
+
+def _pick_name(payload: dict) -> str:
+    for key in NAME_KEYS:
+        val = str(payload.get(key) or "").strip()
+        if val and val not in {"null", "undefined"}:
+            return val
+    return ""
+
+
+def _nested_name(payload: dict) -> str:
+    name = _pick_name(payload)
+    if name:
+        return name
+    for key in ("user_info", "user", "participant", "conversation_core_info", "core_info", "owner"):
+        nested = payload.get(key)
+        if isinstance(nested, dict):
+            name = _pick_name(nested)
+            if name:
+                return name
+    for key in ("participants", "users", "members"):
+        people = payload.get(key)
+        if isinstance(people, list) and people and isinstance(people[0], dict):
+            name = _pick_name(people[0])
+            if name:
+                return name
+    return ""
+
+
 def harvest_api_conversations(payload: Any, out: list[dict] | None = None) -> list[dict]:
     rows = out if out is not None else []
     if isinstance(payload, dict):
-        name = str(
-            payload.get("name")
-            or payload.get("nick_name")
-            or payload.get("nickname")
-            or payload.get("remark_name")
-            or ""
-        ).strip()
+        name = _nested_name(payload)
         ctype = payload.get("conversation_type")
         if ctype is None:
             ctype = payload.get("type")
@@ -116,8 +141,9 @@ def harvest_api_conversations(payload: Any, out: list[dict] | None = None) -> li
             key in payload
             for key in ("conversation_short_id", "conversation_id", "conversation_type", "conversation_core_info")
         )
-        if name and (looks_conv or spark is not None):
-            kind = "group" if str(ctype) in {"2", "3"} else "friend"
+        looks_user = bool(_pick_name(payload)) and any(key in payload for key in ("sec_uid", "short_id"))
+        if name and name not in NOISE_NAMES and (looks_conv or looks_user or spark is not None):
+            kind = "group" if str(ctype) in {"2", "3", "10"} else "friend"
             if "群" in name:
                 kind = "group"
             rows.append({"name": name, "kind": kind, "spark_days": spark})
@@ -157,6 +183,20 @@ def merge_conversations(*groups: list[dict]) -> list[dict]:
     return friends + groups_out
 
 
+def _is_im_url(url: str) -> bool:
+    raw = str(url or "").lower()
+    return any(token in raw for token in ("/im/", "imapi", "conversation", "im/user"))
+
+
+def _row_kind(name: str, text: str, flag: str = "") -> str:
+    if str(flag or "") == "group":
+        return "group"
+    blob = f"{name} {text}"
+    if "群聊" in blob or "群" in name or re.search(r"\d+\s*人", text or ""):
+        return "group"
+    return "friend"
+
+
 def _collect_dom(page) -> list[dict]:
     rows: list[dict] = []
     scopes = [page]
@@ -171,11 +211,36 @@ def _collect_dom(page) -> list[dict]:
             continue
         for item in part:
             name = str((item or {}).get("name") or "").strip()
-            if not name:
+            if not name or name in NOISE_NAMES:
                 continue
             text = str((item or {}).get("text") or "")
-            kind = "group" if (item or {}).get("kind") == "group" else "friend"
+            kind = _row_kind(name, text, str((item or {}).get("kind") or ""))
             rows.append({"name": name, "kind": kind, "spark_days": parse_spark_days(text)})
+    return rows
+
+
+def _collect_from_locators(item_loc) -> list[dict]:
+    from core.tasks import _item_title
+
+    rows: list[dict] = []
+    if item_loc is None:
+        return rows
+    try:
+        elements = item_loc.all()
+    except Exception:
+        return rows
+    for element in elements:
+        try:
+            name = str(_item_title(element) or "").split("\n")[0].strip()
+        except Exception:
+            name = ""
+        if not name or name in NOISE_NAMES:
+            continue
+        try:
+            text = str(element.inner_text(timeout=800) or "")
+        except Exception:
+            text = name
+        rows.append({"name": name, "kind": _row_kind(name, text), "spark_days": parse_spark_days(text)})
     return rows
 
 
@@ -184,15 +249,22 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         return {"ok": False, "items": [], "message": "正在检测另一个账号，请稍后再试"}
     playwright = None
     browser = None
+    context = None
     api_rows: list[dict] = []
     try:
-        playwright, browser = get_browser()
-        context = browser.new_context(
-            user_agent=UA,
-            locale="zh-CN",
-            viewport={"width": 1280, "height": 860},
+        from core.browser import make_context
+        from core.tasks import (
+            CONVERSATION_ITEM_SELECTORS,
+            CONVERSATION_LIST_SELECTORS,
+            _dump_chat_debug,
+            _find_locator,
+            _looks_like_login,
+            _scroll_list,
+            _wait_locator,
         )
-        context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
+
+        playwright, browser = get_browser()
+        context = make_context(browser)
         try:
             context.add_cookies(cookies)
         except Exception:
@@ -201,7 +273,7 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
 
         def on_response(response):
             url = str(getattr(response, "url", "") or "")
-            if "/im/" not in url and "conversation" not in url.lower():
+            if not _is_im_url(url):
                 return
             try:
                 data = response.json()
@@ -212,35 +284,51 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         page = context.new_page()
         page.on("response", on_response)
         page.goto(CHAT, wait_until="domcontentloaded", timeout=25000)
-        time.sleep(1.0)
-        try:
-            body = page.inner_text("body", timeout=2000) or ""
-        except Exception:
-            body = ""
-        if any(hint in body for hint in ("扫码登录", "登录后免费畅享", "验证码登录", "打开「抖音APP」")):
+        time.sleep(0.8)
+        if _looks_like_login(page):
+            _dump_chat_debug(page, "picker")
             return {"ok": False, "items": [], "message": "Cookie 已失效，请重新登录后再选好友"}
 
+        item_loc, scope, item_sel = _wait_locator(page, CONVERSATION_ITEM_SELECTORS, timeout_ms=15000)
+        list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
+        logger.info("选择好友等待会话列表 item=%s list=%s", item_sel or "无", list_sel or "无")
+
         items: list[dict] = []
-        for _ in range(10):
-            items = merge_conversations(items, _collect_dom(page), api_rows)
+        for _ in range(8):
+            items = merge_conversations(items, _collect_from_locators(item_loc), _collect_dom(page), api_rows)
             moved = False
             try:
-                moved = bool(page.evaluate(SCROLL_JS))
+                moved = bool(_scroll_list(scope, list_loc, item_loc))
             except Exception:
-                moved = False
-            if not moved and items:
+                try:
+                    moved = bool(page.evaluate(SCROLL_JS))
+                except Exception:
+                    moved = False
+            item_loc, scope, _ = _find_locator(page, CONVERSATION_ITEM_SELECTORS)
+            list_loc, _, _ = _find_locator(page, CONVERSATION_LIST_SELECTORS)
+            if items and not moved:
                 break
-            time.sleep(0.4)
+            time.sleep(0.35)
 
-        items = merge_conversations(items, _collect_dom(page), api_rows)
-        logger.info("读取会话列表 count=%s", len(items))
+        items = merge_conversations(items, _collect_from_locators(item_loc), _collect_dom(page), api_rows)
+        logger.info("读取会话列表 count=%s api=%s url=%s", len(items), len(api_rows), getattr(page, "url", ""))
         if not items:
-            return {"ok": False, "items": [], "message": "没有读到会话列表，请确认这个号能打开抖音网页私信"}
+            _dump_chat_debug(page, "picker")
+            return {
+                "ok": False,
+                "items": [],
+                "message": "私信页没出现好友列表。Cookie 检测过首页不等于网页私信能打开，请确认这个号能打开抖音网页私信",
+            }
         return {"ok": True, "items": items, "message": f"已读取 {len(items)} 个会话"}
     except Exception as exc:
         logger.exception("读取会话列表失败")
         return {"ok": False, "items": [], "message": f"读取失败：{exc}"}
     finally:
+        try:
+            if context:
+                context.close()
+        except Exception:
+            pass
         try:
             if browser:
                 browser.close()
