@@ -27,6 +27,10 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("function accountHasCookie", INDEX)
         self.assertIn('class="cookies-set"', INDEX)
         self.assertIn("accountHasCookie(item)", INDEX)
+        self.assertIn("bindTargetPickerClicks", INDEX)
+        self.assertIn("sortPickerRows", INDEX)
+        self.assertIn('data-name="${escapeAttr(name)}"', INDEX)
+        self.assertNotIn("toggleTargetRow(${JSON.stringify(name)})", INDEX)
 
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)

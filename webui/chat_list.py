@@ -44,6 +44,8 @@ EXTRACT_JS = """() => {
     for (const n of scope.querySelectorAll('span,small,em,i,b,strong,div')) {
       const t = String(n.innerText || '').trim();
       if (/^\\d{1,4}$/.test(t)) {
+        const nearby = String((n.parentElement && n.parentElement.innerText) || n.innerText || '');
+        if (/点燃中/.test(nearby) || /\\d+\\s*\\/\\s*\\d+/.test(nearby)) continue;
         const num = Number(t);
         if (num >= 1 && num <= 9999) return num;
       }

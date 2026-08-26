@@ -743,10 +743,24 @@ body.spark-locked .spark-action {
   text-align: left;
   width: 100%;
 }
-.target-row span { display: grid; gap: 2px; min-width: 0; }
+.target-row:focus {
+  outline: none;
+  box-shadow: none;
+  border-color: var(--line);
+}
+.target-row .target-check {
+  width: 18px;
+  flex-shrink: 0;
+  color: var(--ember);
+  font-weight: 800;
+}
+.target-row .target-main { display: grid; gap: 2px; min-width: 0; }
 .target-row .kind { color: var(--muted); font-size: 11px; }
 .target-row .spark { color: var(--ember); font-size: 12px; font-weight: 700; flex-shrink: 0; }
-.target-row.on { border-color: rgba(255, 122, 58, .55); background: rgba(255, 122, 58, .12); }
+.target-row.on {
+  border-color: rgba(255, 122, 58, .85);
+  background: rgba(255, 122, 58, .16);
+}
 .account-head-right { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .account-head-actions { display: flex; gap: 6px; flex-shrink: 0; }
 .ck-status {

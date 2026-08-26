@@ -1418,7 +1418,7 @@
     }
     function toggleTargetRow(name) {
       const state = window.__targetPicker;
-      if (!state) return;
+      if (!state || !name) return;
       if (state.selected.has(name)) state.selected.delete(name);
       else state.selected.add(name);
       renderTargetPickerList();
@@ -1469,6 +1469,7 @@
       };
       if ($("targetSearch")) $("targetSearch").value = "";
       if ($("targetModal")) $("targetModal").classList.remove("hidden");
+      bindTargetPickerClicks();
       await loadTargetPickerItems(false);
     }
     function refreshTargetPicker() {
