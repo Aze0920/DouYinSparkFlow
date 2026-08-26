@@ -106,17 +106,35 @@ STATS_FILE = ROOT / "config" / "spark_stats.json"
 _stats_lock = threading.Lock()
 DEFAULT_REPO = "Aze0920/DouYinSparkFlow"
 GIT_MIRROR_TEMPLATES = [
+    "https://ghfast.top/https://github.com/{repo}.git",
+    "https://gh-proxy.com/https://github.com/{repo}.git",
+    "https://gh.llkk.cc/https://github.com/{repo}.git",
+    "https://hub.gitmirror.com/https://github.com/{repo}.git",
     "https://ghproxy.net/https://github.com/{repo}.git",
     "https://mirror.ghproxy.com/https://github.com/{repo}.git",
     "https://gitclone.com/github.com/{repo}",
     "https://kkgithub.com/{repo}.git",
 ]
 VERSION_MIRROR_TEMPLATES = [
-    "https://ghproxy.net/https://raw.githubusercontent.com/{repo}/main/VERSION",
-    "https://mirror.ghproxy.com/https://raw.githubusercontent.com/{repo}/main/VERSION",
+    "https://cdn.jsdelivr.net/gh/{repo}@main/VERSION",
+    "https://ghfast.top/https://raw.githubusercontent.com/{repo}/main/VERSION",
+    "https://gh-proxy.com/https://raw.githubusercontent.com/{repo}/main/VERSION",
+    "https://gh.llkk.cc/https://raw.githubusercontent.com/{repo}/main/VERSION",
     "https://raw.gitmirror.com/{repo}/main/VERSION",
+    "https://ghproxy.net/https://raw.githubusercontent.com/{repo}/main/VERSION",
     "https://kkgithub.com/{repo}/raw/main/VERSION",
 ]
+MIRROR_HINTS = (
+    "ghproxy",
+    "gitclone",
+    "gitmirror",
+    "kkgithub",
+    "gh.ddlc",
+    "ghfast",
+    "gh-proxy",
+    "llkk",
+    "jsdelivr",
+)
 REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
 UNIQUE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 logger = setup_logger("app", os.getenv("LOG_LEVEL", "DEBUG"))
@@ -423,11 +441,16 @@ def _assert_account_quota(user: dict | None, count: int) -> None:
         raise HTTPException(status_code=403, detail=f"当前卡密最多添加 {limit} 个抖音账号")
 
 
-def run_git(*args: str, timeout: int = 20) -> subprocess.CompletedProcess:
+def run_git(*args: str, timeout: int = 20, ssl_verify: bool = True) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
+    cmd = ["git"]
+    if not ssl_verify:
+        env["GIT_SSL_NO_VERIFY"] = "1"
+        cmd.extend(["-c", "http.sslVerify=false"])
+    cmd.extend(args)
     return subprocess.run(
-        ["git", *args],
+        cmd,
         cwd=str(ROOT),
         capture_output=True,
         text=True,
@@ -460,7 +483,7 @@ def git_mirror_urls() -> list[str]:
     if custom:
         urls.append(custom.format(repo=repo) if "{repo}" in custom else custom)
     origin = origin_url()
-    if origin and any(key in origin for key in ("ghproxy", "gitclone", "gitmirror", "kkgithub", "gh.ddlc")):
+    if origin and any(key in origin for key in MIRROR_HINTS):
         urls.append(origin)
     urls.extend(template.format(repo=repo) for template in GIT_MIRROR_TEMPLATES)
     seen = set()
@@ -495,7 +518,7 @@ def fetch_remote_version() -> tuple[str, str]:
     for url in urls:
         try:
             logger.info("检测版本镜像: %s", url.split("?")[0])
-            with httpx.Client(timeout=3.5, follow_redirects=True, headers=headers) as client:
+            with httpx.Client(timeout=8.0, follow_redirects=True, headers=headers, verify=False) as client:
                 resp = client.get(url)
             version = parse_version_text(resp.text if resp.status_code == 200 else "")
             if version:
@@ -550,9 +573,9 @@ def pull_via_mirrors() -> tuple[str, str]:
     for url in git_mirror_urls():
         logger.info("尝试 git 镜像拉取: %s", url)
         try:
-            fetch = run_git("fetch", "--depth=1", url, "main", timeout=20)
+            fetch = run_git("fetch", "--depth=1", url, "main", timeout=45, ssl_verify=False)
             if fetch.returncode != 0:
-                fetch = run_git("fetch", url, "main", timeout=20)
+                fetch = run_git("fetch", url, "main", timeout=45, ssl_verify=False)
         except subprocess.TimeoutExpired:
             logger.warning("git 镜像超时: %s", url)
             errors.append(f"{url} 超时")

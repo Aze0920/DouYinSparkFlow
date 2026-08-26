@@ -61,6 +61,14 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("0 为永久", INDEX)
         self.assertIn('value="permanent"', INDEX)
 
+    def test_github_update_uses_current_mirrors(self):
+        self.assertIn("ghfast.top", APP_PY)
+        self.assertIn("cdn.jsdelivr.net", APP_PY)
+        self.assertIn("GIT_SSL_NO_VERIFY", APP_PY)
+        self.assertIn("http.sslVerify=false", APP_PY)
+        self.assertIn("ssl_verify=False", APP_PY)
+        self.assertIn("MIRROR_HINTS", APP_PY)
+
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)
         self.assertIn(".sidebar .nav-btn.admin-only", CSS)
