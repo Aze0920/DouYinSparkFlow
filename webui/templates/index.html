@@ -1437,6 +1437,7 @@
       const years = days.filter((n) => n >= 1900 && n <= 2099);
       return years.length >= Math.ceil(days.length * 0.5);
     }
+    const CHAT_CACHE_VER = 5;
     function renderTargetPickerList() {
       const state = window.__targetPicker;
       const box = $("targetList");
@@ -1482,7 +1483,7 @@
       if (!state) return;
       const uid = state.uid;
       const cached = (window.__accountChats || {})[uid];
-      if (!force && cached && cached.items && cached.items.length && (Date.now() - (cached.at || 0) < 5 * 60 * 1000) && !sparkCacheStale(cached.items)) {
+      if (!force && cached && cached.ver === CHAT_CACHE_VER && cached.items && cached.items.length && (Date.now() - (cached.at || 0) < 5 * 60 * 1000) && !sparkCacheStale(cached.items)) {
         state.items = cached.items;
         renderTargetPickerList();
         return;
@@ -1495,7 +1496,7 @@
           body: JSON.stringify({ unique_id: uid, cookies: window.__accountCookies[uid] || "" }),
         });
         const items = data.items || [];
-        window.__accountChats[uid] = { items, at: Date.now() };
+        window.__accountChats[uid] = { items, at: Date.now(), ver: CHAT_CACHE_VER };
         state.items = items;
         const acc = window.__accounts[state.index];
         if (acc) {

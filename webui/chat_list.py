@@ -24,35 +24,141 @@ EXTRACT_JS = """() => {
     items = Array.from(document.querySelectorAll(sel));
     if (items.length) break;
   }
+  items = items.filter((el) => items.every((other) => other === el || !other.contains(el)));
   const isSpark = (n) => {
     n = Number(n);
     return n >= 1 && n <= 3660 && !(n >= 1900 && n <= 2099);
   };
+  const nodeText = (n) => String((n && (n.innerText || n.textContent)) || '').replace(/[\\s\\u200b\\u00a0]+/g, ' ').trim();
+  const titleWrap = (el) => el.querySelector(
+    '.conversationConversationItemtitleWrapper, [class*="ItemtitleWrapper"], [class*="titleWrapper"], [class*="TitleWrapper"]'
+  );
   const titleOf = (el) => {
     const exact = el.querySelector('.conversationConversationItemtitle');
-    if (exact) return String(exact.innerText || '').trim();
-    const nodes = Array.from(el.querySelectorAll('[class*="Itemtitle"]'));
+    if (exact) return nodeText(exact);
+    const wrap = titleWrap(el);
+    const nodes = Array.from((wrap || el).querySelectorAll('[class*="Itemtitle"], [class*="item-title"]'));
     const hit = nodes.find((n) => !/wrapper/i.test(String(n.className || '')));
-    return String((hit && hit.innerText) || '').trim();
+    return nodeText(hit);
   };
-  const readStreak = (el) => {
-    const icon = el.querySelector('img.commonStreakicon, img[src*="flame_icon"], [class*="Streakicon"]');
-    const numEl = el.querySelector('.commonStreaknormalText, [class*="StreaknormalText"]');
-    const box = el.querySelector('.commonStreakstreakContainer, [class*="StreakstreakContainer"], [class*="streakContainer"]');
-    if (!icon && !numEl && !box) return null;
-    const txt = String((numEl && numEl.innerText) || (box && box.innerText) || '').replace(/\\s+/g, ' ').trim();
-    if (!txt || /点燃中/.test(txt) || /\\d+\\s*\\/\\s*\\d+/.test(txt)) return null;
-    const m = txt.match(/^(\\d{1,4})$/);
+  const isTimeNode = (n) => !!(n && n.closest && n.closest('[class*="timeStr"], [class*="TimeStr"], [class*="time-str"]'));
+  const cleanNum = (raw) => {
+    const t = String(raw || '').replace(/[\\s\\u200b\\u00a0]+/g, ' ').trim();
+    if (!t || /点燃中/.test(t) || /\\d+\\s*\\/\\s*\\d+/.test(t)) return null;
+    if (/^\\d{1,4}$/.test(t) && isSpark(Number(t))) return Number(t);
+    return null;
+  };
+  const stripTime = (line) => String(line || '')
+    .replace(/\\d{1,2}:\\d{2}/g, ' ')
+    .replace(/\\d+\\s*(秒前|分钟前|小时前|天前)/g, ' ')
+    .replace(/昨天|前天/g, ' ')
+    .replace(/\\s+/g, ' ')
+    .trim();
+  const sparkAfterName = (name, line) => {
+    if (!name || !line) return null;
+    const idx = line.indexOf(name);
+    if (idx < 0) return null;
+    const rest = line.slice(idx + name.length).trim();
+    const m = rest.match(/^(\\d{1,4})\\b/);
     if (m && isSpark(Number(m[1]))) return Number(m[1]);
     return null;
   };
+  const looksFlame = (node) => {
+    if (!node) return false;
+    const src = String(node.currentSrc || node.src || node.getAttribute('src') || '');
+    const cls = String(node.className || '');
+    const style = String(node.getAttribute('style') || '');
+    let bg = '';
+    try { bg = (node.nodeType === 1 && getComputedStyle(node).backgroundImage) || ''; } catch (e) { bg = ''; }
+    return /flame_icon|flame|streak|huohua|spark|fire/i.test(src + ' ' + cls + ' ' + style + ' ' + bg);
+  };
+  const fromFlame = (root) => {
+    const icons = Array.from(root.querySelectorAll('img, svg, [class*="Streakicon"], [class*="streak"]'));
+    for (const icon of icons) {
+      if (!looksFlame(icon) && icon.tagName !== 'IMG') continue;
+      if (!looksFlame(icon) && icon.tagName === 'IMG') {
+        if (!/flame_icon|flame|streak|huohua|spark|fire/i.test(String(icon.currentSrc || icon.src || ''))) continue;
+      }
+      let sib = icon.nextElementSibling;
+      while (sib) {
+        if (!isTimeNode(sib)) {
+          const got = cleanNum(nodeText(sib));
+          if (got) return got;
+        }
+        sib = sib.nextElementSibling;
+      }
+      const parent = icon.parentElement;
+      if (parent && !isTimeNode(parent)) {
+        const got = cleanNum(nodeText(parent));
+        if (got) return got;
+        const line = stripTime(nodeText(parent));
+        const m = line.match(/(?:^|\\s)(\\d{1,4})(?:\\s|$)/);
+        if (m && isSpark(Number(m[1]))) return Number(m[1]);
+      }
+    }
+    return null;
+  };
+  const fromColoredNum = (root) => {
+    const nodes = Array.from(root.querySelectorAll('*'));
+    for (const n of nodes) {
+      if (isTimeNode(n)) continue;
+      const got = cleanNum(nodeText(n));
+      if (!got) continue;
+      let color = '';
+      try { color = getComputedStyle(n).color || ''; } catch (e) { color = ''; }
+      const m = color.match(/rgba?\\((\\d+),\\s*(\\d+),\\s*(\\d+)/);
+      if (!m) continue;
+      const r = Number(m[1]), g = Number(m[2]), b = Number(m[3]);
+      if (r >= 180 && g <= 190 && b <= 140) return got;
+    }
+    return null;
+  };
+  const fromTextNodes = (root) => {
+    if (!root) return null;
+    const it = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = it.nextNode())) {
+      if (isTimeNode(node.parentElement)) continue;
+      const got = cleanNum(node.nodeValue);
+      if (got) return got;
+    }
+    return null;
+  };
+  const readStreak = (el, name) => {
+    const wrap = titleWrap(el) || el;
+    if (/点燃中/.test(nodeText(wrap))) return null;
+    for (const n of wrap.querySelectorAll('.commonStreaknormalText, [class*="StreaknormalText"], [class*="StreakText"], [class*="streakText"], [class*="Streak"]')) {
+      if (isTimeNode(n)) continue;
+      const got = cleanNum(nodeText(n));
+      if (got) return got;
+    }
+    for (const n of wrap.querySelectorAll('.commonStreakstreakContainer, [class*="streakContainer"], [class*="Streak"]')) {
+      if (n.querySelector('[class*="timeStr"], [class*="TimeStr"]')) continue;
+      const got = cleanNum(nodeText(n));
+      if (got) return got;
+    }
+    const flame = fromFlame(wrap);
+    if (flame) return flame;
+    for (const n of wrap.querySelectorAll('[class*="TagNextToTitleleft"]')) {
+      if (n.querySelector('[class*="timeStr"], [class*="TimeStr"]')) continue;
+      const got = cleanNum(nodeText(n));
+      if (got) return got;
+    }
+    const colored = fromColoredNum(wrap);
+    if (colored) return colored;
+    const walked = fromTextNodes(wrap);
+    if (walked) return walked;
+    return sparkAfterName(name, stripTime(nodeText(wrap)));
+  };
   return items.map((el) => {
     const name = titleOf(el).split('\\n').map((x) => x.trim()).filter(Boolean)[0] || '';
-    const spark = readStreak(el);
+    const wrap = titleWrap(el);
+    const title_row = wrap ? nodeText(wrap) : '';
+    const spark = readStreak(el, name);
     const img = el.querySelector('.commonIMAvataravatarContainer img, .semi-avatar img, img[src*="aweme-avatar"], img[src*="douyinpic.com"]');
     const avatar = img ? String(img.currentSrc || img.src || img.getAttribute('src') || '').trim() : '';
     const isGroup = /群/.test(name);
-    return { name, kind: isGroup ? 'group' : 'friend', spark_days: spark, avatar };
+    return { name, kind: isGroup ? 'group' : 'friend', spark_days: spark, avatar, title_row };
   }).filter((row) => row.name);
 }"""
 
@@ -187,17 +293,56 @@ def spark_from_streak_text(text: str) -> int | None:
     return None
 
 
+def spark_from_title_row(name: str, text: str) -> int | None:
+    """只解析名字旁边那一行（昵称 + 火焰天数 + 时间），不要用整行消息。"""
+    return parse_spark_near_name(name, text)
+
+
+def _title_wrapper_text(html: str) -> str:
+    raw = str(html or "")
+    start = re.search(r'class="[^"]*titleWrapper[^"]*"', raw, re.I)
+    if not start:
+        return ""
+    begin = raw.find(">", start.end())
+    if begin < 0:
+        return ""
+    tail = raw[begin + 1 :]
+    desc = re.search(r'class="[^"]*Desc', tail, re.I)
+    blob = tail[: desc.start()] if desc else tail
+    return re.sub(r"<[^>]+>", " ", blob)
+
+
 def spark_from_streak_html(html: str) -> int | None:
     raw = str(html or "")
     if "点燃中" in raw:
         return None
-    if "flame_icon" not in raw and "commonStreak" not in raw and "StreaknormalText" not in raw:
-        return None
-    found = re.search(r"StreaknormalText[^>]*>\s*(\d{1,4})\s*<", raw)
-    if not found:
-        return None
-    n = int(found.group(1))
-    return n if is_plausible_spark(n) else None
+    found = re.search(
+        r"(?:commonStreaknormalText|StreaknormalText)[^>]*>\s*(\d{1,4})\s*<",
+        raw,
+        re.I,
+    )
+    if found:
+        n = int(found.group(1))
+        if is_plausible_spark(n):
+            return n
+    title_m = re.search(
+        r'class="[^"]*conversationConversationItemtitle"[^>]*>([^<]+)',
+        raw,
+    )
+    name = title_m.group(1).strip() if title_m else ""
+    text = _title_wrapper_text(raw)
+    if name and text.strip():
+        return spark_from_title_row(name, text)
+    nearby = re.search(
+        r"flame_icon[\s\S]{0,400}?>\s*(?:</img>)?\s*<[^>]*>\s*(\d{1,4})\s*<",
+        raw,
+        re.I,
+    )
+    if nearby:
+        n = int(nearby.group(1))
+        if is_plausible_spark(n):
+            return n
+    return None
 
 
 def _direct_spark(payload: dict) -> int | None:
@@ -349,15 +494,17 @@ def _collect_dom(page) -> list[dict]:
             name = str((item or {}).get("name") or "").strip()
             if not name or name in NOISE_NAMES:
                 continue
-            text = str((item or {}).get("text") or "")
+            title_row = str((item or {}).get("title_row") or "")
             spark = (item or {}).get("spark_days")
             try:
                 spark = int(spark) if spark not in (None, "", 0, "0") else None
             except (TypeError, ValueError):
                 spark = None
             if not is_plausible_spark(spark):
+                spark = spark_from_title_row(name, title_row)
+            if not is_plausible_spark(spark):
                 spark = None
-            kind = _row_kind(name, text, str((item or {}).get("kind") or ""))
+            kind = _row_kind(name, title_row, str((item or {}).get("kind") or ""))
             rows.append({
                 "name": name,
                 "kind": kind,
@@ -415,9 +562,17 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         item_loc, scope, item_sel = _wait_locator(page, CONVERSATION_ITEM_SELECTORS, timeout_ms=15000)
         list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
         logger.info("选择好友等待会话列表 item=%s list=%s", item_sel or "无", list_sel or "无")
+        try:
+            page.wait_for_selector(
+                ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon'], [class*='titleWrapper']",
+                timeout=8000,
+            )
+        except Exception:
+            pass
+        time.sleep(1.2)
 
         items: list[dict] = []
-        for _ in range(8):
+        for _ in range(14):
             api_names = [
                 {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None, "avatar": ""}
                 for row in api_rows
@@ -436,7 +591,7 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
             list_loc, _, _ = _find_locator(page, CONVERSATION_LIST_SELECTORS)
             if items and not moved:
                 break
-            time.sleep(0.35)
+            time.sleep(0.55)
 
         items = merge_conversations(
             items,
@@ -447,7 +602,14 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
             ],
             _collect_dom(page),
         )
-        logger.info("读取会话列表 count=%s api=%s url=%s", len(items), len(api_rows), getattr(page, "url", ""))
+        spark_n = sum(1 for row in items if is_plausible_spark(row.get("spark_days")))
+        logger.info(
+            "读取会话列表 count=%s sparks=%s api=%s url=%s",
+            len(items),
+            spark_n,
+            len(api_rows),
+            getattr(page, "url", ""),
+        )
         self_avatar = ""
         try:
             self_avatar = clean_avatar_url(page.evaluate(EXTRACT_SELF_AVATAR_JS) or "")

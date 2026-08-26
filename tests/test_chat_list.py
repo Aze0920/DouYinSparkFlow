@@ -124,6 +124,53 @@ class ChatListTests(unittest.TestCase):
         self.assertIsNone(spark_from_streak_html(igniting))
         self.assertIsNone(spark_from_streak_text("点燃中 1/3"))
 
+    def test_orange_friend_flame_from_title_row(self):
+        from webui.chat_list import spark_from_title_row
+        self.assertEqual(spark_from_title_row("凯凯", "凯凯 111 18:26"), 111)
+        self.assertEqual(spark_from_title_row("静静", "静静 333 16:53"), 333)
+        self.assertEqual(spark_from_title_row("花开富贵", "花开富贵 38 18:08"), 38)
+        self.assertIsNone(spark_from_title_row("开奶瓶本开", "开奶瓶本开 18:26"))
+        kaikai = """
+        <div data-e2e="conversation-item" class="conversationConversationItemwrapper">
+          <div class="conversationConversationItemtitleWrapper">
+            <div class="conversationConversationItemtitle">凯凯</div>
+            <div class="ConversationItemTagNextToTitlewrapper">
+              <div class="ConversationItemTagNextToTitleleft">
+                <img src="https://lf3-static.bytednsdoc.com/obj/eden-cn/tp_upfbvk/ljhwZthlaukjlkulzlp/flame_icon/friend/normal.png" alt="">
+                <span>111</span>
+              </div>
+              <div class="ConversationItemTagNextToTitleleft">
+                <div class="ConversationItemTagNextToTitletimeStr">18:26</div>
+              </div>
+            </div>
+          </div>
+          <div class="ConversationItemDescwrapper ConversationItemDeschintAndTimeWrapper">
+            <pre class="ConversationItemHinttextBox">[分享视频] 50</pre>
+          </div>
+        </div>
+        """
+        jingjing = """
+        <div data-e2e="conversation-item" class="conversationConversationItemwrapper">
+          <div class="conversationConversationItemtitleWrapper">
+            <div class="conversationConversationItemtitle">静静</div>
+            <div class="ConversationItemTagNextToTitlewrapper">
+              <div class="ConversationItemTagNextToTitleleft">
+                <img src="https://lf3-static.bytednsdoc.com/obj/eden-cn/tp_upfbvk/ljhwZthlaukjlkulzlp/flame_icon/friend/normal.png" alt="">
+                <span style="color: rgb(255, 140, 60);">333</span>
+              </div>
+              <div class="ConversationItemTagNextToTitleleft">
+                <div class="ConversationItemTagNextToTitletimeStr">16:53</div>
+              </div>
+            </div>
+          </div>
+          <div class="ConversationItemDescwrapper">
+            <pre>1</pre>
+          </div>
+        </div>
+        """
+        self.assertEqual(spark_from_streak_html(kaikai), 111)
+        self.assertEqual(spark_from_streak_html(jingjing), 333)
+
     def test_extract_js_uses_douyin_streak_dom(self):
         from webui.chat_list import EXTRACT_JS
         self.assertIn("commonStreaknormalText", EXTRACT_JS)
@@ -131,6 +178,8 @@ class ChatListTests(unittest.TestCase):
         self.assertIn("conversationConversationItemtitle", EXTRACT_JS)
         self.assertIn('data-e2e="conversation-item"', EXTRACT_JS)
         self.assertIn("aweme-avatar", EXTRACT_JS)
+        self.assertIn("title_row", EXTRACT_JS)
+        self.assertIn("titleWrapper", EXTRACT_JS)
 
     def test_avatar_url_is_https_only(self):
         self.assertEqual(clean_avatar_url("data:image/png;base64,xxxx"), "")
