@@ -102,7 +102,7 @@ class InviteTests(unittest.TestCase):
         self.addCleanup(self.users_patch.stop)
         self.addCleanup(self.invite_patch.stop)
         save_users([make_user("host", "pass1234", role="user", days=7, max_accounts=1)])
-        save_invite_settings({"inviter_days": 3, "invitee_days": 2})
+        save_invite_settings({"enabled": True, "inviter_days": 3, "invitee_days": 2})
         self.host_code = set_user_invite_enabled("host", True)["code"]
 
     def test_invite_register_rewards_after_wechat_bind(self):
@@ -191,6 +191,20 @@ class InviteTests(unittest.TestCase):
         self.assertEqual(again["code"], self.host_code)
         preview = preview_invite(self.host_code)
         self.assertTrue(preview["valid"])
+
+    def test_admin_off_blocks_even_if_user_on(self):
+        save_invite_settings({"enabled": False})
+        host = find_user("host")
+        self.assertFalse(can_invite(host))
+        preview = preview_invite(self.host_code)
+        self.assertFalse(preview["valid"])
+        with self.assertRaises(ValueError) as ctx:
+            apply_invite_register("guest-admin-off", "pass1234", self.host_code)
+        self.assertIn("未开启", str(ctx.exception))
+        save_invite_settings({"enabled": True})
+        preview = preview_invite(self.host_code)
+        self.assertTrue(preview["valid"])
+        self.assertTrue(can_invite(find_user("host")))
 
 
 if __name__ == "__main__":

@@ -827,8 +827,9 @@ def post_invite_settings(request: Request, payload: dict | None = None):
     admin = require_admin(request)
     data = save_invite_settings(payload or {})
     logger.info(
-        "已保存邀请天数 admin=%s inviter_days=%s invitee_days=%s",
+        "已保存邀请设置 admin=%s enabled=%s inviter_days=%s invitee_days=%s",
         admin.get("username"),
+        data.get("enabled"),
         data.get("inviter_days"),
         data.get("invitee_days"),
     )
@@ -1059,6 +1060,7 @@ def status(request: Request):
         "accounts": _filter_accounts(user, accounts),
         "me": public_user(user),
         "allow_self_unbind": allow_self_unbind(),
+        "invite_enabled": bool(invite_public_settings().get("enabled")),
     }
     if _is_admin(user):
         local = read_version()

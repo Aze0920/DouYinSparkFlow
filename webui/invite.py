@@ -27,6 +27,7 @@ _lock = threading.Lock()
 def default_invite_data() -> dict:
     return {
         "settings": {
+            "enabled": True,
             "inviter_days": 1,
             "invitee_days": 1,
         },
@@ -48,6 +49,7 @@ def load_invite() -> dict:
         return data
     settings = dict(data["settings"])
     incoming = raw.get("settings") if isinstance(raw.get("settings"), dict) else {}
+    settings["enabled"] = bool(incoming["enabled"]) if "enabled" in incoming else True
     settings["inviter_days"] = parse_days(incoming.get("inviter_days"), default=1)
     settings["invitee_days"] = parse_days(incoming.get("invitee_days"), default=1)
     codes = raw.get("codes") if isinstance(raw.get("codes"), dict) else {}
@@ -66,11 +68,20 @@ def save_invite(data: dict) -> dict:
     return payload
 
 
+def _admin_enabled(data: dict | None = None) -> bool:
+    settings = ((data or load_invite()).get("settings") or {})
+    if "enabled" not in settings:
+        return True
+    return bool(settings.get("enabled"))
+
+
 def public_settings(data: dict | None = None) -> dict:
-    settings = dict((data or load_invite()).get("settings") or {})
+    data = data or load_invite()
+    settings = dict(data.get("settings") or {})
     inviter_days = parse_days(settings.get("inviter_days"), default=1)
     invitee_days = parse_days(settings.get("invitee_days"), default=1)
     return {
+        "enabled": _admin_enabled(data),
         "inviter_days": inviter_days,
         "invitee_days": invitee_days,
         "inviter_days_label": "永久" if inviter_days == 0 else f"{inviter_days} 天",
@@ -152,7 +163,10 @@ def can_invite(user: dict | None, data: dict | None = None) -> bool:
         return False
     if is_expired(user):
         return False
-    return _user_enabled(data or load_invite(), str(user.get("username") or ""))
+    data = data or load_invite()
+    if not _admin_enabled(data):
+        return False
+    return _user_enabled(data, str(user.get("username") or ""))
 
 
 def ensure_invite_code(username: str) -> dict:
@@ -193,6 +207,8 @@ def set_user_invite_enabled(username: str, enabled: bool) -> dict:
 def resolve_invite(code: str) -> tuple[dict, dict]:
     data = load_invite()
     settings = public_settings(data)
+    if not _admin_enabled(data):
+        raise ValueError("邀请未开启")
     _key, row = _lookup_row(data, code)
     if not row:
         raise ValueError("邀请码无效或已失效")
@@ -380,9 +396,10 @@ def my_invite_payload(user: dict, origin: str = "") -> dict:
             if created:
                 save_invite(data)
         settings = public_settings(data)
+        admin_enabled = bool(settings.get("enabled"))
         user_enabled = _user_enabled(data, name) if name else False
         records_src = list(data.get("records") or [])
-    allowed = bool(user) and (not is_expired(user)) and user_enabled
+    allowed = bool(user) and (not is_expired(user)) and admin_enabled and user_enabled
     expired = is_expired(user)
     origin = str(origin or "").rstrip("/")
     link = f"{origin}/?invite={code}" if code and origin else (f"/?invite={code}" if code else "")
@@ -415,9 +432,14 @@ def my_invite_payload(user: dict, origin: str = "") -> dict:
             f"会员已过期，链接暂时无效。续期后不用换链接。对方将获得 {settings['invitee_days_label']}。"
             f"已邀请 {len(records)} 人。"
         )
+    elif not admin_enabled:
+        reward_hint = (
+            f"管理员尚未开启邀请功能，当前链接无效。对方将获得 {settings['invitee_days_label']}。"
+            f"已邀请 {len(records)} 人。"
+        )
     elif not user_enabled:
         reward_hint = (
-            f"打开上方开关后，把固定链接发给朋友即可。对方绑定微信后才发放天数，将获得 {settings['invitee_days_label']}。"
+            f"点右侧按钮开启后，把固定链接发给朋友即可。对方绑定微信后才发放天数，将获得 {settings['invitee_days_label']}。"
             f"已邀请 {len(records)} 人。"
         )
     elif permanent:
@@ -437,6 +459,7 @@ def my_invite_payload(user: dict, origin: str = "") -> dict:
         )
     return {
         **settings,
+        "admin_enabled": admin_enabled,
         "user_enabled": user_enabled,
         "can_invite": allowed,
         "expired": expired,
@@ -456,6 +479,8 @@ def save_invite_settings(payload: dict | None) -> dict:
     with _lock:
         data = load_invite()
         settings = dict(data.get("settings") or {})
+        if "enabled" in payload:
+            settings["enabled"] = bool(payload.get("enabled"))
         if "inviter_days" in payload:
             settings["inviter_days"] = parse_days(payload.get("inviter_days"), default=1)
         if "invitee_days" in payload:

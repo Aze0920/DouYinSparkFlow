@@ -622,6 +622,7 @@ body.spark-locked .spark-action {
 }
 .invite-link-box input { flex: 1; min-width: 160px; }
 .invite-link-box button { width: auto; }
+.invite-toggle-btn { min-width: 7.5em; }
 .error { color: var(--rose); min-height: 18px; }
 
 @media (max-width: 860px) {
