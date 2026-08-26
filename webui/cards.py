@@ -2,7 +2,7 @@ import json
 import secrets
 from pathlib import Path
 
-from webui.users import now_utc, to_iso, parse_iso
+from webui.users import now_utc, parse_days, parse_iso, parse_max_accounts, to_iso
 
 ROOT = Path(__file__).resolve().parent.parent
 CARDS_FILE = ROOT / "config" / "cards.json"
@@ -37,19 +37,11 @@ def save_cards(cards: list) -> None:
 
 
 def _clamp_days(value) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = 1
-    return max(1, min(n, 3650))
+    return parse_days(value, default=1)
 
 
 def _clamp_accounts(value) -> int:
-    try:
-        n = int(value)
-    except (TypeError, ValueError):
-        n = 1
-    return max(1, min(n, 100))
+    return parse_max_accounts(value, default=1)
 
 
 def _clamp_count(value) -> int:
@@ -64,10 +56,14 @@ def public_card(card: dict) -> dict:
     created = parse_iso(card.get("created_at"))
     used = parse_iso(card.get("used_at"))
     used_by = str(card.get("used_by") or "").strip()
+    days_n = _clamp_days(card.get("days"))
+    accounts_n = _clamp_accounts(card.get("max_accounts"))
     return {
         "code": card.get("code") or "",
-        "days": _clamp_days(card.get("days")),
-        "max_accounts": _clamp_accounts(card.get("max_accounts")),
+        "days": days_n,
+        "max_accounts": accounts_n,
+        "days_label": "不限" if days_n == 0 else f"{days_n} 天",
+        "max_accounts_label": "账号不限" if accounts_n == 0 else f"{accounts_n} 个账号",
         "note": str(card.get("note") or "").strip(),
         "created_at": card.get("created_at") or "",
         "used_at": card.get("used_at") or "",

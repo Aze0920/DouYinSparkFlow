@@ -1,6 +1,6 @@
-import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -33,13 +33,17 @@ from webui.users import (
     account_limit,
     extend_user,
     find_user,
+    is_protected_username,
     load_users,
     make_token,
     make_user,
+    parse_days,
+    parse_max_accounts,
     parse_token,
     public_user,
     save_users,
     user_can_spark,
+    username_taken,
     valid_username,
     verify_user,
     _hash_password,
@@ -86,7 +90,11 @@ VERSION_MIRROR_TEMPLATES = [
     "https://raw.gitmirror.com/{repo}/main/VERSION",
     "https://kkgithub.com/{repo}/raw/main/VERSION",
 ]
+REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+UNIQUE_ID_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
 logger = setup_logger("app", os.getenv("LOG_LEVEL", "DEBUG"))
+_rate_lock = threading.Lock()
+_rate_buckets: dict[str, list[float]] = {}
 
 app = FastAPI(title="DouYinSparkFlow")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
@@ -130,6 +138,12 @@ async def log_api_calls(request: Request, call_next):
         raise
     if not quiet and response.status_code >= 400:
         logger.warning("请求失败 %s %s -> %s", request.method, path, response.status_code)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "same-origin"
+    response.headers["X-XSS-Protection"] = "0"
+    if path.startswith("/api") or path in {"/", "/home", "/tasks", "/logs", "/users", "/cards", "/settings"}:
+        response.headers["Cache-Control"] = "no-store"
     return response
 
 
@@ -149,7 +163,10 @@ def read_version() -> str:
 
 def repo_name() -> str:
     env = load_env()
-    return (env.get("GITHUB_REPO") or os.getenv("GITHUB_REPO") or DEFAULT_REPO).strip()
+    raw = (env.get("GITHUB_REPO") or os.getenv("GITHUB_REPO") or DEFAULT_REPO).strip()
+    if REPO_RE.match(raw):
+        return raw
+    return DEFAULT_REPO
 
 
 def web_password() -> str:
@@ -184,6 +201,51 @@ def require_spark(request: Request):
     if not user_can_spark(user):
         raise HTTPException(status_code=403, detail="卡密已到期，无法续火花")
     return user
+
+
+def _client_ip(request: Request) -> str:
+    if request.client and request.client.host:
+        return request.client.host
+    return "unknown"
+
+
+def _rate_allow(key: str, limit: int, window: float) -> bool:
+    now = time.time()
+    with _rate_lock:
+        hits = [ts for ts in _rate_buckets.get(key, []) if now - ts < window]
+        if len(hits) >= limit:
+            _rate_buckets[key] = hits
+            return False
+        hits.append(now)
+        _rate_buckets[key] = hits
+        return True
+
+
+def _auth_cookie_kwargs(request: Request) -> dict:
+    return {
+        "httponly": True,
+        "samesite": "lax",
+        "max_age": 60 * 60 * 24 * 14,
+        "path": "/",
+        "secure": request.url.scheme == "https",
+    }
+
+
+def _safe_repo_name(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if REPO_RE.match(raw):
+        return raw
+    current = repo_name()
+    if REPO_RE.match(current):
+        return current
+    return DEFAULT_REPO
+
+
+def _safe_unique_id(value) -> str:
+    unique_id = str(value or "").strip()
+    if not UNIQUE_ID_RE.match(unique_id):
+        raise HTTPException(status_code=400, detail="抖音号只能包含字母、数字、点、下划线或短横线")
+    return unique_id
 
 
 def _is_admin(user: dict | None) -> bool:
@@ -227,6 +289,21 @@ def _filter_accounts(user: dict | None, accounts: list) -> list:
 def _owned_tasks(user: dict | None, tasks: list) -> list:
     name = str((user or {}).get("username") or "")
     return [item for item in tasks if _account_owner(item) == name]
+
+
+def _require_account_access(user: dict | None, unique_id: str):
+    unique_id = _safe_unique_id(unique_id)
+    env = load_env()
+    tasks = read_tasks(env)
+    existing = next((item for item in tasks if str(item.get("unique_id") or "").strip() == unique_id), None)
+    if _is_admin(user):
+        return existing
+    name = str((user or {}).get("username") or "")
+    if existing and _account_owner(existing) != name:
+        raise HTTPException(status_code=403, detail="不能操作其他用户的账号")
+    if existing is None and env.get(cookie_key(unique_id)):
+        raise HTTPException(status_code=403, detail="不能操作其他用户的账号")
+    return existing
 
 
 def _assert_account_quota(user: dict | None, count: int) -> None:
@@ -425,31 +502,39 @@ def me(request: Request):
 
 
 @app.post("/api/login")
-def login(payload: dict):
+def login(request: Request, payload: dict):
+    ip = _client_ip(request)
+    if not _rate_allow(f"login:{ip}", 20, 600):
+        raise HTTPException(status_code=429, detail="尝试太频繁，请稍后再试")
     username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
+    if not _rate_allow(f"login:{ip}:{username.lower()}", 8, 900):
+        raise HTTPException(status_code=429, detail="尝试太频繁，请稍后再试")
     user = verify_user(username, password)
     if not user:
-        logger.warning("登录失败：用户名或密码错误 user=%s", username)
+        logger.warning("登录失败：用户名或密码错误 user=%s ip=%s", username, ip)
         raise HTTPException(status_code=403, detail="用户名或密码错误")
     logger.info("控制台登录成功 user=%s role=%s", user.get("username"), user.get("role"))
     resp = JSONResponse({"ok": True, "user": public_user(user)})
-    resp.set_cookie("dsf_auth", make_token(user["username"]), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 14)
+    resp.set_cookie("dsf_auth", make_token(user["username"]), **_auth_cookie_kwargs(request))
     return resp
 
 
 @app.post("/api/register")
-def register(payload: dict):
+def register(request: Request, payload: dict):
+    ip = _client_ip(request)
+    if not _rate_allow(f"register:{ip}", 5, 900):
+        raise HTTPException(status_code=429, detail="尝试太频繁，请稍后再试")
     username = str(payload.get("username") or "").strip()
     password = str(payload.get("password") or "")
     card_code = str(payload.get("card") or payload.get("card_code") or "").strip()
     if not valid_username(username):
         raise HTTPException(status_code=400, detail="用户名用 2-24 位字母、数字、下划线或短横线")
+    if is_protected_username(username):
+        raise HTTPException(status_code=400, detail="不能注册管理员用户名")
     if len(password) < 4:
         raise HTTPException(status_code=400, detail="密码至少 4 位")
-    if username.lower() == "admin":
-        raise HTTPException(status_code=400, detail="不能注册管理员用户名")
-    if find_user(username):
+    if username_taken(username):
         raise HTTPException(status_code=400, detail="用户名已存在")
     try:
         card = consume_card(card_code, username)
@@ -474,14 +559,14 @@ def register(payload: dict):
         card.get("code"),
     )
     resp = JSONResponse({"ok": True, "user": public_user(user)})
-    resp.set_cookie("dsf_auth", make_token(user["username"]), httponly=True, samesite="lax", max_age=60 * 60 * 24 * 14)
+    resp.set_cookie("dsf_auth", make_token(user["username"]), **_auth_cookie_kwargs(request))
     return resp
 
 
 @app.post("/api/logout")
 def logout():
     resp = JSONResponse({"ok": True})
-    resp.delete_cookie("dsf_auth")
+    resp.delete_cookie("dsf_auth", path="/")
     return resp
 
 
@@ -501,20 +586,16 @@ def create_user(request: Request, payload: dict):
         raise HTTPException(status_code=400, detail="角色只能是 admin 或 user")
     if not valid_username(username):
         raise HTTPException(status_code=400, detail="用户名用 2-24 位字母、数字、下划线或短横线")
+    if is_protected_username(username) and role != "admin":
+        raise HTTPException(status_code=400, detail="admin 只能是管理员")
     if len(password) < 4:
         raise HTTPException(status_code=400, detail="密码至少 4 位")
-    if find_user(username):
+    if username_taken(username):
         raise HTTPException(status_code=400, detail="用户名已存在")
     days = payload.get("days")
     max_accounts = payload.get("max_accounts")
-    try:
-        days_n = 1 if days in (None, "") else max(1, int(days))
-    except (TypeError, ValueError):
-        days_n = 1
-    try:
-        accounts_n = 1 if max_accounts in (None, "") else max(1, int(max_accounts))
-    except (TypeError, ValueError):
-        accounts_n = 1
+    days_n = parse_days(days, default=1)
+    accounts_n = parse_max_accounts(max_accounts, default=1)
     users = load_users()
     users.append(
         make_user(
@@ -545,6 +626,8 @@ def update_user(request: Request, payload: dict):
         if item.get("username") != username:
             continue
         if role in ("admin", "user"):
+            if is_protected_username(username) and role != "admin":
+                raise HTTPException(status_code=400, detail="不能取消内置管理员 admin")
             if item.get("role") == "admin" and role != "admin" and admin_count(users) <= 1:
                 raise HTTPException(status_code=400, detail="至少保留一个管理员")
             item["role"] = role
@@ -556,9 +639,11 @@ def update_user(request: Request, payload: dict):
                 item["permanent"] = False
                 if not item.get("expires_at"):
                     extend_user(item, 1)
-                if not item.get("max_accounts"):
+                if item.get("max_accounts") in (None, ""):
                     item["max_accounts"] = 1
         if password:
+            if len(str(password)) < 4:
+                raise HTTPException(status_code=400, detail="密码至少 4 位")
             item["password_hash"] = _hash_password(username, str(password))
         if extra_days not in (None, "", 0, "0") and item.get("role") != "admin":
             try:
@@ -567,7 +652,7 @@ def update_user(request: Request, payload: dict):
                 raise HTTPException(status_code=400, detail="延长天数必须是数字")
         if max_accounts not in (None, "") and item.get("role") != "admin":
             try:
-                item["max_accounts"] = max(1, min(int(max_accounts), 100))
+                item["max_accounts"] = parse_max_accounts(max_accounts, default=1)
             except (TypeError, ValueError):
                 raise HTTPException(status_code=400, detail="账号额度必须是数字")
         break
@@ -579,6 +664,8 @@ def update_user(request: Request, payload: dict):
 def delete_user(request: Request, payload: dict):
     admin = require_admin(request)
     username = str(payload.get("username") or "").strip()
+    if is_protected_username(username):
+        raise HTTPException(status_code=400, detail="内置管理员 admin 无法删除")
     if username == admin.get("username"):
         raise HTTPException(status_code=400, detail="不能删除当前登录账号")
     users = load_users()
@@ -759,6 +846,8 @@ def test_wxpusher_bind(request: Request):
 
 @app.post("/api/wxpusher/callback")
 async def wxpusher_callback(request: Request):
+    if not _rate_allow(f"wxcb:{_client_ip(request)}", 30, 60):
+        return {"code": 1000, "msg": "success"}
     try:
         payload = await request.json()
     except Exception:
@@ -827,7 +916,7 @@ def status(request: Request):
 
 @app.post("/api/github/check")
 def github_check(request: Request):
-    require_auth(request)
+    require_admin(request)
     logger.info("手动检测 GitHub 版本（镜像 HTTP）")
     version, source = fetch_remote_version()
     if version:
@@ -856,7 +945,7 @@ def github_check(request: Request):
 
 
 def _task_from_account(account: dict, env: dict, existing: dict | None = None) -> dict:
-    unique_id = str(account.get("unique_id") or "").strip()
+    unique_id = _safe_unique_id(account.get("unique_id"))
     targets = account.get("targets") or []
     if isinstance(targets, str):
         targets = [x.strip() for x in targets.replace("，", ",").split(",") if x.strip()]
@@ -886,11 +975,11 @@ def _task_from_account(account: dict, env: dict, existing: dict | None = None) -
 
 
 def _cookie_extra(account: dict) -> dict:
-    unique_id = str(account.get("unique_id") or "").strip()
     cookies = account.get("cookies")
     extra = {}
-    if not unique_id or cookies in (None, ""):
+    if cookies in (None, ""):
         return extra
+    unique_id = _safe_unique_id(account.get("unique_id"))
     if isinstance(cookies, str):
         try:
             cookies_obj = json.loads(cookies)
@@ -922,13 +1011,11 @@ def get_config(request: Request):
         hitokoto = ["文学", "影视", "诗词", "哲学"]
     accounts = []
     for item in parse_accounts(env):
-        cookie_raw = env.get(cookie_key(item["unique_id"]), "")
         owner = _account_owner(item)
         owner_user = find_user(owner) if owner else None
         accounts.append(
             {
                 **item,
-                "cookies": cookie_raw if isinstance(cookie_raw, str) else json.dumps(cookie_raw, ensure_ascii=False),
                 "owner": owner,
                 "wxpusher_bound": bool(str((owner_user or {}).get("wxpusher_uid") or "").strip()),
             }
@@ -961,9 +1048,7 @@ def save_config(request: Request, payload: dict):
     if "accounts" in payload:
         incoming = []
         for account in payload.get("accounts") or []:
-            unique_id = str(account.get("unique_id") or "").strip()
-            if not unique_id:
-                raise HTTPException(status_code=400, detail="每个账号都要填写抖音号/编号")
+            unique_id = _safe_unique_id(account.get("unique_id"))
             incoming.append(_task_from_account(account, env, existing_by_id.get(unique_id)))
             extra.update(_cookie_extra(account))
         name = str(user.get("username") or "")
@@ -990,14 +1075,23 @@ def save_config(request: Request, payload: dict):
     else:
         tasks = existing
 
+    if not _is_admin(user):
+        path = write_env({"TASKS": tasks}, extra)
+        logger.info("已保存配置 path=%s accounts=%s", path, len(tasks))
+        return {"ok": True, "path": str(path), "account_count": len(tasks)}
+
     hour, minute = default_cron(env)
     if payload.get("cron_hour") is not None:
         hour, minute = account_cron({"cron_hour": payload.get("cron_hour"), "cron_minute": payload.get("cron_minute")})
 
-    if _is_admin(user) and "max_task_threads" in payload:
+    if "max_task_threads" in payload:
         threads = _clamp_task_threads(payload.get("max_task_threads"))
     else:
         threads = _clamp_task_threads(env.get("MAX_TASK_THREADS") or 10)
+
+    github_repo = repo_name()
+    if payload.get("github_repo"):
+        github_repo = _safe_repo_name(payload.get("github_repo"))
 
     data = {
         "PROXY_ADDRESS": payload.get("proxy_address") if payload.get("proxy_address") is not None else env.get("PROXY_ADDRESS") or "",
@@ -1014,7 +1108,7 @@ def save_config(request: Request, payload: dict):
         "TASK_RETRY_TIMES": str(payload.get("task_retry_times") or env.get("TASK_RETRY_TIMES") or 3),
         "MAX_TASK_THREADS": str(threads),
         "LOG_LEVEL": payload.get("log_level") or env.get("LOG_LEVEL") or "DEBUG",
-        "GITHUB_REPO": payload.get("github_repo") or repo_name(),
+        "GITHUB_REPO": github_repo,
         "HEADLESS": "true",
         "TASKS": tasks,
     }
@@ -1027,9 +1121,7 @@ def save_config(request: Request, payload: dict):
 def save_account(request: Request, payload: dict):
     user = require_spark(request)
     env = load_env()
-    unique_id = str(payload.get("unique_id") or "").strip()
-    if not unique_id:
-        raise HTTPException(status_code=400, detail="缺少抖音号")
+    unique_id = _safe_unique_id(payload.get("unique_id"))
     tasks = read_tasks(env)
     existing = next((item for item in tasks if str(item.get("unique_id") or "").strip() == unique_id), None)
     name = str(user.get("username") or "")
@@ -1066,12 +1158,13 @@ def _deny_if_browser_busy():
 
 @app.post("/api/account/check")
 def check_account_cookie(request: Request, payload: dict | None = None):
-    require_spark(request)
+    user = require_spark(request)
     _deny_if_browser_busy()
     payload = payload or {}
     unique_id = str(payload.get("unique_id") or "").strip()
     if not unique_id:
         raise HTTPException(status_code=400, detail="缺少抖音号")
+    _require_account_access(user, unique_id)
     env = load_env()
     raw = env.get(cookie_key(unique_id), "") or payload.get("cookies") or ""
     if not raw:
@@ -1378,7 +1471,7 @@ def run_now(request: Request, payload: dict | None = None):
 
 @app.post("/api/update")
 def update_from_github(request: Request):
-    require_auth(request)
+    require_admin(request)
     if not (ROOT / ".git").exists():
         raise HTTPException(
             status_code=400,

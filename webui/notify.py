@@ -1,4 +1,5 @@
 import hashlib
+import hmac
 import json
 import threading
 import time
@@ -274,7 +275,10 @@ def verify_wechat_signature(signature: str, timestamp: str, nonce: str) -> bool:
         return False
     parts = sorted([token, str(timestamp or ""), str(nonce or "")])
     digest = hashlib.sha1("".join(parts).encode("utf-8")).hexdigest()
-    return digest == str(signature).lower()
+    got = str(signature).lower().strip()
+    if len(digest) != len(got):
+        return False
+    return hmac.compare_digest(digest, got)
 
 
 def _access_token(app_id: str, app_secret: str) -> str:
@@ -541,13 +545,37 @@ def cancel_wxpusher_qr(username: str) -> None:
 def apply_wxpusher_callback(payload: dict | None) -> dict:
     data = payload or {}
     info = data.get("data") if isinstance(data.get("data"), dict) else data
-    uid = str((info or {}).get("uid") or "").strip()
     extra = str((info or {}).get("extra") or "").strip()
-    if not uid or not extra:
+    if not extra or not find_user(extra):
+        return {"ok": True, "bound": False}
+    with _bind_lock:
+        session = _bind_sessions.get(extra)
+        if not _session_alive(session):
+            logger.warning("拒绝无进行中扫码会话的 WxPusher 回调 extra=%s", extra)
+            return {"ok": True, "bound": False}
+        code = str(session.get("code") or "").strip()
+        expect_extra = str(session.get("extra") or extra).strip()
+    if not code:
+        return {"ok": True, "bound": False}
+    try:
+        with httpx.Client(timeout=8.0) as client:
+            resp = client.get(WP_SCAN_UID, params={"code": code})
+            result = resp.json()
+    except Exception as exc:
+        logger.warning("WxPusher 回调核验扫码失败 extra=%s: %s", extra, exc)
+        return {"ok": True, "bound": False}
+    payload_data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    uid = str((payload_data or {}).get("uid") or "").strip()
+    if not uid and isinstance(result.get("data"), str):
+        uid = str(result.get("data") or "").strip()
+    got_extra = str((payload_data or {}).get("extra") or "").strip()
+    if got_extra and got_extra != expect_extra:
+        logger.warning("WxPusher 回调 extra 不匹配 expect=%s got=%s", expect_extra, got_extra)
+        return {"ok": True, "bound": False}
+    if not uid or int(result.get("code") or 0) != 1000:
         return {"ok": True, "bound": False}
     saved = set_user_wxpusher(extra, uid)
     if not saved:
-        logger.warning("WxPusher 回调未匹配到用户 extra=%s", extra)
         return {"ok": True, "bound": False}
     with _bind_lock:
         _close_session(_bind_sessions.pop(extra, None))

@@ -90,23 +90,20 @@
     <section class="login-visual">
       <div class="spark-mark">✦</div>
       <h2>把火花续在自己手里</h2>
-      <p>管理员生成卡密后才能注册。卡密决定能用多少天、能添加几个抖音账号，默认是 1 天、1 个账号。</p>
     </section>
     <section class="login-box">
       <form class="login-card" id="loginForm" onsubmit="return doLogin(event)">
         <h1>登录控制台</h1>
-        <p>使用管理员或普通账号进入</p>
-        <input id="loginUser" placeholder="用户名，默认 admin" autocomplete="username" />
-        <input id="loginPass" type="password" placeholder="密码，默认 admin" autocomplete="current-password" />
+        <input id="loginUser" placeholder="请输入用户名" autocomplete="username" />
+        <input id="loginPass" type="password" placeholder="请输入密码" autocomplete="current-password" />
         <button class="btn-primary" type="submit">进入系统</button>
         <button class="btn-ghost" type="button" onclick="showRegisterForm()">没有账号？用卡密注册</button>
         <div id="loginError" class="error"></div>
       </form>
       <form class="login-card hidden" id="registerForm" onsubmit="return doRegister(event)">
         <h1>注册账号</h1>
-        <p>必须填写卡密。有效天数和可添加的抖音账号数以卡密为准。</p>
-        <input id="regUser" placeholder="用户名" autocomplete="username" />
-        <input id="regPass" type="password" placeholder="密码，至少 4 位" autocomplete="new-password" />
+        <input id="regUser" placeholder="请输入用户名" autocomplete="username" />
+        <input id="regPass" type="password" placeholder="请输入密码" autocomplete="new-password" />
         <input id="regPass2" type="password" placeholder="再输入一次密码" autocomplete="new-password" />
         <input id="regCard" placeholder="卡密，例如 DSF-XXXX-XXXX-XXXX" autocomplete="off" />
         <button class="btn-primary" type="submit">注册并进入</button>
@@ -206,18 +203,18 @@
           <div class="panel-head">
             <h2>控制台用户</h2>
           </div>
-          <p class="sub">管理员永久有效。普通用户必须用卡密注册，有效天数和抖音账号额度由卡密决定。这里也可以直接开用户，并指定天数和账号额度。</p>
+          <p class="sub">有效天数和账号数填 0 表示不限制。内置管理员 admin 不能删除。</p>
           <div class="grid two">
-            <label>用户名<input id="newUsername" placeholder="例如 operator1" /></label>
-            <label>密码<input id="newPassword" type="password" placeholder="登录密码" /></label>
+            <label>用户名<input id="newUsername" placeholder="请输入用户名" /></label>
+            <label>密码<input id="newPassword" type="password" placeholder="请输入密码" /></label>
             <label>角色
               <select id="newRole" onchange="toggleNewUserDays()">
                 <option value="user">普通用户</option>
                 <option value="admin">管理员（永久）</option>
               </select>
             </label>
-            <label>有效天数<input id="newDays" type="number" min="1" max="3650" value="1" /></label>
-            <label>可添加账号数<input id="newMaxAccounts" type="number" min="1" max="100" value="1" /></label>
+            <label>有效天数<input id="newDays" type="number" min="0" max="3650" value="1" /></label>
+            <label>可添加账号数<input id="newMaxAccounts" type="number" min="0" max="100" value="1" /></label>
             <label class="span-2">&nbsp;<button class="btn-primary" onclick="createUser()">添加账户</button></label>
           </div>
           <div id="userList" class="users-grid"></div>
@@ -230,10 +227,10 @@
             <h2>生成卡密</h2>
             <button class="btn-ghost" type="button" onclick="return navTo(event, 'settings')">设置</button>
           </div>
-          <p class="sub">默认 1 天、可添加 1 个抖音账号。一张卡密只能注册一次。生成后可用右侧复制按钮发给用户。</p>
+          <p class="sub">有效天数和账号数填 0 表示不限制。一张卡密只能注册一次。</p>
           <div class="grid two">
-            <label>有效天数<input id="cardDays" type="number" min="1" max="3650" value="1" /></label>
-            <label>可添加账号数<input id="cardMaxAccounts" type="number" min="1" max="100" value="1" /></label>
+            <label>有效天数<input id="cardDays" type="number" min="0" max="3650" value="1" /></label>
+            <label>可添加账号数<input id="cardMaxAccounts" type="number" min="0" max="100" value="1" /></label>
             <label>生成数量<input id="cardCount" type="number" min="1" max="50" value="1" /></label>
             <label>备注<input id="cardNote" placeholder="可选，例如 7天体验" /></label>
             <label class="span-2">&nbsp;<button class="btn-primary" onclick="generateCards()">生成卡密</button></label>
@@ -363,6 +360,13 @@
     function escapeAttr(text) {
       return escapeHtml(text).replaceAll('"', "&quot;");
     }
+    function parseQuotaNumber(el, fallback) {
+      if (!el) return fallback;
+      const raw = String(el.value ?? "").trim();
+      if (raw === "") return fallback;
+      const n = Number(raw);
+      return Number.isFinite(n) ? n : fallback;
+    }
     async function api(path, options = {}) {
       const resp = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
       const data = await resp.json().catch(() => ({}));
@@ -481,8 +485,8 @@
       const titles = {
         home: ["总览", ""],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
-        users: ["用户管理", "管理员永久有效。普通用户的天数和账号额度由卡密或这里指定"],
-        cards: ["卡密管理", "一排一张卡密，生成后可复制发给用户"],
+        users: ["用户管理", "填 0 表示天数或账号数不限制"],
+        cards: ["卡密管理", "填 0 表示天数或账号数不限制"],
         settings: ["设置", "并发、WxPusher 和公众号推送"],
       };
       $("pageTitle").textContent = titles[name][0];
@@ -1338,7 +1342,9 @@
       const data = await api("/api/users");
       $("userList").innerHTML = data.users.map((u) => {
         const admin = u.role === "admin";
+        const protectedUser = !!u.protected || String(u.username || "").toLowerCase() === "admin";
         const statusCls = admin || !u.expired ? "ck-ok" : "ck-bad";
+        const accountsValue = u.max_accounts == null ? 1 : u.max_accounts;
         return `<div class="user-card">
           <div class="account-head">
             <div>
@@ -1352,16 +1358,16 @@
           </div>
           <label>重置密码<input data-user="${escapeAttr(u.username)}" class="reset-pass" type="password" placeholder="留空则不改" /></label>
           <label>角色
-            <select data-user="${escapeAttr(u.username)}" class="reset-role">
+            <select data-user="${escapeAttr(u.username)}" class="reset-role" ${protectedUser ? "disabled" : ""}>
               <option value="user" ${u.role === "user" ? "selected" : ""}>普通用户</option>
               <option value="admin" ${admin ? "selected" : ""}>管理员（永久）</option>
             </select>
           </label>
           ${admin ? "" : `<label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="1" max="3650" placeholder="例如 1" /></label>
-          <label>账号额度<input data-user="${escapeAttr(u.username)}" class="max-accounts" type="number" min="1" max="100" value="${escapeAttr(String(u.max_accounts || 1))}" /></label>`}
+          <label>账号额度<input data-user="${escapeAttr(u.username)}" class="max-accounts" type="number" min="0" max="100" value="${escapeAttr(String(accountsValue))}" /></label>`}
           <div class="account-actions">
             <button class="btn-ghost" type="button" onclick="saveUser('${escapeAttr(u.username)}')">保存</button>
-            <button class="btn-run" type="button" onclick="removeUser('${escapeAttr(u.username)}')">删除</button>
+            ${protectedUser ? "" : `<button class="btn-run" type="button" onclick="removeUser('${escapeAttr(u.username)}')">删除</button>`}
           </div>
         </div>`;
       }).join("");
@@ -1379,8 +1385,8 @@
             username: $("newUsername").value,
             password: $("newPassword").value,
             role: $("newRole").value,
-            days: Number($("newDays") && $("newDays").value) || 1,
-            max_accounts: Number($("newMaxAccounts") && $("newMaxAccounts").value) || 1,
+            days: parseQuotaNumber($("newDays"), 1),
+            max_accounts: parseQuotaNumber($("newMaxAccounts"), 1),
           }),
         });
         toast("已添加账户");
@@ -1395,7 +1401,8 @@
       const pass = document.querySelector(`.reset-pass[data-user="${username}"]`)?.value || "";
       const role = document.querySelector(`.reset-role[data-user="${username}"]`)?.value || "user";
       const extra = document.querySelector(`.extra-days[data-user="${username}"]`)?.value || "";
-      const maxAccounts = document.querySelector(`.max-accounts[data-user="${username}"]`)?.value || "";
+      const maxAccountsEl = document.querySelector(`.max-accounts[data-user="${username}"]`);
+      const maxAccounts = maxAccountsEl ? String(maxAccountsEl.value ?? "").trim() : "";
       try {
         await api("/api/users/update", {
           method: "POST",
@@ -1403,8 +1410,8 @@
             username,
             password: pass,
             role,
-            extra_days: extra ? Number(extra) : "",
-            max_accounts: maxAccounts ? Number(maxAccounts) : "",
+            extra_days: extra === "" ? "" : Number(extra),
+            max_accounts: maxAccounts === "" ? "" : Number(maxAccounts),
           }),
         });
         toast("账户已更新");
@@ -1414,6 +1421,10 @@
       }
     }
     async function removeUser(username) {
+      if (String(username || "").toLowerCase() === "admin") {
+        toast("内置管理员 admin 无法删除", "err");
+        return;
+      }
       const ok = await ask("删除账户", "确定删除 " + username + " 吗？");
       if (!ok) return;
       try {
@@ -1439,7 +1450,7 @@
           const used = !!item.used;
           return `<div class="key-row ${createdCodes.has(item.code) ? "card-fresh" : ""}">
             <strong class="card-code">${escapeHtml(item.code)}</strong>
-            <div class="key-meta">${item.days} 天 · ${item.max_accounts} 个账号${item.note ? " · " + escapeHtml(item.note) : ""} · 生成 ${escapeHtml(item.created_label || "-")}${used && item.used_label ? " · 使用 " + escapeHtml(item.used_label) : ""}</div>
+            <div class="key-meta">${escapeHtml(item.days_label || (item.days === 0 ? "不限" : item.days + " 天"))} · ${escapeHtml(item.max_accounts_label || (item.max_accounts === 0 ? "账号不限" : item.max_accounts + " 个账号"))}${item.note ? " · " + escapeHtml(item.note) : ""} · 生成 ${escapeHtml(item.created_label || "-")}${used && item.used_label ? " · 使用 " + escapeHtml(item.used_label) : ""}</div>
             <span class="ck-status ${used ? "ck-bad" : "ck-ok"}">${escapeHtml(item.status_label || "")}</span>
             <div class="key-actions">
               <button class="btn-ghost mini" type="button" onclick="copyText('${escapeAttr(item.code)}')">复制</button>
@@ -1466,8 +1477,8 @@
         const data = await api("/api/cards", {
           method: "POST",
           body: JSON.stringify({
-            days: Number($("cardDays") && $("cardDays").value) || 1,
-            max_accounts: Number($("cardMaxAccounts") && $("cardMaxAccounts").value) || 1,
+            days: parseQuotaNumber($("cardDays"), 1),
+            max_accounts: parseQuotaNumber($("cardMaxAccounts"), 1),
             count: Number($("cardCount") && $("cardCount").value) || 1,
             note: ($("cardNote") && $("cardNote").value) || "",
           }),
