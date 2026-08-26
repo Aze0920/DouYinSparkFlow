@@ -1435,9 +1435,13 @@
       const days = (items || []).map((row) => Number(row && row.spark_days) || 0).filter((n) => n > 0);
       if (days.length < 3) return false;
       const years = days.filter((n) => n >= 1900 && n <= 2099);
-      return years.length >= Math.ceil(days.length * 0.5);
+      if (years.length >= Math.ceil(days.length * 0.5)) return true;
+      const counts = {};
+      days.forEach((n) => { counts[n] = (counts[n] || 0) + 1; });
+      const top = Math.max.apply(null, Object.keys(counts).map((k) => counts[k]));
+      return days.length >= 5 && top >= Math.ceil(days.length * 0.6);
     }
-    const CHAT_CACHE_VER = 5;
+    const CHAT_CACHE_VER = 6;
     function renderTargetPickerList() {
       const state = window.__targetPicker;
       const box = $("targetList");

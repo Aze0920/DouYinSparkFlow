@@ -9,6 +9,7 @@ from webui.chat_list import (
     parse_spark_near_name,
     spark_from_streak_html,
     spark_from_streak_text,
+    spark_from_title_row,
 )
 
 
@@ -123,6 +124,23 @@ class ChatListTests(unittest.TestCase):
         self.assertIsNone(spark_from_streak_html(no_flame))
         self.assertIsNone(spark_from_streak_html(igniting))
         self.assertIsNone(spark_from_streak_text("点燃中 1/3"))
+        fake_eight = """
+        <div data-e2e="conversation-item" class="conversationConversationItemwrapper">
+          <div class="conversationConversationItemtitleWrapper">
+            <div class="conversationConversationItemtitle">彩虹糖</div>
+            <div class="ConversationItemTagNextToTitlewrapper">
+              <div class="ConversationItemTagNextToTitleleft">
+                <div class="ConversationItemTagNextToTitletimeStr">8分钟前</div>
+              </div>
+            </div>
+          </div>
+          <div class="ConversationItemDescwrapper">
+            <pre>连续互相关心 8 天 [分享视频]</pre>
+          </div>
+        </div>
+        """
+        self.assertIsNone(spark_from_streak_html(fake_eight))
+        self.assertIsNone(spark_from_title_row("彩虹糖", "彩虹糖 8分钟前"))
 
     def test_orange_friend_flame_from_title_row(self):
         from webui.chat_list import spark_from_title_row
@@ -178,7 +196,8 @@ class ChatListTests(unittest.TestCase):
         self.assertIn("conversationConversationItemtitle", EXTRACT_JS)
         self.assertIn('data-e2e="conversation-item"', EXTRACT_JS)
         self.assertIn("aweme-avatar", EXTRACT_JS)
-        self.assertIn("title_row", EXTRACT_JS)
+        self.assertIn("has_flame", EXTRACT_JS)
+        self.assertIn("hasFlame", EXTRACT_JS)
         self.assertIn("titleWrapper", EXTRACT_JS)
 
     def test_avatar_url_is_https_only(self):
