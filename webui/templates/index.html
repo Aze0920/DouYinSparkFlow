@@ -30,9 +30,9 @@
       <h3 id="qrTitle">抖音扫码登录</h3>
       <p id="qrHint" class="sub">请用抖音 App 扫码，并在手机上确认登录</p>
       <div id="dyAppJumpWrap" class="dy-app-jump hidden">
-        <a class="btn-primary dy-app-jump-btn" id="openDouyinBtn" href="#" onclick="return openDouyinApp(event)">打开抖音登录</a>
+        <a class="btn-primary dy-app-jump-btn" id="openDouyinBtn" href="#" onclick="return openDouyinApp(event)">打开抖音 App</a>
         <a class="btn-ghost dy-app-jump-btn hidden" id="openDouyinSchemeBtn" href="#" onclick="return openDouyinApp(event, true)">直接打开抖音</a>
-        <p class="sub" id="dyAppJumpHint">仅手机浏览器可用。点按钮会跳到抖音 App，确认后回到本页，不要关掉。</p>
+        <p class="sub" id="dyAppJumpHint">仅手机浏览器可用。点按钮跳进抖音授权登录，确认后如需验证码回到本页填写，不要关掉。</p>
       </div>
       <div id="liveWrap" class="live-wrap">
         <div id="qrLoading">正在生成二维码…</div>
@@ -62,7 +62,7 @@
       <p class="sub">扫码登录、手机打开抖音，或粘贴 Cookie JSON。登录后会自动抓取昵称和抖音号。</p>
       <div class="choice-stack">
         <button class="btn-primary" type="button" onclick="chooseAddAccount('qr')">扫码登录</button>
-        <button class="btn-ghost" type="button" onclick="chooseAddAccount('app')">打开抖音登录（仅手机）</button>
+        <button class="btn-ghost" type="button" onclick="chooseAddAccount('app')">打开抖音 App（仅手机）</button>
         <button class="btn-ghost" type="button" onclick="chooseAddAccount('ck')">粘贴 Cookie JSON</button>
       </div>
       <div class="modal-actions">
@@ -996,6 +996,10 @@
     function isIOSClient() {
       return /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
     }
+    function isDouyinAppLink(url) {
+      return /^https:\/\/(v\.douyin\.com|v\.iesdouyin\.com)\//i.test(url || "")
+        || /^https:\/\/www\.douyin\.com\/open\/sdk\/ul/i.test(url || "");
+    }
     function applyJumpUi(data) {
       window.__dyAppJumpUrl = (data && data.app_jump_url) || window.__dyAppJumpUrl || "";
       window.__dyAppScheme = (data && data.app_scheme) || window.__dyAppScheme || "";
@@ -1027,18 +1031,18 @@
       }
       if (hint) {
         if (isInAppBrowser()) {
-          hint.textContent = "微信/QQ 内置浏览器经常跳转不了。请用 Safari 或系统浏览器打开本站再点按钮。确认后回到本页，不要关掉。";
+          hint.textContent = "微信/QQ 内置浏览器经常跳转不了。请用 Safari 或系统浏览器打开本站再点按钮。授权后如需验证码，回到本页填写。";
         } else if (!ready) {
-          hint.textContent = "正在准备跳转链接，好了之后按钮就可以点。确认后回到本页，不要关掉。";
+          hint.textContent = "正在准备跳转链接，好了之后按钮就可以点。授权后如需验证码，回到本页填写，不要关掉。";
         } else {
-          hint.textContent = "点按钮会唤起抖音 App。若仍停在网页，再点下面「直接打开抖音」。确认后回到本页，不要关掉。";
+          hint.textContent = "点按钮会跳进抖音授权登录。若仍停在网页，再点下面「直接打开抖音」。确认后如需验证码，回到本页填写。";
         }
       }
     }
     function openDouyinApp(event, forceScheme) {
       if (!isPhoneClient()) {
         if (event) event.preventDefault();
-        notice("请用手机打开", "跳转抖音登录只能在手机浏览器里用。电脑请扫码；用手机打开本站后再点「打开抖音登录」。");
+        notice("请用手机打开", "跳转抖音登录只能在手机浏览器里用。电脑请扫码；用手机打开本站后再点「打开抖音 App」。");
         return false;
       }
       const ios = isIOSClient();
@@ -1047,6 +1051,15 @@
       if (!scheme && !openUrl) {
         if (event) event.preventDefault();
         toast("登录链接还没准备好，请稍等几秒再点", "err");
+        return false;
+      }
+      const a = event && event.currentTarget;
+      const href = a && a.getAttribute && a.getAttribute("href");
+      const appLink = isDouyinAppLink(href) || isDouyinAppLink(openUrl);
+      if (!forceScheme && appLink) {
+        if (href && isDouyinAppLink(href)) return true;
+        if (event) event.preventDefault();
+        window.location.href = openUrl || href;
         return false;
       }
       try {
@@ -1058,11 +1071,6 @@
           setTimeout(function () { try { ifr.remove(); } catch (e) {} }, 2500);
         }
       } catch (e) {}
-      const a = event && event.currentTarget;
-      const href = a && a.getAttribute && a.getAttribute("href");
-      if (!forceScheme && href && href.indexOf("https://www.douyin.com/") === 0) {
-        return true;
-      }
       if (event) event.preventDefault();
       window.location.href = forceScheme ? (scheme || openUrl) : (openUrl || scheme);
       return false;
@@ -1077,8 +1085,18 @@
         const raw = (codes && codes[0] && (codes[0].rawValue || "")).trim();
         if (!raw) return;
         if (!/^(https?:|snssdk1128:|aweme:|sslocal:)/i.test(raw)) return;
-        if (!window.__dyAppJumpUrl) {
-          window.__dyAppJumpUrl = raw;
+        const better = isDouyinAppLink(raw) || /^(snssdk1128:|aweme:|sslocal:)/i.test(raw);
+        const current = window.__dyAppJumpUrl || "";
+        if (better && !isDouyinAppLink(current)) {
+          applyJumpUi({
+            status: "waiting",
+            app_jump_url: raw,
+            app_open_url: isDouyinAppLink(raw) ? raw : window.__dyOpenUrl,
+            app_open_url_android: isDouyinAppLink(raw) ? raw : window.__dyOpenUrlAndroid,
+            app_scheme: window.__dyAppScheme,
+            app_scheme_ios: window.__dySchemeIos
+          });
+        } else if (!current) {
           applyJumpUi({ status: "waiting", app_jump_url: raw, app_scheme: window.__dyAppScheme });
         }
       } catch (e) {}
@@ -1122,7 +1140,7 @@
       if (shot) shot.classList.add("hidden");
       if (title) {
         title.classList.remove("hidden");
-        title.textContent = qrLoginViaApp ? "打开抖音登录" : "抖音扫码登录";
+        title.textContent = qrLoginViaApp ? "打开抖音 App" : "抖音扫码登录";
       }
       if (hint) hint.classList.remove("hidden");
       applyJumpUi(data);
@@ -1347,7 +1365,7 @@
         } else if (qrLoginViaApp) {
           $("qrHint").textContent = data.message && data.status !== "waiting"
             ? data.message
-            : "点「打开抖音登录」跳到抖音 App 确认。确认后回到本页，不要关掉。";
+            : "点「打开抖音 App」跳进抖音授权登录。确认后如需验证码，回到本页填写。";
         } else {
           $("qrHint").textContent = data.message || "请用抖音 App 扫码，并在手机上确认登录";
         }
@@ -1378,7 +1396,7 @@
       opts = opts || {};
       if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
       if (opts.viaApp && !isPhoneClient()) {
-        notice("请用手机打开", "「打开抖音登录」只能在手机浏览器里跳转到抖音 App。电脑请用扫码；请用手机打开本站后再点这个按钮。");
+        notice("请用手机打开", "「打开抖音 App」只能在手机浏览器里跳转到抖音。电脑请用扫码；请用手机打开本站后再点这个按钮。");
         return;
       }
       closeAddAccount();
@@ -1388,11 +1406,11 @@
       qrLoginViaApp = !!opts.viaApp;
       stopQrPoll();
       bindLiveCard();
-      $("qrTitle").textContent = qrLoginViaApp ? "打开抖音登录" : "抖音扫码登录";
+      $("qrTitle").textContent = qrLoginViaApp ? "打开抖音 App" : "抖音扫码登录";
       $("qrHint").classList.remove("hidden");
       $("qrLoginActions").classList.remove("hidden");
       $("qrHint").textContent = qrLoginViaApp
-        ? "点「打开抖音登录」跳到抖音 App 确认。确认后回到本页，不要关掉。"
+        ? "点「打开抖音 App」跳进抖音授权登录。确认后如需验证码，回到本页填写。"
         : "请用抖音 App 扫码，并在手机上确认登录";
       resetLiveCard();
       $("qrModal").classList.remove("hidden");
@@ -1437,7 +1455,7 @@
     function chooseAddAccount(kind) {
       const idx = Number.isInteger(window.__addReplaceIndex) ? window.__addReplaceIndex : -1;
       if (kind === "app" && !isPhoneClient()) {
-        notice("请用手机打开", "「打开抖音登录」只能在手机浏览器里跳转到抖音 App。电脑请用扫码；请用手机打开本站后再点这个按钮。");
+        notice("请用手机打开", "「打开抖音 App」只能在手机浏览器里跳转到抖音。电脑请用扫码；请用手机打开本站后再点这个按钮。");
         return;
       }
       closeAddAccount();

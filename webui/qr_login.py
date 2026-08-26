@@ -10,7 +10,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from core.browser import get_browser
 from utils.logger import setup_logger
@@ -37,6 +37,10 @@ def is_image_qr_src(url: str) -> bool:
     return low.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"))
 
 
+APP_LINK_HOSTS = {"v.douyin.com", "v.iesdouyin.com"}
+LANDING_HOSTS = {"api.amemv.com", "aweme.snssdk.com", "www.amemv.com"}
+
+
 def is_app_jump_url(url: str) -> bool:
     raw = str(url or "").strip()
     if raw.startswith(("snssdk1128://", "aweme://", "sslocal://")):
@@ -48,22 +52,97 @@ def is_app_jump_url(url: str) -> bool:
     return not is_image_qr_src(raw)
 
 
+def jump_url_host(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw.startswith(("http://", "https://")):
+        return ""
+    try:
+        return (urlparse(raw).hostname or "").lower()
+    except Exception:
+        return ""
+
+
+def is_douyin_app_link(url: str) -> bool:
+    return jump_url_host(url) in APP_LINK_HOSTS
+
+
+def is_login_landing_url(url: str) -> bool:
+    host = jump_url_host(url)
+    if not host:
+        return False
+    if host in LANDING_HOSTS:
+        return True
+    return host.endswith(".amemv.com") or host.endswith(".snssdk.com")
+
+
+def jump_priority(url: str) -> tuple[int, int]:
+    raw = str(url or "").strip()
+    if not is_app_jump_url(raw):
+        return (0, 0)
+    if raw.startswith(("snssdk1128://", "aweme://", "sslocal://")):
+        return (100, len(raw))
+    if is_douyin_app_link(raw):
+        return (90, len(raw))
+    if is_login_landing_url(raw):
+        return (10, len(raw))
+    return (50, len(raw))
+
+
+def pick_best_jump(*urls: str) -> str:
+    best = ""
+    best_key = (0, 0)
+    for url in urls:
+        key = jump_priority(url)
+        if key > best_key:
+            best_key = key
+            best = str(url or "").strip()
+    return best
+
+
 def extract_jump_from_data(data: dict | None) -> str:
     if not isinstance(data, dict):
         return ""
+    found: list[str] = []
     for key in (
-        "qrcode_index_url",
         "short_url",
+        "qrcode_short_url",
+        "qr_short_url",
         "schema",
         "schema_url",
         "open_url",
+        "qrcode_index_url",
         "qrcode_url",
         "url",
     ):
         raw = str(data.get(key) or "").strip()
         if is_app_jump_url(raw):
-            return raw
-    return ""
+            found.append(raw)
+    return pick_best_jump(*found)
+
+
+def decode_qr_payload(png_b64: str) -> str:
+    raw = str(png_b64 or "").strip()
+    if raw.startswith("data:image"):
+        raw = raw.split(",", 1)[-1]
+    if len(raw) < 80:
+        return ""
+    try:
+        import cv2
+        import numpy as np
+    except Exception:
+        return ""
+    try:
+        buf = base64.b64decode(raw)
+        arr = np.frombuffer(buf, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is None:
+            return ""
+        val, _, _ = cv2.QRCodeDetector().detectAndDecode(img)
+        val = str(val or "").strip()
+        return val if is_app_jump_url(val) else ""
+    except Exception:
+        logger.debug("解码登录二维码失败", exc_info=True)
+        return ""
 
 
 def douyin_webview_scheme(url: str, prefix: str = "snssdk1128") -> str:
@@ -75,6 +154,17 @@ def douyin_webview_scheme(url: str, prefix: str = "snssdk1128") -> str:
     if not raw.startswith(("http://", "https://")):
         return ""
     return f"{prefix}://webview?url={quote(raw, safe='')}&from=webview&refer=web"
+
+
+def douyin_scan_scheme(url: str, prefix: str = "snssdk1128") -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("snssdk1128://", "aweme://", "sslocal://")):
+        return raw
+    if not raw.startswith(("http://", "https://")):
+        return ""
+    return f"{prefix}://scan?from=web&url={quote(raw, safe='')}"
 
 
 def douyin_app_scheme(url: str) -> str:
@@ -102,15 +192,24 @@ def _jump_fields(url: str) -> dict[str, str]:
     if jump.startswith(("snssdk1128://", "aweme://", "sslocal://")):
         scheme = jump
         scheme_ios = ("aweme://" + jump.split("://", 1)[-1]) if "://" in jump else jump
-    else:
+        open_url = douyin_universal_link(scheme_ios)
+        open_android = douyin_universal_link(scheme)
+    elif is_douyin_app_link(jump):
         scheme = douyin_webview_scheme(jump, "snssdk1128")
         scheme_ios = douyin_webview_scheme(jump, "aweme")
+        open_url = jump
+        open_android = jump
+    else:
+        scheme = douyin_scan_scheme(jump, "snssdk1128")
+        scheme_ios = douyin_scan_scheme(jump, "aweme")
+        open_url = douyin_universal_link(scheme_ios)
+        open_android = douyin_universal_link(scheme)
     return {
         "app_jump_url": jump,
         "app_scheme": scheme,
         "app_scheme_ios": scheme_ios,
-        "app_open_url": douyin_universal_link(scheme_ios),
-        "app_open_url_android": douyin_universal_link(scheme),
+        "app_open_url": open_url,
+        "app_open_url_android": open_android,
     }
 
 _lock = threading.Lock()
@@ -605,6 +704,9 @@ def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
     if token:
         bag["token"] = str(token)
     jump_src = extract_jump_from_data(data)
+    qrcode = data.get("qrcode")
+    decoded = decode_qr_payload(str(qrcode or "")) if isinstance(qrcode, str) else ""
+    jump_src = pick_best_jump(str(bag.get("app_jump_url") or ""), jump_src, decoded)
     if jump_src:
         bag["app_jump_url"] = jump_src
     qr_url = data.get("qrcode_url") or data.get("frontend_show_qrcode") or data.get("qr_url") or ""
@@ -1558,13 +1660,13 @@ def _request_qr(context, fp: str) -> tuple[str, str, str]:
     qrcode = str(data.get("qrcode") or "")
     if qrcode.startswith("data:image"):
         qrcode = qrcode.split(",", 1)[-1]
-    jump = extract_jump_from_data(data)
+    jump = pick_best_jump(extract_jump_from_data(data), decode_qr_payload(qrcode))
     logger.info(
         "get_qrcode token=%s qr_png=%s jump=%s jump_host=%s payload=%s",
         "yes" if token else "no",
         len(qrcode),
         "yes" if jump else "no",
-        (jump.split("/")[2] if jump.startswith("http") else jump[:48]),
+        (jump_url_host(jump) or jump[:48]),
         _brief_payload(payload),
     )
     return token, qrcode, jump
@@ -1595,12 +1697,13 @@ def _fetch_qr_in_page(page, fp: str) -> tuple[str, str, str]:
     qrcode = str(data.get("qrcode") or "")
     if qrcode.startswith("data:image"):
         qrcode = qrcode.split(",", 1)[-1]
-    jump = extract_jump_from_data(data)
+    jump = pick_best_jump(extract_jump_from_data(data), decode_qr_payload(qrcode))
     logger.info(
-        "页面 fetch get_qrcode token=%s qr_png=%s jump=%s",
+        "页面 fetch get_qrcode token=%s qr_png=%s jump=%s jump_host=%s",
         "yes" if token else "no",
         len(qrcode),
         "yes" if jump else "no",
+        jump_url_host(jump) or jump[:48],
     )
     return token, qrcode, jump
 
@@ -1732,7 +1835,7 @@ def _worker(replace_index: int):
         if not token and not api_png and not api_jump:
             token, api_png, api_jump = _fetch_qr_in_page(page, fp)
         token = token or str(sniff.get("token") or "")
-        app_jump = api_jump or str(sniff.get("app_jump_url") or "")
+        app_jump = pick_best_jump(api_jump, str(sniff.get("app_jump_url") or ""), decode_qr_payload(api_png))
         qr_url = ""
         if api_png:
             qr_url = api_png if str(api_png).startswith("data:") else f"data:image/png;base64,{api_png}"
@@ -1748,7 +1851,7 @@ def _worker(replace_index: int):
                 logger.exception("打开抖音私信页失败")
                 qr_url = ""
             token = token or str(sniff.get("token") or "")
-            app_jump = app_jump or str(sniff.get("app_jump_url") or "")
+            app_jump = pick_best_jump(app_jump, str(sniff.get("app_jump_url") or ""))
             if sniff.get("qr_url") and not qr_url:
                 maybe = str(sniff.get("qr_url") or "")
                 if is_image_qr_src(maybe) or maybe.startswith("data:image"):
@@ -1764,10 +1867,15 @@ def _worker(replace_index: int):
             return
 
         jump_fields = _jump_fields(app_jump)
-        logger.info("登录码已就绪 jump=%s token=%s", "yes" if jump_fields.get("app_jump_url") else "no", "yes" if token else "no")
+        logger.info(
+            "登录码已就绪 jump=%s host=%s token=%s",
+            "yes" if jump_fields.get("app_jump_url") else "no",
+            jump_url_host(jump_fields.get("app_jump_url") or "") or (jump_fields.get("app_jump_url") or "")[:48],
+            "yes" if token else "no",
+        )
         _set(
             status="waiting",
-            message="手机点「打开抖音登录」，或用抖音 App 扫码，确认后不要关掉本页",
+            message="手机点「打开抖音 App」授权登录，或用抖音扫码。确认后如需验证码，回到本页填写",
             qr_base64="",
             qr_url=qr_url,
             **jump_fields,
@@ -1967,7 +2075,9 @@ def _worker(replace_index: int):
                     patch = {"qr_url": fresh, "qr_base64": ""}
                     sniffed_jump = str(sniff.get("app_jump_url") or "")
                     if sniffed_jump:
-                        patch.update(_jump_fields(sniffed_jump))
+                        with _lock:
+                            current_jump = _state.get("app_jump_url") or ""
+                        patch.update(_jump_fields(pick_best_jump(current_jump, sniffed_jump)))
                     _set(**patch)
                 elif had_qr:
                     missing_qr += 1
@@ -1975,9 +2085,10 @@ def _worker(replace_index: int):
                 last_shot = now
             sniffed_jump = str(sniff.get("app_jump_url") or "")
             if sniffed_jump:
-                fields = _jump_fields(sniffed_jump)
                 with _lock:
                     current_jump = _state.get("app_jump_url") or ""
+                chosen = pick_best_jump(current_jump, sniffed_jump)
+                fields = _jump_fields(chosen)
                 if fields.get("app_jump_url") and fields["app_jump_url"] != current_jump:
                     _set(**fields)
             if _status() != "verify" and now - last_live >= 0.7:
