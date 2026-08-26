@@ -145,21 +145,6 @@ def decode_qr_payload(png_b64: str) -> str:
         return ""
 
 
-def with_inapp_params(url: str) -> str:
-    raw = str(url or "").strip()
-    if not raw.startswith(("http://", "https://")):
-        return raw
-    extra = []
-    if "append_common_params=" not in raw:
-        extra.append("append_common_params=1")
-    if "hide_nav_bar=" not in raw:
-        extra.append("hide_nav_bar=1")
-    if not extra:
-        return raw
-    sep = "&" if "?" in raw else "?"
-    return raw + sep + "&".join(extra)
-
-
 def douyin_webview_scheme(url: str, prefix: str = "snssdk1128") -> str:
     raw = str(url or "").strip()
     if not raw:
@@ -168,7 +153,7 @@ def douyin_webview_scheme(url: str, prefix: str = "snssdk1128") -> str:
         return raw
     if not raw.startswith(("http://", "https://")):
         return ""
-    return f"{prefix}://webview?url={quote(raw, safe='')}&from=webview&refer=web"
+    return f"{prefix}://webview?url={quote(raw, safe='')}"
 
 
 def android_intent_https(url: str) -> str:
@@ -186,13 +171,6 @@ def douyin_app_scheme(url: str) -> str:
     return douyin_webview_scheme(url, "snssdk1128")
 
 
-def douyin_universal_link(schema: str) -> str:
-    schema = str(schema or "").strip()
-    if not schema:
-        return ""
-    return "https://www.douyin.com/open/sdk/ul?schema=" + quote(schema, safe="")
-
-
 def _jump_fields(url: str) -> dict[str, str]:
     jump = str(url or "").strip()
     empty = {
@@ -205,24 +183,20 @@ def _jump_fields(url: str) -> dict[str, str]:
     if not is_app_jump_url(jump):
         return empty
     if jump.startswith(("snssdk1128://", "aweme://", "sslocal://")):
-        scheme = jump
-        scheme_ios = ("aweme://" + jump.split("://", 1)[-1]) if "://" in jump else jump
         return {
             "app_jump_url": jump,
-            "app_scheme": scheme,
-            "app_scheme_ios": scheme_ios,
-            "app_open_url": douyin_universal_link(scheme_ios),
-            "app_open_url_android": scheme,
+            "app_scheme": jump,
+            "app_scheme_ios": jump,
+            "app_open_url": "",
+            "app_open_url_android": jump,
         }
-    target = with_inapp_params(jump) if is_login_landing_url(jump) else jump
-    scheme = douyin_webview_scheme(target, "snssdk1128")
-    scheme_ios = douyin_webview_scheme(target, "aweme")
+    scheme = douyin_webview_scheme(jump, "snssdk1128")
     intent = android_intent_https(jump)
     return {
         "app_jump_url": jump,
         "app_scheme": scheme,
-        "app_scheme_ios": scheme_ios,
-        "app_open_url": douyin_universal_link(scheme_ios),
+        "app_scheme_ios": scheme,
+        "app_open_url": "",
         "app_open_url_android": intent or scheme,
     }
 

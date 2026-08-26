@@ -638,6 +638,8 @@ body.spark-locked .spark-action {
   padding: 11px 12px;
   border-radius: 12px;
   font: inherit;
+  cursor: pointer;
+  appearance: none;
 }
 .dy-app-jump-btn.is-disabled {
   opacity: .5;

@@ -30,9 +30,8 @@
       <h3 id="qrTitle">抖音扫码登录</h3>
       <p id="qrHint" class="sub">请用抖音 App 扫码，并在手机上确认登录</p>
       <div id="dyAppJumpWrap" class="dy-app-jump hidden">
-        <a class="btn-primary dy-app-jump-btn" id="openDouyinBtn" href="#" onclick="return openDouyinApp(event)">打开抖音 App</a>
-        <a class="btn-ghost dy-app-jump-btn hidden" id="openDouyinSchemeBtn" href="#" onclick="return openDouyinApp(event, true)">没弹出确认？改用网页链接打开</a>
-        <p class="sub" id="dyAppJumpHint">仅手机浏览器可用。不要用微信打开本站。同一部手机点按钮往往只能打开抖音，授权确认仍需另一台设备用抖音扫一扫。</p>
+        <button type="button" class="btn-primary dy-app-jump-btn" id="openDouyinBtn" onclick="openDouyinApp(event)">打开抖音 App</button>
+        <p class="sub" id="dyAppJumpHint">仅手机系统浏览器可用。点按钮后应出现「登录抖音网页版」。不要用微信打开本站。</p>
       </div>
       <div id="liveWrap" class="live-wrap">
         <div id="qrLoading">正在生成二维码…</div>
@@ -994,98 +993,118 @@
       return /MicroMessenger|QQ\//i.test(ua);
     }
     function isIOSClient() {
-      return /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+      const ua = navigator.userAgent || "";
+      return /iPhone|iPad|iPod/i.test(ua) || (/Mac/i.test(ua) && navigator.maxTouchPoints > 1);
+    }
+    function isAndroidClient() {
+      return /android/i.test(navigator.userAgent || "");
     }
     function isHttpJump(url) {
-      return /^https:\/\//i.test(url || "");
+      return /^https?:\/\//i.test(url || "");
     }
-    function launchAppScheme(url) {
-      if (!url) return false;
-      if (isHttpJump(url)) {
-        window.location.href = url;
-        return true;
-      }
-      try {
-        const ifr = document.createElement("iframe");
-        ifr.setAttribute("aria-hidden", "true");
-        ifr.style.cssText = "position:fixed;width:0;height:0;opacity:0;pointer-events:none;border:0;left:-9999px";
-        ifr.src = url;
-        document.body.appendChild(ifr);
-        setTimeout(function () { try { ifr.remove(); } catch (e) {} }, 2500);
-        return true;
-      } catch (e) {
-        return false;
-      }
+    function jumpHost(url) {
+      try { return new URL(url).host.toLowerCase(); } catch (e) { return ""; }
+    }
+    function jumpRank(url) {
+      const raw = url || "";
+      if (/^(snssdk1128:|aweme:|sslocal:)/i.test(raw)) return 100;
+      const host = jumpHost(raw);
+      if (!host) return 0;
+      if (host === "api.amemv.com" || host.endsWith(".amemv.com") || host.endsWith(".snssdk.com")) return 80;
+      if (host === "v.douyin.com" || host === "v.iesdouyin.com") return 20;
+      return 40;
+    }
+    function isIosDirectHttps(url) {
+      const host = jumpHost(url);
+      if (!host) return false;
+      if (host === "v.douyin.com" || host === "v.iesdouyin.com") return false;
+      return host === "douyin.com" || host.endsWith(".douyin.com");
+    }
+    function detectAppLaunch(cleanup) {
+      let hidden = document.hidden;
+      const onVis = function () { if (document.hidden) hidden = true; };
+      document.addEventListener("visibilitychange", onVis);
+      setTimeout(function () {
+        try { if (cleanup) cleanup(); } catch (e) {}
+        document.removeEventListener("visibilitychange", onVis);
+        if (!hidden && document.visibilityState === "visible") {
+          toast("没有唤起抖音。请确认已安装，并用系统浏览器打开本站；或用另一台设备扫本页二维码。", "err");
+        }
+      }, 3000);
     }
     function applyJumpUi(data) {
-      window.__dyAppJumpUrl = (data && data.app_jump_url) || window.__dyAppJumpUrl || "";
+      const incoming = (data && data.app_jump_url) || "";
+      if (incoming && jumpRank(incoming) >= jumpRank(window.__dyAppJumpUrl || "")) {
+        window.__dyAppJumpUrl = incoming;
+      } else if (incoming && !window.__dyAppJumpUrl) {
+        window.__dyAppJumpUrl = incoming;
+      }
       window.__dyAppScheme = (data && data.app_scheme) || window.__dyAppScheme || "";
       window.__dySchemeIos = (data && data.app_scheme_ios) || window.__dySchemeIos || "";
       window.__dyOpenUrl = (data && data.app_open_url) || window.__dyOpenUrl || "";
       window.__dyOpenUrlAndroid = (data && data.app_open_url_android) || window.__dyOpenUrlAndroid || "";
       const wrap = $("dyAppJumpWrap");
       const btn = $("openDouyinBtn");
-      const schemeBtn = $("openDouyinSchemeBtn");
       const hint = $("dyAppJumpHint");
       if (!wrap) return;
       const phone = isPhoneClient();
-      const ios = isIOSClient();
-      const httpsJump = isHttpJump(window.__dyOpenUrl) ? window.__dyOpenUrl : "";
-      const custom = ios
-        ? (window.__dySchemeIos || window.__dyAppScheme)
-        : (window.__dyOpenUrlAndroid || window.__dyAppScheme);
-      const ready = !!(httpsJump || (custom && !isHttpJump(custom)));
+      const raw = window.__dyAppJumpUrl || "";
+      const ready = isHttpJump(raw) || /^(snssdk1128:|aweme:|sslocal:)/i.test(raw);
       const status = data && data.status;
       const show = phone && data && ["loading", "waiting", "scanned"].includes(status) && (qrLoginViaApp || ready || status === "waiting" || status === "scanned");
       wrap.classList.toggle("hidden", !show);
       if (btn) {
         btn.classList.toggle("is-disabled", !ready);
         btn.setAttribute("aria-disabled", ready ? "false" : "true");
-        btn.setAttribute("href", httpsJump || "#");
-      }
-      if (schemeBtn) {
-        schemeBtn.classList.toggle("hidden", !httpsJump || ios);
-        schemeBtn.setAttribute("href", httpsJump || "#");
+        btn.disabled = !ready;
       }
       if (hint) {
         if (isInAppBrowser()) {
           hint.textContent = "微信/QQ 内置浏览器经常跳转不了。请用 Safari 或系统浏览器打开本站再点。";
         } else if (!ready) {
-          hint.textContent = "正在准备授权链接，好了之后按钮就可以点。确认后如需验证码，回到本页填写。";
+          hint.textContent = "正在识别登录二维码，好了之后按钮就可以点。确认后如需验证码，回到本页填写。";
         } else {
-          hint.textContent = "点金色按钮唤起抖音。确认后如需验证码，回到本页填写，不要关掉。";
+          hint.textContent = "点按钮后应出现「登录抖音网页版」。确认后如需验证码，回到本页填写，不要关掉。";
         }
       }
     }
-    function openDouyinApp(event, forceHttps) {
+    function openDouyinApp(event) {
       if (event) event.preventDefault();
       if (!isPhoneClient()) {
         notice("请用手机打开", "跳转抖音登录只能在手机浏览器里用。电脑请扫码；用手机打开本站后再点「打开抖音 App」。");
         return false;
       }
-      const ios = isIOSClient();
-      const httpsJump = isHttpJump(window.__dyOpenUrl) ? window.__dyOpenUrl : "";
-      const custom = ios
-        ? (window.__dySchemeIos || window.__dyAppScheme)
-        : (window.__dyOpenUrlAndroid || window.__dyAppScheme);
-      if (!httpsJump && !custom) {
+      const raw = window.__dyAppJumpUrl || "";
+      if (!raw) {
         toast("登录链接还没准备好，请稍等几秒再点", "err");
         return false;
       }
-      if (forceHttps || ios) {
-        if (httpsJump) window.location.href = httpsJump;
+      if (/^(snssdk1128:|aweme:|sslocal:)/i.test(raw)) {
+        window.location.href = raw;
+        detectAppLaunch();
         return false;
       }
-      if (custom && !isHttpJump(custom)) {
-        launchAppScheme(custom);
-        if (httpsJump) {
-          setTimeout(function () {
-            if (!document.hidden) window.location.href = httpsJump;
-          }, 1500);
-        }
+      if (!isHttpJump(raw)) {
+        toast("登录链接还没准备好，请稍等几秒再点", "err");
         return false;
       }
-      if (httpsJump) window.location.href = httpsJump;
+      if (isAndroidClient()) {
+        const path = raw.replace(/^https?:\/\//i, "");
+        const ifr = document.createElement("iframe");
+        ifr.style.display = "none";
+        ifr.src = "intent://" + path + "#Intent;scheme=https;package=com.ss.android.ugc.aweme;end";
+        document.body.appendChild(ifr);
+        detectAppLaunch(function () { try { ifr.remove(); } catch (e) {} });
+        return false;
+      }
+      if (isIOSClient()) {
+        window.location.href = isIosDirectHttps(raw)
+          ? raw
+          : ("snssdk1128://webview?url=" + encodeURIComponent(raw));
+        detectAppLaunch();
+        return false;
+      }
+      window.location.href = raw;
       return false;
     }
     async function decodeQrFromImage() {
@@ -1098,16 +1117,11 @@
         const raw = (codes && codes[0] && (codes[0].rawValue || "")).trim();
         if (!raw) return;
         if (!/^(https?:|snssdk1128:|aweme:|sslocal:)/i.test(raw)) return;
-        if (/^(snssdk1128:|aweme:|sslocal:)/i.test(raw)) {
-          applyJumpUi({
-            status: "waiting",
-            app_jump_url: raw,
-            app_open_url: window.__dyOpenUrl,
-            app_open_url_android: /^(snssdk1128:|sslocal:)/i.test(raw) ? raw : window.__dyOpenUrlAndroid,
-            app_scheme: /^(snssdk1128:|sslocal:)/i.test(raw) ? raw : window.__dyAppScheme,
-            app_scheme_ios: /^aweme:/i.test(raw) ? raw : window.__dySchemeIos
-          });
-        }
+        if (/\.(png|jpe?g|gif|webp|svg)$/i.test((raw.split("?")[0] || ""))) return;
+        applyJumpUi({
+          status: "waiting",
+          app_jump_url: raw
+        });
       } catch (e) {}
     }
     function stopQrPoll() {
