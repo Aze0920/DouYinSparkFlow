@@ -19,20 +19,55 @@ EXTRACT_JS = """() => {
     '[class*="conversationItemwrapper"]',
     '[class*="ConversationItemwrapper"]',
     '[class*="conversation-item"]',
+    '[class*="ConversationItem"]',
   ];
   let items = [];
   for (const sel of sels) {
     items = Array.from(document.querySelectorAll(sel));
     if (items.length) break;
   }
+  const sparkSel = '[class*="spark"],[class*="Spark"],[class*="streak"],[class*="Streak"],[class*="huohua"],[class*="Huo"],[class*="fire"],[class*="Fire"],[class*="flame"],[class*="Flame"],[class*="ignite"],[class*="keepLight"],[class*="lightCount"]';
+  const readNum = (blob) => {
+    const m = String(blob || '').replace(/点燃中\\s*\\d+\\s*\\/\\s*\\d+/g, ' ').match(/(\\d{1,4})/);
+    if (!m) return null;
+    const n = Number(m[1]);
+    return (n >= 1 && n <= 9999) ? n : null;
+  };
+  const sparkFrom = (el, name) => {
+    for (const n of el.querySelectorAll(sparkSel + ', img, svg, [aria-label], [title]')) {
+      const blob = [n.innerText, n.getAttribute('aria-label'), n.getAttribute('title'), n.getAttribute('alt')].join(' ');
+      const got = readNum(blob);
+      if (got) return got;
+    }
+    const titleEl = el.querySelector('[class*="title"],[class*="Title"],[class*="nickName"],[class*="nickname"],[class*="NickName"]');
+    const scope = (titleEl && titleEl.parentElement) || el;
+    for (const n of scope.querySelectorAll('span,small,em,i,b,strong,div')) {
+      const t = String(n.innerText || '').trim();
+      if (/^\\d{1,4}$/.test(t)) {
+        const num = Number(t);
+        if (num >= 1 && num <= 9999) return num;
+      }
+    }
+    const line = String((titleEl && titleEl.innerText) || el.innerText || '').replace(/\\s+/g, ' ').trim();
+    if (name && line.indexOf(name) === 0) {
+      const rest = line.slice(name.length).trim();
+      const m = rest.match(/^(\\d{1,4})\\b/);
+      if (m) return Number(m[1]);
+    }
+    return null;
+  };
   return items.map((el) => {
     const titleEl = el.querySelector('[class*="title"],[class*="Title"],[class*="nickName"],[class*="nickname"],[class*="NickName"]');
     const rawName = (titleEl ? titleEl.innerText : el.innerText) || '';
-    const name = String(rawName).split('\\n').map((x) => x.trim()).filter(Boolean)[0] || '';
+    let name = String(rawName).split('\\n').map((x) => x.trim()).filter(Boolean)[0] || '';
     const text = String(el.innerText || '').replace(/\\s+/g, ' ').trim();
+    const spark = sparkFrom(el, name);
+    if (spark && name.endsWith(String(spark)) && name.length > String(spark).length) {
+      name = name.slice(0, -String(spark).length).trim();
+    }
     const cls = String(el.className || '');
     const isGroup = /group|Group|群聊/.test(cls + ' ' + text) || /\\d+\\s*人/.test(text);
-    return { name, kind: isGroup ? 'group' : 'friend', text, cls };
+    return { name, kind: isGroup ? 'group' : 'friend', text, cls, spark_days: spark };
   }).filter((row) => row.name);
 }"""
 
@@ -49,17 +84,26 @@ SCROLL_JS = """() => {
   return box.scrollTop !== before;
 }"""
 
-SPARK_KEY_RE = re.compile(r"(streak|spark|fire.?day|consecutive|huohua)", re.I)
+SPARK_KEY_RE = re.compile(
+    r"(streak|spark|fire.?day|consecutive|huohua|keep_light|light_count|spark_count|streak_count|fire_count)",
+    re.I,
+)
+SKIP_SPARK_KEY_RE = re.compile(r"unread|red_dot|mention|badge_count", re.I)
 SPARK_TEXT_RES = [
     re.compile(r"火花\s*[xX×]?\s*(\d{1,4})"),
     re.compile(r"连续(?:互发|互相关心|关心)?\s*(\d{1,4})\s*天"),
     re.compile(r"(\d{1,4})\s*天(?:火花|连续)"),
 ]
+TIME_RE = re.compile(
+    r"\d{1,2}:\d{2}|\d+\s*(?:秒前|分钟前|小时前|天前)|昨天|前天|周一|周二|周三|周四|周五|周六|周日"
+)
+IGNITE_RE = re.compile(r"点燃中\s*\d+\s*/\s*\d+")
 
 
 def parse_spark_days(text: str) -> int | None:
     raw = re.sub(r"\d+\s*天前", "", str(text or ""))
     raw = re.sub(r"\d+\s*小时前", "", raw)
+    raw = IGNITE_RE.sub(" ", raw)
     for pat in SPARK_TEXT_RES:
         found = pat.search(raw)
         if found:
@@ -72,9 +116,47 @@ def parse_spark_days(text: str) -> int | None:
     return None
 
 
+def parse_spark_near_name(name: str, text: str) -> int | None:
+    found = parse_spark_days(text)
+    if found:
+        return found
+    raw = IGNITE_RE.sub(" ", str(text or ""))
+    raw = TIME_RE.sub(" ", raw)
+    raw = re.sub(r"\s+", " ", raw).strip()
+    label = str(name or "").strip()
+    if label and raw.startswith(label):
+        rest = raw[len(label) :].strip()
+        matched = re.match(r"(\d{1,4})\b", rest)
+        if matched:
+            n = int(matched.group(1))
+            if 1 <= n <= 9999:
+                return n
+    parts = [p for p in re.split(r"[\s]+", raw) if p]
+    if label and label in parts:
+        index = parts.index(label)
+        nxt = parts[index + 1] if index + 1 < len(parts) else ""
+        if re.fullmatch(r"\d{1,4}", nxt or ""):
+            n = int(nxt)
+            if 1 <= n <= 9999:
+                return n
+    return None
+
+
+def strip_spark_suffix(name: str, spark: int | None) -> str:
+    cleaned = str(name or "").strip()
+    if not spark or not cleaned:
+        return cleaned
+    suffix = str(spark)
+    if cleaned != suffix and cleaned.endswith(suffix):
+        cleaned = cleaned[: -len(suffix)].strip()
+    return cleaned or str(name or "").strip()
+
+
 def _spark_from_obj(obj: Any) -> int | None:
     if isinstance(obj, dict):
         for key, value in obj.items():
+            if SKIP_SPARK_KEY_RE.search(str(key or "")):
+                continue
             if SPARK_KEY_RE.search(str(key or "")):
                 try:
                     n = int(value)
@@ -178,8 +260,13 @@ def merge_conversations(*groups: list[dict]) -> list[dict]:
             by_name[name] = row
     friends = [row for row in by_name.values() if row["kind"] != "group"]
     groups_out = [row for row in by_name.values() if row["kind"] == "group"]
-    friends.sort(key=lambda x: x["name"])
-    groups_out.sort(key=lambda x: x["name"])
+
+    def rank(row: dict) -> tuple:
+        spark = int(row.get("spark_days") or 0)
+        return (0 if spark else 1, -spark, str(row.get("name") or ""))
+
+    friends.sort(key=rank)
+    groups_out.sort(key=rank)
     return friends + groups_out
 
 
@@ -214,8 +301,15 @@ def _collect_dom(page) -> list[dict]:
             if not name or name in NOISE_NAMES:
                 continue
             text = str((item or {}).get("text") or "")
+            spark = (item or {}).get("spark_days")
+            try:
+                spark = int(spark) if spark not in (None, "", 0, "0") else None
+            except (TypeError, ValueError):
+                spark = None
+            spark = spark or parse_spark_near_name(name, text)
+            name = strip_spark_suffix(name, spark)
             kind = _row_kind(name, text, str((item or {}).get("kind") or ""))
-            rows.append({"name": name, "kind": kind, "spark_days": parse_spark_days(text)})
+            rows.append({"name": name, "kind": kind, "spark_days": spark})
     return rows
 
 
@@ -240,7 +334,9 @@ def _collect_from_locators(item_loc) -> list[dict]:
             text = str(element.inner_text(timeout=800) or "")
         except Exception:
             text = name
-        rows.append({"name": name, "kind": _row_kind(name, text), "spark_days": parse_spark_days(text)})
+        spark = parse_spark_near_name(name, text) or parse_spark_days(text)
+        name = strip_spark_suffix(name, spark)
+        rows.append({"name": name, "kind": _row_kind(name, text), "spark_days": spark})
     return rows
 
 

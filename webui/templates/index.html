@@ -1360,33 +1360,60 @@
       if ($("targetModal")) $("targetModal").classList.add("hidden");
       window.__targetPicker = null;
     }
+    function bindTargetPickerClicks() {
+      const box = $("targetList");
+      if (!box || box.dataset.bound === "1") return;
+      box.dataset.bound = "1";
+      box.addEventListener("click", (ev) => {
+        const row = ev.target.closest(".target-row");
+        if (!row) return;
+        toggleTargetRow(row.getAttribute("data-name") || "");
+      });
+    }
+    function sortPickerRows(rows) {
+      return (rows || []).slice().sort((a, b) => {
+        const as = Number(a && a.spark_days) || 0;
+        const bs = Number(b && b.spark_days) || 0;
+        if (as && !bs) return -1;
+        if (!as && bs) return 1;
+        if (bs !== as) return bs - as;
+        return String((a && a.name) || "").localeCompare(String((b && b.name) || ""), "zh");
+      });
+    }
+    function sparkText(row) {
+      const n = Number(row && row.spark_days) || 0;
+      return n ? ("火花 " + n + " 天") : "";
+    }
     function renderTargetPickerList() {
       const state = window.__targetPicker;
       const box = $("targetList");
       if (!state || !box) return;
+      bindTargetPickerClicks();
       const q = (($("targetSearch") && $("targetSearch").value) || "").trim().toLowerCase();
       const selected = state.selected;
       const items = (state.items || []).filter((row) => !q || String(row.name || "").toLowerCase().includes(q));
-      const friends = items.filter((row) => row.kind !== "group");
-      const groups = items.filter((row) => row.kind === "group");
+      const lit = sortPickerRows(items.filter((row) => Number(row.spark_days) > 0));
+      const friends = sortPickerRows(items.filter((row) => row.kind !== "group" && !(Number(row.spark_days) > 0)));
+      const groups = sortPickerRows(items.filter((row) => row.kind === "group" && !(Number(row.spark_days) > 0)));
       const extra = [...selected].filter((name) => !(state.items || []).some((row) => row.name === name));
       const section = (title, rows) => {
         if (!rows.length) return "";
         return `<div class="target-section">${escapeHtml(title)}</div>` + rows.map((row) => {
           const name = row.name || row;
           const kind = row.kind === "group" ? "群聊" : (row.kind ? "好友" : "已选");
-          const spark = row.spark_days ? ("火花 " + row.spark_days + " 天") : (row.kind ? "火花未知" : "");
-          const on = selected.has(name) ? " on" : "";
-          return `<button type="button" class="target-row${on}" onclick="toggleTargetRow(${JSON.stringify(name)})">
-            <span><b>${escapeHtml(name)}</b><small class="kind">${escapeHtml(kind)}</small></span>
+          const spark = sparkText(row);
+          const on = selected.has(name);
+          return `<button type="button" class="target-row${on ? " on" : ""}" data-name="${escapeAttr(name)}">
+            <span class="target-check">${on ? "✓" : ""}</span>
+            <span class="target-main"><b>${escapeHtml(name)}</b><small class="kind">${escapeHtml(kind)}</small></span>
             <span class="spark">${escapeHtml(spark)}</span>
           </button>`;
         }).join("");
       };
-      box.innerHTML = section("好友", friends) + section("群聊", groups) + section("已选但列表里没有", extra.map((name) => ({ name })))
+      box.innerHTML = section("有火花", lit) + section("好友", friends) + section("群聊", groups) + section("已选但列表里没有", extra.map((name) => ({ name })))
         || `<div class="target-empty">没有匹配的会话</div>`;
       if ($("targetModalHint")) {
-        $("targetModalHint").textContent = "已选 " + selected.size + " 个。点一行即可开关。火花天数能读到就会显示。";
+        $("targetModalHint").textContent = "已选 " + selected.size + " 个。点一行即可开关。有火花的会排在最上面。";
       }
     }
     function toggleTargetRow(name) {
