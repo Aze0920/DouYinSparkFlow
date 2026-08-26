@@ -29,6 +29,8 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("accountHasCookie(item)", INDEX)
         self.assertIn("bindTargetPickerClicks", INDEX)
         self.assertIn("sortPickerRows", INDEX)
+        self.assertIn("plausibleSpark", INDEX)
+        self.assertIn("sparkCacheStale", INDEX)
         self.assertIn('data-name="${escapeAttr(name)}"', INDEX)
         self.assertNotIn("toggleTargetRow(${JSON.stringify(name)})", INDEX)
 

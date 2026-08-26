@@ -1370,10 +1370,16 @@
         toggleTargetRow(row.getAttribute("data-name") || "");
       });
     }
+    function plausibleSpark(n) {
+      n = Number(n) || 0;
+      if (n < 1 || n > 3660) return 0;
+      if (n >= 1900 && n <= 2099) return 0;
+      return n;
+    }
     function sortPickerRows(rows) {
       return (rows || []).slice().sort((a, b) => {
-        const as = Number(a && a.spark_days) || 0;
-        const bs = Number(b && b.spark_days) || 0;
+        const as = plausibleSpark(a && a.spark_days);
+        const bs = plausibleSpark(b && b.spark_days);
         if (as && !bs) return -1;
         if (!as && bs) return 1;
         if (bs !== as) return bs - as;
@@ -1381,8 +1387,14 @@
       });
     }
     function sparkText(row) {
-      const n = Number(row && row.spark_days) || 0;
+      const n = plausibleSpark(row && row.spark_days);
       return n ? ("火花 " + n + " 天") : "";
+    }
+    function sparkCacheStale(items) {
+      const days = (items || []).map((row) => Number(row && row.spark_days) || 0).filter((n) => n > 0);
+      if (days.length < 3) return false;
+      const years = days.filter((n) => n >= 1900 && n <= 2099);
+      return years.length >= Math.ceil(days.length * 0.5);
     }
     function renderTargetPickerList() {
       const state = window.__targetPicker;
@@ -1392,9 +1404,9 @@
       const q = (($("targetSearch") && $("targetSearch").value) || "").trim().toLowerCase();
       const selected = state.selected;
       const items = (state.items || []).filter((row) => !q || String(row.name || "").toLowerCase().includes(q));
-      const lit = sortPickerRows(items.filter((row) => Number(row.spark_days) > 0));
-      const friends = sortPickerRows(items.filter((row) => row.kind !== "group" && !(Number(row.spark_days) > 0)));
-      const groups = sortPickerRows(items.filter((row) => row.kind === "group" && !(Number(row.spark_days) > 0)));
+      const lit = sortPickerRows(items.filter((row) => plausibleSpark(row.spark_days)));
+      const friends = sortPickerRows(items.filter((row) => row.kind !== "group" && !plausibleSpark(row.spark_days)));
+      const groups = sortPickerRows(items.filter((row) => row.kind === "group" && !plausibleSpark(row.spark_days)));
       const extra = [...selected].filter((name) => !(state.items || []).some((row) => row.name === name));
       const section = (title, rows) => {
         if (!rows.length) return "";
@@ -1428,7 +1440,7 @@
       if (!state) return;
       const uid = state.uid;
       const cached = (window.__accountChats || {})[uid];
-      if (!force && cached && cached.items && cached.items.length && (Date.now() - (cached.at || 0) < 5 * 60 * 1000)) {
+      if (!force && cached && cached.items && cached.items.length && (Date.now() - (cached.at || 0) < 5 * 60 * 1000) && !sparkCacheStale(cached.items)) {
         state.items = cached.items;
         renderTargetPickerList();
         return;

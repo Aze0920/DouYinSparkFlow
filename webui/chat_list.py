@@ -26,35 +26,33 @@ EXTRACT_JS = """() => {
     items = Array.from(document.querySelectorAll(sel));
     if (items.length) break;
   }
-  const sparkSel = '[class*="spark"],[class*="Spark"],[class*="streak"],[class*="Streak"],[class*="huohua"],[class*="Huo"],[class*="fire"],[class*="Fire"],[class*="flame"],[class*="Flame"],[class*="ignite"],[class*="keepLight"],[class*="lightCount"]';
-  const readNum = (blob) => {
-    const m = String(blob || '').replace(/点燃中\\s*\\d+\\s*\\/\\s*\\d+/g, ' ').match(/(\\d{1,4})/);
-    if (!m) return null;
-    const n = Number(m[1]);
-    return (n >= 1 && n <= 9999) ? n : null;
+  const sparkSel = '[class*="spark"],[class*="Spark"],[class*="streak"],[class*="Streak"],[class*="huohua"],[class*="HuoHua"],[class*="flame"],[class*="Flame"],[class*="keepLight"]';
+  const isSpark = (n) => {
+    n = Number(n);
+    if (!n || n < 1 || n > 3660) return false;
+    if (n >= 1900 && n <= 2099) return false;
+    return true;
   };
   const sparkFrom = (el, name) => {
-    for (const n of el.querySelectorAll(sparkSel + ', img, svg, [aria-label], [title]')) {
-      const blob = [n.innerText, n.getAttribute('aria-label'), n.getAttribute('title'), n.getAttribute('alt')].join(' ');
-      const got = readNum(blob);
-      if (got) return got;
-    }
     const titleEl = el.querySelector('[class*="title"],[class*="Title"],[class*="nickName"],[class*="nickname"],[class*="NickName"]');
-    const scope = (titleEl && titleEl.parentElement) || el;
-    for (const n of scope.querySelectorAll('span,small,em,i,b,strong,div')) {
-      const t = String(n.innerText || '').trim();
-      if (/^\\d{1,4}$/.test(t)) {
-        const nearby = String((n.parentElement && n.parentElement.innerText) || n.innerText || '');
-        if (/点燃中/.test(nearby) || /\\d+\\s*\\/\\s*\\d+/.test(nearby)) continue;
-        const num = Number(t);
-        if (num >= 1 && num <= 9999) return num;
-      }
-    }
-    const line = String((titleEl && titleEl.innerText) || el.innerText || '').replace(/\\s+/g, ' ').trim();
+    const line = String((titleEl && titleEl.innerText) || '').replace(/\\s+/g, ' ').trim();
     if (name && line.indexOf(name) === 0) {
-      const rest = line.slice(name.length).trim();
+      const rest = line.slice(name.length)
+        .replace(/(?:19|20)\\d{2}[-/.年]\\d{0,2}[-/.月]?\\d{0,2}日?/g, ' ')
+        .trim();
       const m = rest.match(/^(\\d{1,4})\\b/);
-      if (m) return Number(m[1]);
+      if (m && isSpark(Number(m[1]))) return Number(m[1]);
+    }
+    for (const n of el.querySelectorAll(sparkSel)) {
+      const t = String(n.innerText || '').trim();
+      if (/^\\d{1,4}$/.test(t) && isSpark(Number(t))) return Number(t);
+    }
+    if (titleEl && titleEl.parentElement) {
+      for (const n of titleEl.parentElement.children) {
+        const t = String(n.innerText || '').trim();
+        if (/点燃中/.test(t) || /\\d+\\s*\\/\\s*\\d+/.test(t)) continue;
+        if (/^\\d{1,4}$/.test(t) && isSpark(Number(t))) return Number(t);
+      }
     }
     return null;
   };
@@ -96,16 +94,34 @@ SPARK_TEXT_RES = [
     re.compile(r"连续(?:互发|互相关心|关心)?\s*(\d{1,4})\s*天"),
     re.compile(r"(\d{1,4})\s*天(?:火花|连续)"),
 ]
+DATE_RE = re.compile(
+    r"(?:19|20)\d{2}[-/.年]\d{1,2}(?:[-/.月]\d{1,2}日?)?"
+    r"|(?:19|20)\d{2}年"
+)
+YEAR_TOKEN_RE = re.compile(r"(?:(?<=\s)|(?<=^))(?:19|20)\d{2}(?=\s|$)")
 TIME_RE = re.compile(
     r"\d{1,2}:\d{2}|\d+\s*(?:秒前|分钟前|小时前|天前)|昨天|前天|周一|周二|周三|周四|周五|周六|周日"
 )
 IGNITE_RE = re.compile(r"点燃中\s*\d+\s*/\s*\d+")
 
 
+def is_plausible_spark(n: Any) -> bool:
+    try:
+        days = int(n)
+    except (TypeError, ValueError):
+        return False
+    if days < 1 or days > 3660:
+        return False
+    if 1900 <= days <= 2099:
+        return False
+    return True
+
+
 def parse_spark_days(text: str) -> int | None:
     raw = re.sub(r"\d+\s*天前", "", str(text or ""))
     raw = re.sub(r"\d+\s*小时前", "", raw)
     raw = IGNITE_RE.sub(" ", raw)
+    raw = DATE_RE.sub(" ", raw)
     for pat in SPARK_TEXT_RES:
         found = pat.search(raw)
         if found:
@@ -113,7 +129,7 @@ def parse_spark_days(text: str) -> int | None:
                 n = int(found.group(1))
             except (TypeError, ValueError):
                 continue
-            if 1 <= n <= 9999:
+            if is_plausible_spark(n):
                 return n
     return None
 
@@ -123,6 +139,8 @@ def parse_spark_near_name(name: str, text: str) -> int | None:
     if found:
         return found
     raw = IGNITE_RE.sub(" ", str(text or ""))
+    raw = DATE_RE.sub(" ", raw)
+    raw = YEAR_TOKEN_RE.sub(" ", raw)
     raw = TIME_RE.sub(" ", raw)
     raw = re.sub(r"\s+", " ", raw).strip()
     label = str(name or "").strip()
@@ -131,7 +149,7 @@ def parse_spark_near_name(name: str, text: str) -> int | None:
         matched = re.match(r"(\d{1,4})\b", rest)
         if matched:
             n = int(matched.group(1))
-            if 1 <= n <= 9999:
+            if is_plausible_spark(n):
                 return n
     parts = [p for p in re.split(r"[\s]+", raw) if p]
     if label and label in parts:
@@ -139,7 +157,7 @@ def parse_spark_near_name(name: str, text: str) -> int | None:
         nxt = parts[index + 1] if index + 1 < len(parts) else ""
         if re.fullmatch(r"\d{1,4}", nxt or ""):
             n = int(nxt)
-            if 1 <= n <= 9999:
+            if is_plausible_spark(n):
                 return n
     return None
 
@@ -162,7 +180,7 @@ def _spark_from_obj(obj: Any) -> int | None:
             if SPARK_KEY_RE.search(str(key or "")):
                 try:
                     n = int(value)
-                    if 1 <= n <= 9999:
+                    if is_plausible_spark(n):
                         return n
                 except (TypeError, ValueError):
                     pass
@@ -252,12 +270,14 @@ def merge_conversations(*groups: list[dict]) -> list[dict]:
                 spark = int(spark) if spark not in (None, "") else None
             except (TypeError, ValueError):
                 spark = parse_spark_days(str(spark or ""))
+            if not is_plausible_spark(spark):
+                spark = None
             row = by_name.get(name) or {"name": name, "kind": kind, "spark_days": None}
             if kind == "group":
                 row["kind"] = "group"
             if spark:
                 current = int(row.get("spark_days") or 0)
-                if spark > current:
+                if not is_plausible_spark(current) or spark > current:
                     row["spark_days"] = spark
             by_name[name] = row
     friends = [row for row in by_name.values() if row["kind"] != "group"]
@@ -308,7 +328,11 @@ def _collect_dom(page) -> list[dict]:
                 spark = int(spark) if spark not in (None, "", 0, "0") else None
             except (TypeError, ValueError):
                 spark = None
+            if not is_plausible_spark(spark):
+                spark = None
             spark = spark or parse_spark_near_name(name, text)
+            if not is_plausible_spark(spark):
+                spark = None
             name = strip_spark_suffix(name, spark)
             kind = _row_kind(name, text, str((item or {}).get("kind") or ""))
             rows.append({"name": name, "kind": kind, "spark_days": spark})
@@ -337,6 +361,8 @@ def _collect_from_locators(item_loc) -> list[dict]:
         except Exception:
             text = name
         spark = parse_spark_near_name(name, text) or parse_spark_days(text)
+        if not is_plausible_spark(spark):
+            spark = None
         name = strip_spark_suffix(name, spark)
         rows.append({"name": name, "kind": _row_kind(name, text), "spark_days": spark})
     return rows

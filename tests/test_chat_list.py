@@ -2,6 +2,7 @@ import unittest
 
 from webui.chat_list import (
     harvest_api_conversations,
+    is_plausible_spark,
     merge_conversations,
     parse_spark_days,
     parse_spark_near_name,
@@ -20,6 +21,25 @@ class ChatListTests(unittest.TestCase):
         self.assertEqual(parse_spark_near_name("帅帅", "帅帅 685 昨天 20:00 自动续火花助手"), 685)
         self.assertIsNone(parse_spark_near_name("折辰客", "折辰客 点燃中 1/3 38分钟前"))
         self.assertIsNone(parse_spark_near_name("阿杰", "阿杰 38分钟前 电脑店"))
+
+    def test_rejects_year_as_spark(self):
+        self.assertFalse(is_plausible_spark(2025))
+        self.assertFalse(is_plausible_spark(2024))
+        self.assertTrue(is_plausible_spark(711))
+        self.assertTrue(is_plausible_spark(38))
+        self.assertTrue(is_plausible_spark(190))
+        self.assertIsNone(parse_spark_near_name("冰点..", "冰点.. 2025-08-26 17:09 你好"))
+        self.assertIsNone(parse_spark_near_name("河南小李", "河南小李 2025 17:09 在吗"))
+        self.assertEqual(parse_spark_near_name("王洁", "王洁 711 2025-08-26 17:09 [盖瑞]今日火花[加一]"), 711)
+        self.assertEqual(parse_spark_near_name("花开富贵", "花开富贵 38 18:08 今日火花"), 38)
+
+    def test_merge_drops_year(self):
+        rows = merge_conversations(
+            [{"name": "王洁", "kind": "friend", "spark_days": 2025}],
+            [{"name": "王洁", "kind": "friend", "spark_days": 711}],
+        )
+        by_name = {item["name"]: item for item in rows}
+        self.assertEqual(by_name["王洁"]["spark_days"], 711)
 
     def test_merge_spark_first(self):
         rows = merge_conversations(
