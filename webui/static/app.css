@@ -703,9 +703,12 @@ body.spark-locked .spark-action {
 }
 .account-actions {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
   margin-top: auto;
+}
+.account-actions.has-copy-ck {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .account-actions button { width: 100%; }
 .account-actions .btn-run-account {

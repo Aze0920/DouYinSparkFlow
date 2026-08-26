@@ -1632,6 +1632,36 @@ def list_account_conversations(request: Request, payload: dict | None = None):
     return {"ok": True, "unique_id": unique_id, **result}
 
 
+def _cookie_copy_text(raw) -> str:
+    if raw in (None, ""):
+        return ""
+    if isinstance(raw, (list, dict)):
+        return json.dumps(raw, ensure_ascii=False)
+    text = str(raw).strip()
+    if not text:
+        return ""
+    try:
+        return json.dumps(json.loads(text), ensure_ascii=False)
+    except json.JSONDecodeError:
+        return text
+
+
+@app.post("/api/account/copy-cookies")
+def copy_account_cookies(request: Request, payload: dict | None = None):
+    user = require_admin(request)
+    payload = payload or {}
+    unique_id = str(payload.get("unique_id") or "").strip()
+    if not unique_id:
+        raise HTTPException(status_code=400, detail="缺少抖音号")
+    _require_account_access(user, unique_id)
+    raw = load_env().get(cookie_key(unique_id), "")
+    text = _cookie_copy_text(raw)
+    if not text:
+        raise HTTPException(status_code=400, detail="这个账号还没有 Cookie")
+    logger.info("管理员复制 Cookie unique_id=%s", unique_id)
+    return {"ok": True, "cookies": text}
+
+
 @app.post("/api/account/import-cookie")
 def import_account_cookie(request: Request, payload: dict | None = None):
     require_spark(request)
