@@ -870,6 +870,10 @@ def _task_from_account(account: dict, env: dict, existing: dict | None = None) -
         "cron_hour": hour,
         "cron_minute": minute,
     }
+    if "message_template" in account:
+        row["message_template"] = str(account.get("message_template") or "").strip()
+    elif str(existing.get("message_template") or "").strip():
+        row["message_template"] = str(existing.get("message_template") or "").strip()
     if source:
         row["cookie_source"] = source
     if status:
@@ -988,6 +992,11 @@ def save_config(request: Request, payload: dict):
     if payload.get("cron_hour") is not None:
         hour, minute = account_cron({"cron_hour": payload.get("cron_hour"), "cron_minute": payload.get("cron_minute")})
 
+    if _is_admin(user) and "max_task_threads" in payload:
+        threads = _clamp_task_threads(payload.get("max_task_threads"))
+    else:
+        threads = _clamp_task_threads(env.get("MAX_TASK_THREADS") or 10)
+
     data = {
         "PROXY_ADDRESS": payload.get("proxy_address") if payload.get("proxy_address") is not None else env.get("PROXY_ADDRESS") or "",
         "CRON_HOUR": str(hour),
@@ -1001,7 +1010,7 @@ def save_config(request: Request, payload: dict):
         "BROWSER_TIMEOUT": str(payload.get("browser_timeout") or env.get("BROWSER_TIMEOUT") or 120000),
         "FRIEND_LIST_WAIT_TIME": str(payload.get("friend_list_wait_time") or env.get("FRIEND_LIST_WAIT_TIME") or 2000),
         "TASK_RETRY_TIMES": str(payload.get("task_retry_times") or env.get("TASK_RETRY_TIMES") or 3),
-        "MAX_TASK_THREADS": str(_clamp_task_threads(payload.get("max_task_threads") or env.get("MAX_TASK_THREADS") or 10)),
+        "MAX_TASK_THREADS": str(threads),
         "LOG_LEVEL": payload.get("log_level") or env.get("LOG_LEVEL") or "DEBUG",
         "GITHUB_REPO": payload.get("github_repo") or repo_name(),
         "HEADLESS": "true",
@@ -1150,7 +1159,7 @@ def import_account_cookie(request: Request, payload: dict | None = None):
 
 @app.get("/api/logs")
 def logs(request: Request, lines: int = 200):
-    require_auth(request)
+    require_admin(request)
     if not LOG_FILE.is_file():
         return {"ok": True, "text": "还没有日志。扫码登录、从 GitHub 更新、续火花都会写到这里。"}
     content = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()

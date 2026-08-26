@@ -126,6 +126,11 @@ def get_userData():
                 "targets": [norm(t) for t in task.get("targets", [])],
                 "cron_hour": task.get("cron_hour"),
                 "cron_minute": task.get("cron_minute"),
+                "messageTemplate": str(task.get("message_template") or "").strip()
+                or os.getenv(
+                    "MESSAGE_TEMPLATE",
+                    "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n[API]",
+                ),
             }
         )
 

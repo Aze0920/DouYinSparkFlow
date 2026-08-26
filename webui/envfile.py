@@ -7,6 +7,7 @@ from pathlib import Path
 from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_MESSAGE_TEMPLATE = "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n[API]"
 
 
 def env_path() -> Path:
@@ -152,6 +153,15 @@ def read_tasks(env: dict | None = None) -> list:
     return list(tasks or [])
 
 
+def account_message_template(task: dict | None, env: dict | None = None) -> str:
+    task = task or {}
+    env = env or {}
+    text = str(task.get("message_template") or "").strip()
+    if text:
+        return text
+    return str(env.get("MESSAGE_TEMPLATE") or DEFAULT_MESSAGE_TEMPLATE)
+
+
 def parse_accounts(env: dict) -> list:
     accounts = []
     for task in read_tasks(env):
@@ -173,6 +183,7 @@ def parse_accounts(env: dict) -> list:
                 "targets": task.get("targets") or [],
                 "cron_hour": hour,
                 "cron_minute": minute,
+                "message_template": account_message_template(task, env),
                 "cookie_source": str(task.get("cookie_source") or "").strip(),
                 "cookie_status": str(task.get("cookie_status") or "").strip(),
                 "owner": str(task.get("owner") or "").strip(),

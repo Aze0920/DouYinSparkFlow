@@ -337,7 +337,7 @@ def _send_chat_message(page, message: str):
     chat_input.first.press("Enter")
 
 
-def do_user_task(username, cookies, targets):
+def do_user_task(username, cookies, targets, message_template=""):
     user_id_dict = {}
     playwright, browser = get_browser()
     context = None
@@ -375,7 +375,7 @@ def do_user_task(username, cookies, targets):
             page, username, targets, user_id_dict, item_loc, list_loc, scope
         ):
             logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
-            message = build_message()
+            message = build_message(message_template)
             _send_chat_message(page, message)
             logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
             logger.debug(f"账号 {username} 给好友 {friend_name} 发送消息完成")
@@ -407,7 +407,7 @@ def _max_task_threads(n_users: int) -> int:
 def _run_one_account(user: dict):
     username = user.get("username", "未知用户")
     logger.info(f"开始处理账号 {username}")
-    do_user_task(username, user["cookies"], user["targets"])
+    do_user_task(username, user["cookies"], user["targets"], user.get("messageTemplate") or "")
     logger.info(f"账号 {username} 任务完成")
 
 

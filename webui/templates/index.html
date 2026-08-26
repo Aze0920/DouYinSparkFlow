@@ -126,7 +126,7 @@
         </div>
       </div>
       <a class="nav-btn active" href="/" data-page="home" onclick="return navTo(event, 'home')">总览</a>
-      <a class="nav-btn" href="/logs" data-page="logs" onclick="return navTo(event, 'logs')">运行日志</a>
+      <a class="nav-btn admin-only hidden" href="/logs" data-page="logs" onclick="return navTo(event, 'logs')">运行日志</a>
       <a class="nav-btn admin-only hidden" href="/users" data-page="users" onclick="return navTo(event, 'users')">用户管理</a>
       <a class="nav-btn admin-only hidden" href="/cards" data-page="cards" onclick="return navTo(event, 'cards')">卡密管理</a>
       <a class="nav-btn admin-only hidden" href="/settings" data-page="settings" onclick="return navTo(event, 'settings')">设置</a>
@@ -144,7 +144,7 @@
         </div>
         <div class="row">
           <span class="status-dot" id="liveDot"><i></i><b id="runText">空闲</b></span>
-          <button class="btn-ghost" id="checkGithubBtn" onclick="checkGithub()">GitHub 检测</button>
+          <button class="btn-ghost admin-only hidden" id="checkGithubBtn" onclick="checkGithub()">GitHub 检测</button>
           <button class="btn-primary admin-only hidden" id="updateBtn" onclick="doUpdate()">从 GitHub 更新</button>
         </div>
       </div>
@@ -175,22 +175,12 @@
         </div>
         <section class="panel">
           <div class="panel-head">
-            <h2>抖音账号与发送策略</h2>
+            <h2>抖音账号</h2>
             <div>
               <button class="btn-ghost" type="button" onclick="openWxpusherBind()">消息推送</button>
               <button class="btn-ghost spark-action" type="button" onclick="openAddAccount()">添加账号</button>
-              <button class="btn-ghost spark-action" type="button" onclick="saveGlobalSettings()">保存模板</button>
             </div>
           </div>
-          <div class="grid two">
-            <label>同时处理账号数
-              <input id="maxTaskThreads" class="spark-action" type="number" min="1" max="32" value="10" title="一个账号一条线程，给多个好友发也在同一线程。最多 32。" />
-            </label>
-            <label class="span-2">消息模板
-              <textarea id="messageTemplate" class="spark-action" rows="3"></textarea>
-            </label>
-          </div>
-          <p class="sub">模板和并发数是全局的。每个账号自己选每天几点发、自己保存、自己点续火花。窗口够宽时一排会自动排多张卡片。</p>
           <p class="sub" id="accountQuota">账号额度会显示在这里。</p>
           <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。如需继续使用请联系管理员获取卡密。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码登录，也可以只粘贴 Cookie JSON，昵称和抖音号会自动抓取。</p>
@@ -257,6 +247,20 @@
       </section>
 
       <section id="page-settings" class="hidden">
+        <section class="panel">
+          <div class="panel-head">
+            <h2>续火花并发</h2>
+          </div>
+          <p class="sub">一个抖音账号占用一条线程，给多个好友发也在同一线程。最多 32。</p>
+          <div class="grid two">
+            <label>同时处理账号数
+              <input id="maxTaskThreads" type="number" min="1" max="32" value="10" />
+            </label>
+            <label class="span-2">
+              <button class="btn-primary" type="button" onclick="saveRuntimeSettings()">保存并发</button>
+            </label>
+          </div>
+        </section>
         <section class="panel">
           <div class="panel-head">
             <h2>WxPusher</h2>
@@ -468,7 +472,7 @@
       opts = opts || {};
       if (name === "tasks") name = "home";
       if (!["home", "logs", "users", "cards", "settings"].includes(name)) name = "home";
-      if ((name === "users" || name === "cards" || name === "settings") && current && !isAdmin()) name = "home";
+      if (current && !isAdmin() && name !== "home") name = "home";
       page = name;
       ["home", "logs", "users", "cards", "settings"].forEach((key) => {
         $("page-" + key).classList.toggle("hidden", key !== name);
@@ -477,14 +481,15 @@
         btn.classList.toggle("active", btn.dataset.page === name);
       });
       const titles = {
-        home: ["总览", "当前账号、版本，以及抖音任务配置"],
+        home: ["总览", ""],
         logs: ["运行日志", "任务输出会在这个页面自动刷新"],
         users: ["用户管理", "管理员永久有效。普通用户的天数和账号额度由卡密或这里指定"],
         cards: ["卡密管理", "一排一张卡密，生成后可复制发给用户"],
-        settings: ["设置", "WxPusher 和公众号推送"],
+        settings: ["设置", "并发、WxPusher 和公众号推送"],
       };
       $("pageTitle").textContent = titles[name][0];
       $("pageSub").textContent = titles[name][1];
+      $("pageSub").classList.toggle("hidden", !titles[name][1]);
       const path = pagePath(name);
       if (!opts.skipHistory && location.pathname !== path) {
         const state = { page: name };
@@ -663,16 +668,12 @@
       const cron = formatCron(data.cron_hour, data.cron_minute);
       const operate = canSpark();
       const ck = cookieStatusMeta(data);
-      const source = cookieSourceText(data);
-      const ownerName = data.owner || (current && current.username) || "";
-      const notifyHint = data.wxpusher_bound
-        ? ("消息发给 " + ownerName + " 绑定的微信")
-        : ("消息发给 " + (ownerName || "所属用户") + "，对方还没扫码绑定");
+      const tpl = data.message_template || window.__defaultTemplate || "";
       return `<div class="account" data-index="${index}">
         <div class="account-head">
           <div>
             <strong>${escapeHtml(name)}</strong>
-            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"} · ${escapeHtml(source)}${isAdmin() && data.owner ? " · 所属 " + escapeHtml(data.owner) : ""} · ${escapeHtml(notifyHint)}</div>
+            <div class="account-id">${uid ? "抖音号 " + escapeHtml(uid) : "尚未登录"}</div>
           </div>
           <div class="account-head-right">
             <span class="ck-status ${ck.cls}">${ck.text}</span>
@@ -693,6 +694,9 @@
         <label>目标好友（一行一个）
           <textarea class="targets spark-action" ${operate ? "" : "disabled"}>${escapeHtml((data.targets || []).join("\n"))}</textarea>
         </label>
+        <label>消息模板
+          <textarea class="message-template spark-action" rows="3" ${operate ? "" : "disabled"}>${escapeHtml(tpl)}</textarea>
+        </label>
         <div class="account-actions">
           <button class="btn-ghost spark-action" type="button" onclick="saveAccount(${index})" ${operate ? "" : "disabled"}>保存</button>
           <button class="btn-ghost spark-action" type="button" onclick="openAddAccount(${index})" ${operate ? "" : "disabled"}>${bound ? "重新登录" : "扫码登录"}</button>
@@ -710,9 +714,9 @@
     }
     async function loadConfig() {
       const cfg = await api("/api/config");
-      $("messageTemplate").value = cfg.message_template;
       if ($("maxTaskThreads")) $("maxTaskThreads").value = String(cfg.max_task_threads || 10);
       window.__defaultCron = "09:00";
+      window.__defaultTemplate = cfg.message_template || "";
       window.__accountCookies = {};
       window.__accounts = cfg.accounts || [];
       window.__accounts.forEach((item) => {
@@ -729,6 +733,7 @@
         targets: node.querySelector(".targets").value.split(/\n+/).map((x) => x.trim()).filter(Boolean),
         cron_hour: t.hour,
         cron_minute: t.minute,
+        message_template: (node.querySelector(".message-template") && node.querySelector(".message-template").value) || "",
         cookie_source: (node.querySelector(".cookie-source") && node.querySelector(".cookie-source").value) || "",
         cookie_status: (node.querySelector(".cookie-status") && node.querySelector(".cookie-status").value) || "",
         owner: (node.querySelector(".account-owner") && node.querySelector(".account-owner").value) || "",
@@ -1180,25 +1185,28 @@
     }
     async function saveConfig(silent = false, includeAccounts = false) {
       const body = {
-        message_template: $("messageTemplate").value,
-        max_task_threads: Number(($("maxTaskThreads") && $("maxTaskThreads").value) || 10),
         github_repo: "Aze0920/DouYinSparkFlow",
       };
+      if (isAdmin() && $("maxTaskThreads")) {
+        body.max_task_threads = Number($("maxTaskThreads").value || 10);
+      }
       if (includeAccounts) body.accounts = collectAccounts();
       await api("/api/config", {
         method: "POST",
         body: JSON.stringify(body),
       });
-      if (!silent) toast(includeAccounts ? "配置已保存" : "模板已保存");
+      if (!silent) toast(includeAccounts ? "配置已保存" : "设置已保存");
       await checkStatus();
     }
-    async function saveGlobalSettings() {
-      if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
+    async function saveRuntimeSettings() {
       try {
         await saveConfig(false, false);
       } catch (err) {
         toast(err.message, "err");
       }
+    }
+    async function saveGlobalSettings() {
+      await saveRuntimeSettings();
     }
     async function saveAccount(index, silent = false) {
       if (!canSpark()) { toast(sparkLockMsg(), "err"); return false; }
@@ -1244,8 +1252,10 @@
           body: JSON.stringify({ unique_id: item.unique_id }),
         });
         toast(data.message || "任务已开始");
-        showPage("logs");
-        await loadLogs();
+        if (isAdmin()) {
+          showPage("logs");
+          await loadLogs();
+        }
       } catch (err) {
         toast(err.message, "err");
       }
@@ -1258,8 +1268,10 @@
         if (canSpark()) await saveConfig(true, true);
         const data = await api("/api/run", { method: "POST", body: "{}" });
         toast(data.message || "任务已开始");
-        showPage("logs");
-        await loadLogs();
+        if (isAdmin()) {
+          showPage("logs");
+          await loadLogs();
+        }
       } catch (err) {
         toast(err.message, "err");
       }
@@ -1521,6 +1533,10 @@
     async function loadNotifySettings() {
       const data = await api("/api/settings/notify");
       fillNotifySettings(data);
+      try {
+        const cfg = await api("/api/config");
+        if ($("maxTaskThreads")) $("maxTaskThreads").value = String(cfg.max_task_threads || 10);
+      } catch (e) {}
     }
     async function saveNotifySettings() {
       try {
@@ -1673,6 +1689,7 @@
       }
     }
     async function unbindWxpusher() {
+      await closeWxpusherBind();
       const ok = await ask("解绑微信推送", "解绑后不会再给你名下的抖音号发消息。确定解绑吗？");
       if (!ok) return;
       try {
@@ -1680,7 +1697,6 @@
         applyWxpusherBind({ bound: false, mask: "", ...data });
         toast("已解绑");
         try { await loadConfig(); } catch (e) {}
-        await refreshWxpusherQr();
       } catch (err) {
         toast(err.message, "err");
       }

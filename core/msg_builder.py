@@ -43,8 +43,8 @@ def build_message_with_openai() -> str:
     return response.choices[0].message.content.strip()
 
 
-def build_message() -> str:
-    message = get_config().get("messageTemplate", "续火花")
+def build_message(template: str | None = None) -> str:
+    message = str(template or "").strip() or get_config().get("messageTemplate", "续火花")
     if "[API]" in message:
         api_content = request_hitokoto()
         message = message.replace("[API]", api_content)
