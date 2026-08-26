@@ -129,8 +129,6 @@ def delete_card(code: str) -> dict:
     target = next((item for item in cards if normalize_code(item.get("code")) == key), None)
     if not target:
         raise ValueError("卡密不存在")
-    if str(target.get("used_by") or "").strip():
-        raise ValueError("已使用的卡密不能删除")
     cards = [item for item in cards if normalize_code(item.get("code")) != key]
     save_cards(cards)
     return target

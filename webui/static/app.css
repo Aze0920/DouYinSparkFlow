@@ -340,30 +340,95 @@ body.spark-locked .spark-action {
   font-family: Consolas, "Courier New", monospace;
 }
 .key-result button { flex-shrink: 0; align-self: center; }
-.key-list {
+.table-toolbar {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 16px;
-}
-.key-row {
-  display: flex;
+  justify-content: space-between;
   align-items: center;
   gap: 12px;
-  padding: 12px 14px;
-  background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: var(--shadow);
+  margin-top: 18px;
+  flex-wrap: wrap;
 }
-.key-row .card-code { min-width: 220px; }
-.key-meta {
-  flex: 1;
+.table-toolbar .muted { color: var(--muted); font-size: 13px; }
+.pager-size {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 13px;
 }
-.key-actions { display: flex; gap: 8px; flex-shrink: 0; }
-.key-actions button { width: auto; }
+.pager-size select {
+  width: auto;
+  min-width: 72px;
+  padding: 6px 10px;
+}
+.table-wrap {
+  overflow-x: auto;
+  margin-top: 12px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(0, 0, 0, .12);
+}
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  min-width: 860px;
+}
+.data-table th,
+.data-table td {
+  padding: 11px 12px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.data-table th {
+  color: var(--muted);
+  font-weight: 600;
+  background: rgba(255, 255, 255, .03);
+  position: sticky;
+  top: 0;
+}
+.data-table tbody tr:last-child td { border-bottom: 0; }
+.data-table tbody tr:hover td { background: rgba(255, 122, 58, .06); }
+.data-table tr.card-fresh td { background: rgba(79, 210, 165, 0.08); }
+.data-table .card-code { font-size: 13px; }
+.data-table .note-cell {
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--muted);
+}
+.data-table .row-actions {
+  display: flex;
+  gap: 8px;
+}
+.data-table .row-actions button { width: auto; }
+.data-table .empty-cell {
+  text-align: center;
+  color: var(--muted);
+  padding: 28px 12px;
+  white-space: normal;
+}
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+.pager button {
+  padding: 6px 10px;
+  min-width: 36px;
+}
+.pager button.active {
+  background: rgba(255, 122, 58, .18);
+  border-color: rgba(255, 122, 58, .55);
+  color: var(--gold);
+}
+.pager .pager-info { color: var(--muted); font-size: 12px; margin-right: 6px; }
 .check-line {
   display: flex;
   align-items: center;
@@ -598,12 +663,6 @@ body.spark-locked .spark-action {
   .topbar { align-items: flex-start; }
   .span-2 { grid-column: auto; }
   .log-box { height: 42vh; min-height: 200px; }
-  .key-row {
-    flex-wrap: wrap;
-    align-items: flex-start;
-  }
-  .key-row .card-code { min-width: 0; width: 100%; }
-  .key-meta { width: 100%; }
   .account-actions { grid-template-columns: 1fr; }
   .toast-wrap { left: 12px; right: 12px; top: 12px; }
   .toast { min-width: 0; }

@@ -279,7 +279,37 @@
             <pre id="newCardCodes"></pre>
             <button class="btn-ghost" type="button" onclick="copyNewCards()">复制</button>
           </div>
-          <div id="cardList" class="key-list"></div>
+          <div class="table-toolbar">
+            <div class="muted" id="cardCountLabel">还没有卡密</div>
+            <label class="pager-size">每页
+              <select id="cardPageSize" onchange="changeCardPageSize()">
+                <option value="10">10</option>
+                <option value="20" selected>20</option>
+                <option value="50">50</option>
+                <option value="100">100</option>
+              </select>
+              条
+            </label>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead>
+                <tr>
+                  <th>卡密</th>
+                  <th>有效天数</th>
+                  <th>账号数</th>
+                  <th>备注</th>
+                  <th>状态</th>
+                  <th>生成时间</th>
+                  <th>使用时间</th>
+                  <th>使用人</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody id="cardTableBody"></tbody>
+            </table>
+          </div>
+          <div class="pager" id="cardPager"></div>
         </section>
       </section>
 
@@ -1507,29 +1537,105 @@
         toast(err.message, "err");
       }
     }
-    async function copyText(text) {
+    function copyText(text) {
       try {
-        await navigator.clipboard.writeText(text);
-        toast("已复制");
+        navigator.clipboard.writeText(text).then(() => toast("已复制")).catch(() => toast("复制失败，请手动选择", "err"));
       } catch (err) {
         toast("复制失败，请手动选择", "err");
       }
     }
+    let cardStore = [];
+    let cardCreatedCodes = new Set();
+    let cardPage = 1;
+    const CARD_PAGE_KEY = "dsf_card_page_size";
+    function cardPageSize() {
+      const n = Number($("cardPageSize") && $("cardPageSize").value);
+      return [10, 20, 50, 100].includes(n) ? n : 20;
+    }
+    function restoreCardPageSize() {
+      try {
+        const saved = Number(localStorage.getItem(CARD_PAGE_KEY) || 20);
+        if ($("cardPageSize") && [10, 20, 50, 100].includes(saved)) $("cardPageSize").value = String(saved);
+      } catch (e) {}
+    }
+    function changeCardPageSize() {
+      try { localStorage.setItem(CARD_PAGE_KEY, String(cardPageSize())); } catch (e) {}
+      cardPage = 1;
+      renderCards();
+    }
+    function gotoCardPage(n) {
+      cardPage = n;
+      renderCards();
+    }
+    function cardPageButtons(pages) {
+      if (pages <= 7) return Array.from({ length: pages }, (_, i) => i + 1);
+      const set = new Set([1, pages, cardPage - 1, cardPage, cardPage + 1]);
+      const list = [...set].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b);
+      const out = [];
+      list.forEach((n, i) => {
+        if (i && n - list[i - 1] > 1) out.push("…");
+        out.push(n);
+      });
+      return out;
+    }
     function renderCards(cards, created) {
-      const createdCodes = new Set((created || []).map((item) => item.code));
-      if ($("cardList")) {
-        $("cardList").innerHTML = (cards || []).map((item) => {
-          const used = !!item.used;
-          return `<div class="key-row ${createdCodes.has(item.code) ? "card-fresh" : ""}">
-            <strong class="card-code">${escapeHtml(item.code)}</strong>
-            <div class="key-meta">${escapeHtml(item.days_label || (item.days === 0 ? "不限" : item.days + " 天"))} · ${escapeHtml(item.max_accounts_label || (item.max_accounts === 0 ? "账号不限" : item.max_accounts + " 个账号"))}${item.note ? " · " + escapeHtml(item.note) : ""} · 生成 ${escapeHtml(item.created_label || "-")}${used && item.used_label ? " · 使用 " + escapeHtml(item.used_label) : ""}</div>
-            <span class="ck-status ${used ? "ck-bad" : "ck-ok"}">${escapeHtml(item.status_label || "")}</span>
-            <div class="key-actions">
-              <button class="btn-ghost mini" type="button" onclick="copyText('${escapeAttr(item.code)}')">复制</button>
-              ${used ? "" : `<button class="btn-run mini" type="button" onclick="removeCard('${escapeAttr(item.code)}')">删除</button>`}
-            </div>
-          </div>`;
-        }).join("") || `<p class="sub">还没有卡密。填好天数和账号数后点「生成卡密」。</p>`;
+      if (Array.isArray(cards)) cardStore = cards;
+      if (created) {
+        cardCreatedCodes = new Set((created || []).map((item) => item.code));
+        cardPage = 1;
+      }
+      const size = cardPageSize();
+      const total = cardStore.length;
+      const realPages = Math.max(1, Math.ceil(total / size) || 1);
+      if (cardPage > realPages) cardPage = realPages;
+      if (cardPage < 1) cardPage = 1;
+      const start = (cardPage - 1) * size;
+      const slice = cardStore.slice(start, start + size);
+      if ($("cardCountLabel")) {
+        $("cardCountLabel").textContent = total ? ("共 " + total + " 张卡密") : "还没有卡密";
+      }
+      const body = $("cardTableBody");
+      if (body) {
+        if (!total) {
+          body.innerHTML = `<tr><td class="empty-cell" colspan="9">还没有卡密。填好天数和账号数后点「生成卡密」。</td></tr>`;
+        } else {
+          body.innerHTML = slice.map((item) => {
+            const used = !!item.used;
+            const days = item.days_label || (item.days === 0 ? "不限" : item.days + " 天");
+            const accounts = item.max_accounts_label || (item.max_accounts === 0 ? "账号不限" : item.max_accounts + " 个账号");
+            return `<tr class="${cardCreatedCodes.has(item.code) ? "card-fresh" : ""}">
+              <td><strong class="card-code">${escapeHtml(item.code)}</strong></td>
+              <td>${escapeHtml(days)}</td>
+              <td>${escapeHtml(accounts)}</td>
+              <td class="note-cell" title="${escapeAttr(item.note || "")}">${escapeHtml(item.note || "-")}</td>
+              <td><span class="ck-status ${used ? "ck-bad" : "ck-ok"}">${escapeHtml(item.status_label || (used ? "已用" : "未使用"))}</span></td>
+              <td>${escapeHtml(item.created_label || "-")}</td>
+              <td>${escapeHtml(item.used_label || "-")}</td>
+              <td>${escapeHtml(item.used_by || "-")}</td>
+              <td>
+                <div class="row-actions">
+                  <button class="btn-ghost mini" type="button" onclick="copyText('${escapeAttr(item.code)}')">复制</button>
+                  <button class="btn-run mini" type="button" onclick="removeCard('${escapeAttr(item.code)}')">删除</button>
+                </div>
+              </td>
+            </tr>`;
+          }).join("");
+        }
+      }
+      const pager = $("cardPager");
+      if (pager) {
+        if (total <= size) {
+          pager.innerHTML = "";
+        } else {
+          const buttons = cardPageButtons(realPages).map((item) => {
+            if (item === "…") return `<span class="pager-info">…</span>`;
+            return `<button type="button" class="${item === cardPage ? "active" : ""}" onclick="gotoCardPage(${item})">${item}</button>`;
+          }).join("");
+          pager.innerHTML = `<span class="pager-info">第 ${cardPage} / ${realPages} 页</span>
+            <button type="button" ${cardPage <= 1 ? "disabled" : ""} onclick="gotoCardPage(${cardPage - 1})">上一页</button>
+            ${buttons}
+            <button type="button" ${cardPage >= realPages ? "disabled" : ""} onclick="gotoCardPage(${cardPage + 1})">下一页</button>`;
+        }
       }
     }
     function copyNewCards() {
@@ -1541,6 +1647,7 @@
       copyText(text);
     }
     async function loadCards() {
+      restoreCardPageSize();
       const data = await api("/api/cards");
       renderCards(data.cards || []);
     }
@@ -1566,7 +1673,14 @@
       }
     }
     async function removeCard(code) {
-      const ok = await ask("删除卡密", "确定删除 " + code + " 吗？未使用的卡密删除后作废。");
+      const item = cardStore.find((row) => row.code === code);
+      const used = !!(item && item.used);
+      const ok = await ask(
+        "删除卡密",
+        used
+          ? "这张卡密已经用过，删除后只从列表去掉，不影响已注册用户。确定删除 " + code + " 吗？"
+          : "未使用的卡密删除后作废。确定删除 " + code + " 吗？"
+      );
       if (!ok) return;
       try {
         const data = await api("/api/cards/delete", { method: "POST", body: JSON.stringify({ code }) });
