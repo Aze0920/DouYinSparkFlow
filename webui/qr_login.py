@@ -45,20 +45,25 @@ def is_app_jump_url(url: str) -> bool:
         return False
     if raw.startswith("data:"):
         return False
-    if is_image_qr_src(raw):
-        return False
-    host = raw.split("/", 3)[2].lower() if "://" in raw else ""
-    return any(
-        key in host
-        for key in (
-            "aweme.snssdk.com",
-            "snssdk.com",
-            "douyin.com",
-            "iesdouyin.com",
-            "ecombdapi.com",
-            "amemv.com",
-        )
-    )
+    return not is_image_qr_src(raw)
+
+
+def extract_jump_from_data(data: dict | None) -> str:
+    if not isinstance(data, dict):
+        return ""
+    for key in (
+        "qrcode_index_url",
+        "short_url",
+        "schema",
+        "schema_url",
+        "open_url",
+        "qrcode_url",
+        "url",
+    ):
+        raw = str(data.get(key) or "").strip()
+        if is_app_jump_url(raw):
+            return raw
+    return ""
 
 
 def douyin_app_scheme(url: str) -> str:
@@ -122,6 +127,8 @@ def _set(**kwargs):
         if k not in {
             "qr_base64",
             "qr_url",
+            "app_jump_url",
+            "app_scheme",
             "cookies",
             "verify_image",
             "live_image",
@@ -183,7 +190,7 @@ def _sso_params(fp: str) -> dict[str, str]:
     return {
         "service": HOME,
         "need_logo": "false",
-        "need_short_url": "false",
+        "need_short_url": "true",
         "passport_jssdk_version": "1.0.20",
         "aid": "6383",
         "account_sdk_source": "sso",
@@ -558,9 +565,9 @@ def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
     token = data.get("token")
     if token:
         bag["token"] = str(token)
-    jump_src = data.get("qrcode_index_url") or data.get("schema") or data.get("schema_url") or ""
-    if is_app_jump_url(str(jump_src or "")):
-        bag["app_jump_url"] = str(jump_src).strip()
+    jump_src = extract_jump_from_data(data)
+    if jump_src:
+        bag["app_jump_url"] = jump_src
     qr_url = data.get("qrcode_url") or data.get("frontend_show_qrcode") or data.get("qr_url") or ""
     if isinstance(qr_url, str) and is_image_qr_src(qr_url):
         bag["qr_url"] = qr_url
@@ -1506,19 +1513,55 @@ def _request_qr(context, fp: str) -> tuple[str, str, str]:
         logger.exception("请求 get_qrcode 失败")
         return "", "", ""
     data = (payload or {}).get("data") or {}
+    if not isinstance(data, dict):
+        data = {}
     token = str(data.get("token") or "")
     qrcode = str(data.get("qrcode") or "")
     if qrcode.startswith("data:image"):
         qrcode = qrcode.split(",", 1)[-1]
-    jump = str(data.get("qrcode_index_url") or data.get("url") or "")
-    if jump and not is_app_jump_url(jump):
-        jump = str(data.get("qrcode_index_url") or "")
+    jump = extract_jump_from_data(data)
     logger.info(
-        "get_qrcode token=%s qr_png=%s jump=%s payload=%s",
+        "get_qrcode token=%s qr_png=%s jump=%s jump_host=%s payload=%s",
         "yes" if token else "no",
         len(qrcode),
         "yes" if jump else "no",
+        (jump.split("/")[2] if jump.startswith("http") else jump[:48]),
         _brief_payload(payload),
+    )
+    return token, qrcode, jump
+
+
+def _fetch_qr_in_page(page, fp: str) -> tuple[str, str, str]:
+    try:
+        payload = page.evaluate(
+            """async ({ url, params }) => {
+              const u = new URL(url);
+              Object.entries(params || {}).forEach(([k, v]) => u.searchParams.set(k, String(v)));
+              const r = await fetch(u.toString(), { credentials: "include" });
+              const text = await r.text();
+              try { return JSON.parse(text); } catch (e) { return { _raw: String(text || "").slice(0, 120) }; }
+            }""",
+            {"url": SSO + "/get_qrcode/", "params": _sso_params(fp)},
+        )
+    except Exception:
+        logger.debug("页面内 fetch get_qrcode 失败", exc_info=True)
+        return "", "", ""
+    if not isinstance(payload, dict) or payload.get("_raw"):
+        logger.warning("页面内 get_qrcode 非 JSON %s", (payload or {}).get("_raw") if isinstance(payload, dict) else type(payload))
+        return "", "", ""
+    data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    if not isinstance(data, dict):
+        return "", "", ""
+    token = str(data.get("token") or "")
+    qrcode = str(data.get("qrcode") or "")
+    if qrcode.startswith("data:image"):
+        qrcode = qrcode.split(",", 1)[-1]
+    jump = extract_jump_from_data(data)
+    logger.info(
+        "页面 fetch get_qrcode token=%s qr_png=%s jump=%s",
+        "yes" if token else "no",
+        len(qrcode),
+        "yes" if jump else "no",
     )
     return token, qrcode, jump
 
@@ -1638,33 +1681,40 @@ def _worker(replace_index: int):
         except Exception:
             logger.warning("写入 s_v_web_id cookie 失败", exc_info=True)
         try:
-            qr_url = _wait_chat_qr(page)
+            page.goto(HOME, wait_until="domcontentloaded", timeout=25000)
+            logger.info("已打开抖音首页 url=%s", page.url)
         except Exception:
-            logger.exception("打开抖音私信页失败")
-            qr_url = ""
+            logger.exception("打开抖音首页失败")
 
-        token = str(sniff.get("token") or "")
-        app_jump = str(sniff.get("app_jump_url") or "")
-        if sniff.get("qr_url") and not qr_url:
-            maybe = str(sniff.get("qr_url") or "")
-            if is_image_qr_src(maybe) or maybe.startswith("data:image"):
-                qr_url = maybe
-                logger.info("从页面抓包拿到二维码图片")
-        if not qr_url:
-            logger.info("页面未拿到二维码地址，再试 SSO 接口")
-            token2, api_png, api_jump = _request_qr(context, fp)
-            token = token or token2
-            if api_jump:
-                app_jump = app_jump or api_jump
-            if api_png:
-                qr_url = api_png if str(api_png).startswith("data:") else f"data:image/png;base64,{api_png}"
-            elif api_jump and is_image_qr_src(api_jump):
-                qr_url = api_jump
-        if sniff.get("token") and not token:
-            token = str(sniff.get("token") or "")
-            logger.info("从页面抓包拿到扫码 token")
-        if sniff.get("app_jump_url"):
-            app_jump = str(sniff.get("app_jump_url") or app_jump)
+        token, api_png, api_jump = _request_qr(context, fp)
+        if not token and not api_png and not api_jump:
+            token, api_png, api_jump = _fetch_qr_in_page(page, fp)
+        token = token or str(sniff.get("token") or "")
+        app_jump = api_jump or str(sniff.get("app_jump_url") or "")
+        qr_url = ""
+        if api_png:
+            qr_url = api_png if str(api_png).startswith("data:") else f"data:image/png;base64,{api_png}"
+        sniff_img = str(sniff.get("qr_url") or "")
+        if not qr_url and (is_image_qr_src(sniff_img) or sniff_img.startswith("data:image")):
+            qr_url = sniff_img
+
+        if not qr_url and not app_jump:
+            logger.info("接口未拿到登录码，回退打开私信页")
+            try:
+                qr_url = _wait_chat_qr(page)
+            except Exception:
+                logger.exception("打开抖音私信页失败")
+                qr_url = ""
+            token = token or str(sniff.get("token") or "")
+            app_jump = app_jump or str(sniff.get("app_jump_url") or "")
+            if sniff.get("qr_url") and not qr_url:
+                maybe = str(sniff.get("qr_url") or "")
+                if is_image_qr_src(maybe) or maybe.startswith("data:image"):
+                    qr_url = maybe
+                    logger.info("从页面抓包拿到二维码图片")
+            if sniff.get("token") and not token:
+                token = str(sniff.get("token") or "")
+                logger.info("从页面抓包拿到扫码 token")
 
         if not qr_url:
             logger.error("获取二维码失败：没有二维码地址")
@@ -1672,9 +1722,10 @@ def _worker(replace_index: int):
             return
 
         jump_fields = _jump_fields(app_jump)
+        logger.info("登录码已就绪 jump=%s token=%s", "yes" if jump_fields.get("app_jump_url") else "no", "yes" if token else "no")
         _set(
             status="waiting",
-            message="请用抖音 App 扫码，并在手机上确认登录",
+            message="手机点「打开抖音登录」，或用抖音 App 扫码，确认后不要关掉本页",
             qr_base64="",
             qr_url=qr_url,
             **jump_fields,

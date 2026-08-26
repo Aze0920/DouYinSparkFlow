@@ -31,6 +31,7 @@
       <p id="qrHint" class="sub">请用抖音 App 扫码，并在手机上确认登录</p>
       <div id="dyAppJumpWrap" class="dy-app-jump hidden">
         <a class="btn-primary dy-app-jump-btn" id="openDouyinBtn" href="#" onclick="return openDouyinApp(event)">打开抖音登录</a>
+        <a class="btn-ghost dy-app-jump-btn hidden" id="openDouyinSchemeBtn" href="#" onclick="return openDouyinApp(event, true)">打不开？再用抖音打开</a>
         <p class="sub" id="dyAppJumpHint">仅手机浏览器可用。点按钮会跳到抖音 App，确认后回到本页，不要关掉。</p>
       </div>
       <div id="liveWrap" class="live-wrap">
@@ -993,26 +994,32 @@
       return /MicroMessenger|QQ\//i.test(ua);
     }
     function applyJumpUi(data) {
-      window.__dyAppJumpUrl = (data && data.app_jump_url) || "";
-      window.__dyAppScheme = (data && data.app_scheme) || "";
+      window.__dyAppJumpUrl = (data && data.app_jump_url) || window.__dyAppJumpUrl || "";
+      window.__dyAppScheme = (data && data.app_scheme) || window.__dyAppScheme || "";
       const wrap = $("dyAppJumpWrap");
       const btn = $("openDouyinBtn");
+      const schemeBtn = $("openDouyinSchemeBtn");
       const hint = $("dyAppJumpHint");
       if (!wrap) return;
       const phone = isPhoneClient();
       const ready = !!(window.__dyAppJumpUrl || window.__dyAppScheme);
-      const waiting = data && data.status === "waiting";
-      const show = phone && waiting && (qrLoginViaApp || ready);
+      const status = data && data.status;
+      const show = phone && data && ["loading", "waiting", "scanned"].includes(status) && (qrLoginViaApp || ready || status === "waiting" || status === "scanned");
       wrap.classList.toggle("hidden", !show);
+      const href = window.__dyAppJumpUrl || window.__dyAppScheme || "#";
       if (btn) {
         btn.classList.toggle("is-disabled", !ready);
         btn.setAttribute("aria-disabled", ready ? "false" : "true");
-        const href = window.__dyAppJumpUrl || window.__dyAppScheme || "#";
         btn.setAttribute("href", href);
+      }
+      if (schemeBtn) {
+        const hasBoth = !!(window.__dyAppJumpUrl && window.__dyAppScheme && window.__dyAppScheme !== window.__dyAppJumpUrl);
+        schemeBtn.classList.toggle("hidden", !hasBoth);
+        schemeBtn.setAttribute("href", window.__dyAppScheme || "#");
       }
       if (hint) {
         if (isInAppBrowser()) {
-          hint.textContent = "微信/QQ 内置浏览器经常跳转不了。请用系统浏览器打开本站再点按钮。确认后回到本页，不要关掉。";
+          hint.textContent = "微信/QQ 内置浏览器经常跳转不了。请用 Safari 或系统浏览器打开本站再点按钮。确认后回到本页，不要关掉。";
         } else if (!ready) {
           hint.textContent = "正在准备跳转链接，好了之后按钮就可以点。确认后回到本页，不要关掉。";
         } else {
@@ -1020,36 +1027,43 @@
         }
       }
     }
-    function openDouyinApp(event) {
-      if (event) event.preventDefault();
+    function openDouyinApp(event, forceScheme) {
       if (!isPhoneClient()) {
+        if (event) event.preventDefault();
         notice("请用手机打开", "跳转抖音登录只能在手机浏览器里用。电脑请扫码；用手机打开本站后再点「打开抖音登录」。");
         return false;
       }
       const jump = window.__dyAppJumpUrl || "";
       const scheme = window.__dyAppScheme || "";
       if (!jump && !scheme) {
+        if (event) event.preventDefault();
         toast("登录链接还没准备好，请稍等几秒再点", "err");
         return false;
       }
-      const ua = navigator.userAgent || "";
-      if (/Android/i.test(ua) && scheme) {
-        const path = scheme.replace(/^[a-z0-9]+:\/\//i, "");
-        const fallback = jump || "https://www.douyin.com";
-        window.location.href = "intent://" + path + "#Intent;scheme=snssdk1128;package=com.ss.android.ugc.aweme;S.browser_fallback_url=" + encodeURIComponent(fallback) + ";end";
-        return false;
+      const a = event && event.currentTarget;
+      const href = a && a.getAttribute && a.getAttribute("href");
+      if (!forceScheme && href && href !== "#" && href.indexOf("javascript:") !== 0) {
+        return true;
       }
-      if (jump) {
-        window.location.href = jump;
-        if (scheme && scheme !== jump) {
-          setTimeout(function () {
-            if (!document.hidden) window.location.href = scheme;
-          }, 1500);
-        }
-        return false;
-      }
-      window.location.href = scheme;
+      if (event) event.preventDefault();
+      window.location.href = forceScheme ? (scheme || jump) : (jump || scheme);
       return false;
+    }
+    async function decodeQrFromImage() {
+      const img = $("qrImage");
+      if (!img || !img.src || img.classList.contains("hidden")) return;
+      if (!window.BarcodeDetector) return;
+      try {
+        const det = new BarcodeDetector({ formats: ["qr_code"] });
+        const codes = await det.detect(img);
+        const raw = (codes && codes[0] && (codes[0].rawValue || "")).trim();
+        if (!raw) return;
+        if (!/^(https?:|snssdk1128:|aweme:|sslocal:)/i.test(raw)) return;
+        if (!window.__dyAppJumpUrl) {
+          window.__dyAppJumpUrl = raw;
+          applyJumpUi({ status: "waiting", app_jump_url: raw, app_scheme: window.__dyAppScheme });
+        }
+      } catch (e) {}
     }
     function stopQrPoll() {
       if (qrTimer) {
@@ -1095,16 +1109,11 @@
       if (hint) hint.classList.remove("hidden");
       applyJumpUi(data);
       const src = qrSrc(data);
-      const hideQr = qrLoginViaApp && isPhoneClient();
-      if (src && img && !hideQr) {
+      if (src && img) {
         img.src = src;
         img.classList.remove("hidden");
         loading.classList.add("hidden");
-        return;
-      }
-      if (img) img.classList.add("hidden");
-      if (hideQr && src) {
-        loading.classList.add("hidden");
+        decodeQrFromImage();
         return;
       }
       if (img) img.classList.add("hidden");

@@ -1,6 +1,12 @@
 import unittest
 
-from webui.qr_login import douyin_app_scheme, is_app_jump_url, is_image_qr_src, _jump_fields
+from webui.qr_login import (
+    douyin_app_scheme,
+    extract_jump_from_data,
+    is_app_jump_url,
+    is_image_qr_src,
+    _jump_fields,
+)
 
 
 class QrJumpTests(unittest.TestCase):
@@ -26,6 +32,20 @@ class QrJumpTests(unittest.TestCase):
     def test_empty_rejected(self):
         self.assertEqual(_jump_fields(""), {"app_jump_url": "", "app_scheme": ""})
         self.assertEqual(douyin_app_scheme(""), "")
+
+    def test_any_https_index_url_counts(self):
+        url = "https://foo.example.com/scan?token=abc"
+        self.assertTrue(is_app_jump_url(url))
+        self.assertEqual(extract_jump_from_data({"qrcode": "iVBORxxx", "qrcode_index_url": url}), url)
+
+    def test_extract_prefers_index_over_image(self):
+        jump = "https://v.douyin.com/AbCdEf/"
+        data = {
+            "qrcode": "iVBORw0KGgoAAA",
+            "qrcode_url": "https://cdn.example.com/qr.png",
+            "qrcode_index_url": jump,
+        }
+        self.assertEqual(extract_jump_from_data(data), jump)
 
 
 if __name__ == "__main__":
