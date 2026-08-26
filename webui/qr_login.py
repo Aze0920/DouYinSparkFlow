@@ -66,7 +66,7 @@ def extract_jump_from_data(data: dict | None) -> str:
     return ""
 
 
-def douyin_app_scheme(url: str) -> str:
+def douyin_webview_scheme(url: str, prefix: str = "snssdk1128") -> str:
     raw = str(url or "").strip()
     if not raw:
         return ""
@@ -74,14 +74,44 @@ def douyin_app_scheme(url: str) -> str:
         return raw
     if not raw.startswith(("http://", "https://")):
         return ""
-    return "snssdk1128://webview?url=" + quote(raw, safe="")
+    return f"{prefix}://webview?url={quote(raw, safe='')}&from=webview&refer=web"
+
+
+def douyin_app_scheme(url: str) -> str:
+    return douyin_webview_scheme(url, "snssdk1128")
+
+
+def douyin_universal_link(schema: str) -> str:
+    schema = str(schema or "").strip()
+    if not schema:
+        return ""
+    return "https://www.douyin.com/open/sdk/ul?schema=" + quote(schema, safe="")
 
 
 def _jump_fields(url: str) -> dict[str, str]:
     jump = str(url or "").strip()
+    empty = {
+        "app_jump_url": "",
+        "app_scheme": "",
+        "app_scheme_ios": "",
+        "app_open_url": "",
+        "app_open_url_android": "",
+    }
     if not is_app_jump_url(jump):
-        return {"app_jump_url": "", "app_scheme": ""}
-    return {"app_jump_url": jump, "app_scheme": douyin_app_scheme(jump)}
+        return empty
+    if jump.startswith(("snssdk1128://", "aweme://", "sslocal://")):
+        scheme = jump
+        scheme_ios = ("aweme://" + jump.split("://", 1)[-1]) if "://" in jump else jump
+    else:
+        scheme = douyin_webview_scheme(jump, "snssdk1128")
+        scheme_ios = douyin_webview_scheme(jump, "aweme")
+    return {
+        "app_jump_url": jump,
+        "app_scheme": scheme,
+        "app_scheme_ios": scheme_ios,
+        "app_open_url": douyin_universal_link(scheme_ios),
+        "app_open_url_android": douyin_universal_link(scheme),
+    }
 
 _lock = threading.Lock()
 _stop = threading.Event()
@@ -94,6 +124,9 @@ _state: dict[str, Any] = {
     "qr_url": "",
     "app_jump_url": "",
     "app_scheme": "",
+    "app_scheme_ios": "",
+    "app_open_url": "",
+    "app_open_url_android": "",
     "username": "",
     "unique_id": "",
     "cookies": [],
@@ -129,6 +162,9 @@ def _set(**kwargs):
             "qr_url",
             "app_jump_url",
             "app_scheme",
+            "app_scheme_ios",
+            "app_open_url",
+            "app_open_url_android",
             "cookies",
             "verify_image",
             "live_image",
@@ -151,6 +187,9 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "qr_url": _state.get("qr_url") or "",
             "app_jump_url": _state.get("app_jump_url") or "",
             "app_scheme": _state.get("app_scheme") or "",
+            "app_scheme_ios": _state.get("app_scheme_ios") or "",
+            "app_open_url": _state.get("app_open_url") or "",
+            "app_open_url_android": _state.get("app_open_url_android") or "",
             "username": _state.get("username") or "",
             "unique_id": _state.get("unique_id") or "",
             "replace_index": int(_state.get("replace_index") or -1),
@@ -1635,6 +1674,9 @@ def _worker(replace_index: int):
             qr_url="",
             app_jump_url="",
             app_scheme="",
+            app_scheme_ios="",
+            app_open_url="",
+            app_open_url_android="",
             username="",
             unique_id="",
             cookies=[],
@@ -1718,7 +1760,7 @@ def _worker(replace_index: int):
 
         if not qr_url:
             logger.error("获取二维码失败：没有二维码地址")
-            _set(status="error", message="获取二维码失败，请稍后点「刷新二维码」再试", app_jump_url="", app_scheme="")
+            _set(status="error", message="获取二维码失败，请稍后点「刷新二维码」再试", **_jump_fields(""))
             return
 
         jump_fields = _jump_fields(app_jump)
@@ -1988,6 +2030,9 @@ def _worker(replace_index: int):
             qr_url="",
             app_jump_url="",
             app_scheme="",
+            app_scheme_ios="",
+            app_open_url="",
+            app_open_url_android="",
             live_html="",
             live_hash="",
         )
@@ -2025,6 +2070,9 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
         qr_url="",
         app_jump_url="",
         app_scheme="",
+        app_scheme_ios="",
+        app_open_url="",
+        app_open_url_android="",
         username="",
         unique_id="",
         cookies=[],
@@ -2060,6 +2108,9 @@ def cancel_qr_login() -> dict[str, Any]:
         qr_url="",
         app_jump_url="",
         app_scheme="",
+        app_scheme_ios="",
+        app_open_url="",
+        app_open_url_android="",
         cookies=[],
         verify_methods=[],
         verify_account="",

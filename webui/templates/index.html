@@ -31,7 +31,7 @@
       <p id="qrHint" class="sub">请用抖音 App 扫码，并在手机上确认登录</p>
       <div id="dyAppJumpWrap" class="dy-app-jump hidden">
         <a class="btn-primary dy-app-jump-btn" id="openDouyinBtn" href="#" onclick="return openDouyinApp(event)">打开抖音登录</a>
-        <a class="btn-ghost dy-app-jump-btn hidden" id="openDouyinSchemeBtn" href="#" onclick="return openDouyinApp(event, true)">打不开？再用抖音打开</a>
+        <a class="btn-ghost dy-app-jump-btn hidden" id="openDouyinSchemeBtn" href="#" onclick="return openDouyinApp(event, true)">直接打开抖音</a>
         <p class="sub" id="dyAppJumpHint">仅手机浏览器可用。点按钮会跳到抖音 App，确认后回到本页，不要关掉。</p>
       </div>
       <div id="liveWrap" class="live-wrap">
@@ -993,29 +993,37 @@
       const ua = navigator.userAgent || "";
       return /MicroMessenger|QQ\//i.test(ua);
     }
+    function isIOSClient() {
+      return /iPhone|iPad|iPod/i.test(navigator.userAgent || "");
+    }
     function applyJumpUi(data) {
       window.__dyAppJumpUrl = (data && data.app_jump_url) || window.__dyAppJumpUrl || "";
       window.__dyAppScheme = (data && data.app_scheme) || window.__dyAppScheme || "";
+      window.__dySchemeIos = (data && data.app_scheme_ios) || window.__dySchemeIos || "";
+      window.__dyOpenUrl = (data && data.app_open_url) || window.__dyOpenUrl || "";
+      window.__dyOpenUrlAndroid = (data && data.app_open_url_android) || window.__dyOpenUrlAndroid || "";
       const wrap = $("dyAppJumpWrap");
       const btn = $("openDouyinBtn");
       const schemeBtn = $("openDouyinSchemeBtn");
       const hint = $("dyAppJumpHint");
       if (!wrap) return;
       const phone = isPhoneClient();
-      const ready = !!(window.__dyAppJumpUrl || window.__dyAppScheme);
+      const ios = isIOSClient();
+      const scheme = ios ? (window.__dySchemeIos || window.__dyAppScheme) : window.__dyAppScheme;
+      const openUrl = ios ? window.__dyOpenUrl : (window.__dyOpenUrlAndroid || window.__dyOpenUrl);
+      const href = openUrl || scheme || "#";
+      const ready = href !== "#";
       const status = data && data.status;
       const show = phone && data && ["loading", "waiting", "scanned"].includes(status) && (qrLoginViaApp || ready || status === "waiting" || status === "scanned");
       wrap.classList.toggle("hidden", !show);
-      const href = window.__dyAppJumpUrl || window.__dyAppScheme || "#";
       if (btn) {
         btn.classList.toggle("is-disabled", !ready);
         btn.setAttribute("aria-disabled", ready ? "false" : "true");
         btn.setAttribute("href", href);
       }
       if (schemeBtn) {
-        const hasBoth = !!(window.__dyAppJumpUrl && window.__dyAppScheme && window.__dyAppScheme !== window.__dyAppJumpUrl);
-        schemeBtn.classList.toggle("hidden", !hasBoth);
-        schemeBtn.setAttribute("href", window.__dyAppScheme || "#");
+        schemeBtn.classList.toggle("hidden", !scheme);
+        schemeBtn.setAttribute("href", scheme || "#");
       }
       if (hint) {
         if (isInAppBrowser()) {
@@ -1023,7 +1031,7 @@
         } else if (!ready) {
           hint.textContent = "正在准备跳转链接，好了之后按钮就可以点。确认后回到本页，不要关掉。";
         } else {
-          hint.textContent = "点按钮会跳到抖音 App，在 App 里确认登录。确认后回到本页，不要关掉。";
+          hint.textContent = "点按钮会唤起抖音 App。若仍停在网页，再点下面「直接打开抖音」。确认后回到本页，不要关掉。";
         }
       }
     }
@@ -1033,20 +1041,30 @@
         notice("请用手机打开", "跳转抖音登录只能在手机浏览器里用。电脑请扫码；用手机打开本站后再点「打开抖音登录」。");
         return false;
       }
-      const jump = window.__dyAppJumpUrl || "";
-      const scheme = window.__dyAppScheme || "";
-      if (!jump && !scheme) {
+      const ios = isIOSClient();
+      const scheme = ios ? (window.__dySchemeIos || window.__dyAppScheme) : window.__dyAppScheme;
+      const openUrl = ios ? window.__dyOpenUrl : (window.__dyOpenUrlAndroid || window.__dyOpenUrl);
+      if (!scheme && !openUrl) {
         if (event) event.preventDefault();
         toast("登录链接还没准备好，请稍等几秒再点", "err");
         return false;
       }
+      try {
+        if (scheme) {
+          const ifr = document.createElement("iframe");
+          ifr.style.display = "none";
+          ifr.src = scheme;
+          document.body.appendChild(ifr);
+          setTimeout(function () { try { ifr.remove(); } catch (e) {} }, 2500);
+        }
+      } catch (e) {}
       const a = event && event.currentTarget;
       const href = a && a.getAttribute && a.getAttribute("href");
-      if (!forceScheme && href && href !== "#" && href.indexOf("javascript:") !== 0) {
+      if (!forceScheme && href && href.indexOf("https://www.douyin.com/") === 0) {
         return true;
       }
       if (event) event.preventDefault();
-      window.location.href = forceScheme ? (scheme || jump) : (jump || scheme);
+      window.location.href = forceScheme ? (scheme || openUrl) : (openUrl || scheme);
       return false;
     }
     async function decodeQrFromImage() {
@@ -1140,6 +1158,9 @@
       if ($("dyAppJumpWrap")) $("dyAppJumpWrap").classList.add("hidden");
       window.__dyAppJumpUrl = "";
       window.__dyAppScheme = "";
+      window.__dySchemeIos = "";
+      window.__dyOpenUrl = "";
+      window.__dyOpenUrlAndroid = "";
       if (loading) {
         loading.textContent = "正在生成二维码…";
         loading.classList.remove("hidden");

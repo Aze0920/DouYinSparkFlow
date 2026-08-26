@@ -23,6 +23,16 @@ class QrJumpTests(unittest.TestCase):
         fields = _jump_fields(url)
         self.assertEqual(fields["app_jump_url"], url)
         self.assertTrue(fields["app_scheme"].startswith("snssdk1128://webview?url="))
+        self.assertTrue(fields["app_scheme_ios"].startswith("aweme://webview?url="))
+        self.assertTrue(fields["app_open_url"].startswith("https://www.douyin.com/open/sdk/ul?schema="))
+        self.assertNotIn("aweme.snssdk.com", fields["app_open_url"].split("schema=")[0])
+
+    def test_amemv_landing_is_not_used_as_open_href(self):
+        url = "https://api.amemv.com/aweme/v1/fancy/qrconnect/?token=abc"
+        fields = _jump_fields(url)
+        self.assertTrue(fields["app_open_url"].startswith("https://www.douyin.com/open/sdk/ul?schema="))
+        self.assertTrue(fields["app_scheme_ios"].startswith("aweme://"))
+        self.assertNotEqual(fields["app_open_url"], url)
 
     def test_existing_scheme_kept(self):
         scheme = "snssdk1128://webview?url=https%3A%2F%2Faweme.snssdk.com%2Fx"
@@ -30,7 +40,10 @@ class QrJumpTests(unittest.TestCase):
         self.assertTrue(is_app_jump_url(scheme))
 
     def test_empty_rejected(self):
-        self.assertEqual(_jump_fields(""), {"app_jump_url": "", "app_scheme": ""})
+        fields = _jump_fields("")
+        self.assertEqual(fields["app_jump_url"], "")
+        self.assertEqual(fields["app_scheme"], "")
+        self.assertEqual(fields["app_open_url"], "")
         self.assertEqual(douyin_app_scheme(""), "")
 
     def test_any_https_index_url_counts(self):
