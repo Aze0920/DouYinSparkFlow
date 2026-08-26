@@ -47,7 +47,9 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("到期时间", INDEX)
         self.assertLess(INDEX.find("重置密码"), INDEX.find("user-edit-grid"))
         self.assertLess(INDEX.find("class=\"reset-role\""), INDEX.find("class=\"max-accounts\""))
-        self.assertLess(INDEX.find("expires-at"), INDEX.find("class=\"extra-days\""))
+        self.assertLess(INDEX.find("expires-mode"), INDEX.find("class=\"extra-days\""))
+        self.assertIn("0 为永久", INDEX)
+        self.assertIn('value="permanent"', INDEX)
 
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)

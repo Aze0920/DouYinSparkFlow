@@ -72,6 +72,15 @@ class QuotaTests(unittest.TestCase):
         self.assertEqual(card["days_label"], "不限")
         self.assertEqual(card["max_accounts_label"], "账号不限")
 
+    def test_extend_zero_makes_timed_user_permanent(self):
+        user = make_user("bob", "pass1234", role="user", days=7, max_accounts=1)
+        self.assertFalse(is_permanent(user))
+        extend_user(user, 0)
+        self.assertTrue(is_permanent(user))
+        self.assertIsNone(user.get("expires_at"))
+        self.assertEqual(public_user(user)["expires_label"], "永久")
+        self.assertEqual(public_user(user)["remain_label"], "永久")
+
     def test_extend_does_not_downgrade_permanent(self):
         user = make_user("forever", "pass1234", role="user", days=0, max_accounts=1)
         self.assertTrue(is_permanent(user))

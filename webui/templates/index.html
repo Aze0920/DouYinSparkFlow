@@ -488,8 +488,8 @@
                 <option value="admin">管理员（永久）</option>
               </select>
             </label>
-            <label>有效天数<input id="newDays" type="number" min="0" max="3650" value="1" /></label>
-            <label>可添加账号数<input id="newMaxAccounts" type="number" min="0" max="100" value="1" /></label>
+            <label>有效天数（0 永久）<input id="newDays" type="number" min="0" max="3650" value="1" /></label>
+            <label>可添加账号数（0 不限）<input id="newMaxAccounts" type="number" min="0" max="100" value="1" /></label>
             <label class="span-2">&nbsp;<button class="btn-primary" onclick="createUser()">添加账户</button></label>
           </div>
           <div id="userList" class="users-grid"></div>
@@ -2428,8 +2428,15 @@
               </select>
             </label>
             <label>账号额度<input data-user="${escapeAttr(u.username)}" class="max-accounts" type="number" min="0" max="100" value="${escapeAttr(String(accountsValue))}" ${admin ? "disabled" : ""} /></label>
-            <label>到期时间<input class="expires-at" value="${escapeAttr(u.expires_label || "-")}" readonly tabindex="-1" /></label>
-            <label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="1" max="3650" placeholder="例如 1" ${admin ? "disabled" : ""} /></label>
+            <label>到期时间
+              <select data-user="${escapeAttr(u.username)}" class="expires-mode" ${admin ? "disabled" : ""}>
+                ${admin || u.permanent
+                  ? `<option value="permanent" selected>永久</option>`
+                  : `<option value="keep" selected>${escapeHtml(u.expires_label || "-")}</option>
+                     <option value="permanent">永久</option>`}
+              </select>
+            </label>
+            <label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="0" max="3650" placeholder="0 为永久" ${admin ? "disabled" : ""} /></label>
           </div>
           <div class="account-actions">
             <button class="btn-ghost" type="button" onclick="saveUser('${escapeAttr(u.username)}')">保存</button>
@@ -2468,8 +2475,11 @@
       const pass = document.querySelector(`.reset-pass[data-user="${username}"]`)?.value || "";
       const role = document.querySelector(`.reset-role[data-user="${username}"]`)?.value || "user";
       const extra = document.querySelector(`.extra-days[data-user="${username}"]`)?.value || "";
+      const expiresMode = document.querySelector(`.expires-mode[data-user="${username}"]`)?.value || "";
       const maxAccountsEl = document.querySelector(`.max-accounts[data-user="${username}"]`);
       const maxAccounts = maxAccountsEl ? String(maxAccountsEl.value ?? "").trim() : "";
+      let extraDays = extra === "" ? "" : Number(extra);
+      if (expiresMode === "permanent") extraDays = 0;
       try {
         await api("/api/users/update", {
           method: "POST",
@@ -2477,7 +2487,7 @@
             username,
             password: pass,
             role,
-            extra_days: extra === "" ? "" : Number(extra),
+            extra_days: extraDays,
             max_accounts: maxAccounts === "" ? "" : Number(maxAccounts),
           }),
         });

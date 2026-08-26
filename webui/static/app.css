@@ -542,7 +542,7 @@ button:disabled {
   grid-template-columns: 1fr 1fr;
   gap: 12px;
 }
-.users-grid .user-card .expires-at {
+.users-grid .user-card .expires-mode:disabled {
   color: var(--muted);
   cursor: default;
 }

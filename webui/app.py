@@ -873,7 +873,7 @@ def update_user(request: Request, payload: dict):
             if len(str(password)) < 4:
                 raise HTTPException(status_code=400, detail="密码至少 4 位")
             item["password_hash"] = _hash_password(username, str(password))
-        if extra_days not in (None, "", 0, "0") and item.get("role") != "admin":
+        if extra_days not in (None, "") and item.get("role") != "admin":
             try:
                 extend_user(item, int(extra_days))
             except (TypeError, ValueError):
