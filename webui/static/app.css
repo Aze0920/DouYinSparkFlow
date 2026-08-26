@@ -623,6 +623,26 @@ body.spark-locked .spark-action {
 .invite-link-box input { flex: 1; min-width: 160px; }
 .invite-link-box button { width: auto; }
 .invite-toggle-btn { min-width: 7.5em; }
+.dy-app-jump {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 4px;
+}
+.dy-app-jump.hidden { display: none !important; }
+.dy-app-jump-btn {
+  display: block;
+  width: 100%;
+  text-align: center;
+  text-decoration: none;
+  box-sizing: border-box;
+  padding: 11px 12px;
+  border-radius: 12px;
+  font: inherit;
+}
+.dy-app-jump-btn.is-disabled {
+  opacity: .5;
+  pointer-events: none;
+}
 .error { color: var(--rose); min-height: 18px; }
 
 @media (max-width: 860px) {

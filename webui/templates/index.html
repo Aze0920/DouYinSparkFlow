@@ -29,6 +29,10 @@
     <div class="modal-card qr-card">
       <h3 id="qrTitle">抖音扫码登录</h3>
       <p id="qrHint" class="sub">请用抖音 App 扫码，并在手机上确认登录</p>
+      <div id="dyAppJumpWrap" class="dy-app-jump hidden">
+        <a class="btn-primary dy-app-jump-btn" id="openDouyinBtn" href="#" onclick="return openDouyinApp(event)">打开抖音登录</a>
+        <p class="sub" id="dyAppJumpHint">仅手机浏览器可用。点按钮会跳到抖音 App，确认后回到本页，不要关掉。</p>
+      </div>
       <div id="liveWrap" class="live-wrap">
         <div id="qrLoading">正在生成二维码…</div>
         <img id="qrImage" class="qr-image hidden" alt="登录二维码" referrerpolicy="no-referrer" />
@@ -54,9 +58,10 @@
   <div id="addAccountModal" class="modal-mask hidden">
     <div class="modal-card">
       <h3 id="addAccountTitle">添加账号</h3>
-      <p class="sub">扫码登录，或只粘贴 Cookie JSON。粘贴后会自动抓取昵称和抖音号。</p>
+      <p class="sub">扫码登录、手机打开抖音，或粘贴 Cookie JSON。登录后会自动抓取昵称和抖音号。</p>
       <div class="choice-stack">
         <button class="btn-primary" type="button" onclick="chooseAddAccount('qr')">扫码登录</button>
+        <button class="btn-ghost" type="button" onclick="chooseAddAccount('app')">打开抖音登录（仅手机）</button>
         <button class="btn-ghost" type="button" onclick="chooseAddAccount('ck')">粘贴 Cookie JSON</button>
       </div>
       <div class="modal-actions">
@@ -239,7 +244,7 @@
           </div>
           <p class="sub" id="accountQuota">账号额度会显示在这里。</p>
           <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。点上面的「到期时间」可用卡密续期。</p>
-          <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码登录，也可以只粘贴 Cookie JSON，昵称和抖音号会自动抓取。</p>
+          <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码、手机打开抖音，或粘贴 Cookie JSON。</p>
           <div id="accounts" class="accounts-grid"></div>
         </section>
       </section>
@@ -462,6 +467,7 @@
     let qrTimer = null;
     let qrReplaceIndex = -1;
     let qrApplying = false;
+    let qrLoginViaApp = false;
     let qrPollBusy = false;
     let liveQueue = Promise.resolve();
     let liveQuietUntil = 0;
@@ -977,6 +983,74 @@
         toast(err.message, "err");
       }
     }
+    function isPhoneClient() {
+      const ua = navigator.userAgent || "";
+      if (/Windows NT|Macintosh|Linux x86_64/i.test(ua) && !/Mobile|Android|iPhone|iPad|iPod/i.test(ua)) return false;
+      return /Android|iPhone|iPod|iPad|Mobile/i.test(ua);
+    }
+    function isInAppBrowser() {
+      const ua = navigator.userAgent || "";
+      return /MicroMessenger|QQ\//i.test(ua);
+    }
+    function applyJumpUi(data) {
+      window.__dyAppJumpUrl = (data && data.app_jump_url) || "";
+      window.__dyAppScheme = (data && data.app_scheme) || "";
+      const wrap = $("dyAppJumpWrap");
+      const btn = $("openDouyinBtn");
+      const hint = $("dyAppJumpHint");
+      if (!wrap) return;
+      const phone = isPhoneClient();
+      const ready = !!(window.__dyAppJumpUrl || window.__dyAppScheme);
+      const waiting = data && data.status === "waiting";
+      const show = phone && waiting && (qrLoginViaApp || ready);
+      wrap.classList.toggle("hidden", !show);
+      if (btn) {
+        btn.classList.toggle("is-disabled", !ready);
+        btn.setAttribute("aria-disabled", ready ? "false" : "true");
+        const href = window.__dyAppJumpUrl || window.__dyAppScheme || "#";
+        btn.setAttribute("href", href);
+      }
+      if (hint) {
+        if (isInAppBrowser()) {
+          hint.textContent = "微信/QQ 内置浏览器经常跳转不了。请用系统浏览器打开本站再点按钮。确认后回到本页，不要关掉。";
+        } else if (!ready) {
+          hint.textContent = "正在准备跳转链接，好了之后按钮就可以点。确认后回到本页，不要关掉。";
+        } else {
+          hint.textContent = "点按钮会跳到抖音 App，在 App 里确认登录。确认后回到本页，不要关掉。";
+        }
+      }
+    }
+    function openDouyinApp(event) {
+      if (event) event.preventDefault();
+      if (!isPhoneClient()) {
+        notice("请用手机打开", "跳转抖音登录只能在手机浏览器里用。电脑请扫码；用手机打开本站后再点「打开抖音登录」。");
+        return false;
+      }
+      const jump = window.__dyAppJumpUrl || "";
+      const scheme = window.__dyAppScheme || "";
+      if (!jump && !scheme) {
+        toast("登录链接还没准备好，请稍等几秒再点", "err");
+        return false;
+      }
+      const ua = navigator.userAgent || "";
+      if (/Android/i.test(ua) && scheme) {
+        const path = scheme.replace(/^[a-z0-9]+:\/\//i, "");
+        const fallback = jump || "https://www.douyin.com";
+        window.location.href = "intent://" + path + "#Intent;scheme=snssdk1128;package=com.ss.android.ugc.aweme;S.browser_fallback_url=" + encodeURIComponent(fallback) + ";end";
+        return false;
+      }
+      if (jump) {
+        window.location.href = jump;
+        if (scheme && scheme !== jump) {
+          setTimeout(function () {
+            if (!document.hidden) window.location.href = scheme;
+          }, 1500);
+        }
+        return false;
+      }
+      window.location.href = scheme;
+      return false;
+    }
     function stopQrPoll() {
       if (qrTimer) {
         clearInterval(qrTimer);
@@ -1002,6 +1076,7 @@
         if (img) img.classList.add("hidden");
         if (shot) shot.classList.add("hidden");
         loading.classList.add("hidden");
+        applyJumpUi(data);
         if (title) {
           title.classList.remove("hidden");
           title.textContent = "短信验证";
@@ -1015,13 +1090,20 @@
       if (shot) shot.classList.add("hidden");
       if (title) {
         title.classList.remove("hidden");
-        title.textContent = "抖音扫码登录";
+        title.textContent = qrLoginViaApp ? "打开抖音登录" : "抖音扫码登录";
       }
       if (hint) hint.classList.remove("hidden");
+      applyJumpUi(data);
       const src = qrSrc(data);
-      if (src && img) {
+      const hideQr = qrLoginViaApp && isPhoneClient();
+      if (src && img && !hideQr) {
         img.src = src;
         img.classList.remove("hidden");
+        loading.classList.add("hidden");
+        return;
+      }
+      if (img) img.classList.add("hidden");
+      if (hideQr && src) {
         loading.classList.add("hidden");
         return;
       }
@@ -1046,6 +1128,9 @@
         img.classList.add("hidden");
       }
       if (panel) panel.classList.add("hidden");
+      if ($("dyAppJumpWrap")) $("dyAppJumpWrap").classList.add("hidden");
+      window.__dyAppJumpUrl = "";
+      window.__dyAppScheme = "";
       if (loading) {
         loading.textContent = "正在生成二维码…";
         loading.classList.remove("hidden");
@@ -1227,9 +1312,15 @@
       qrPollBusy = true;
       try {
         const data = await api("/api/douyin/login/status");
-        $("qrHint").textContent = data.status === "verify"
-          ? (data.message || "请完成身份验证")
-          : (data.message || "请用抖音 App 扫码，并在手机上确认登录");
+        if (data.status === "verify") {
+          $("qrHint").textContent = data.message || "请完成身份验证";
+        } else if (qrLoginViaApp) {
+          $("qrHint").textContent = data.message && data.status !== "waiting"
+            ? data.message
+            : "点「打开抖音登录」跳到抖音 App 确认。确认后回到本页，不要关掉。";
+        } else {
+          $("qrHint").textContent = data.message || "请用抖音 App 扫码，并在手机上确认登录";
+        }
         showLiveCard(data);
         renderVerifyPanel(data);
         if (data.status === "success") {
@@ -1237,12 +1328,13 @@
         } else if (data.status === "expired" || data.status === "error") {
           stopQrPoll();
           $("qrHint").textContent = data.status === "error"
-            ? "扫码失败，详细原因请看左侧「运行日志」"
-            : (data.message || "二维码已失效");
-          $("qrLoading").textContent = data.message || "二维码已失效";
+            ? "登录失败，详细原因请看左侧「运行日志」"
+            : (data.message || "登录已失效，请刷新再试");
+          $("qrLoading").textContent = data.message || "登录已失效";
           if ($("qrImage")) $("qrImage").classList.add("hidden");
           if ($("liveShot")) $("liveShot").classList.add("hidden");
           if ($("qrVerify")) $("qrVerify").classList.add("hidden");
+          if ($("dyAppJumpWrap")) $("dyAppJumpWrap").classList.add("hidden");
           $("qrLoading").classList.remove("hidden");
         }
       } catch (err) {
@@ -1252,18 +1344,26 @@
         qrPollBusy = false;
       }
     }
-    async function startQrLogin(index) {
+    async function startQrLogin(index, opts) {
+      opts = opts || {};
       if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
+      if (opts.viaApp && !isPhoneClient()) {
+        notice("请用手机打开", "「打开抖音登录」只能在手机浏览器里跳转到抖音 App。电脑请用扫码；请用手机打开本站后再点这个按钮。");
+        return;
+      }
       closeAddAccount();
       closeCkModal();
       qrApplying = false;
       qrReplaceIndex = index;
+      qrLoginViaApp = !!opts.viaApp;
       stopQrPoll();
       bindLiveCard();
-      $("qrTitle").textContent = "抖音扫码登录";
+      $("qrTitle").textContent = qrLoginViaApp ? "打开抖音登录" : "抖音扫码登录";
       $("qrHint").classList.remove("hidden");
       $("qrLoginActions").classList.remove("hidden");
-      $("qrHint").textContent = "请用抖音 App 扫码，并在手机上确认登录";
+      $("qrHint").textContent = qrLoginViaApp
+        ? "点「打开抖音登录」跳到抖音 App 确认。确认后回到本页，不要关掉。"
+        : "请用抖音 App 扫码，并在手机上确认登录";
       resetLiveCard();
       $("qrModal").classList.remove("hidden");
       try {
@@ -1279,10 +1379,11 @@
       }
     }
     async function refreshQrLogin() {
-      await startQrLogin(qrReplaceIndex);
+      await startQrLogin(qrReplaceIndex, { viaApp: qrLoginViaApp });
     }
     async function closeQrLogin() {
       stopQrPoll();
+      qrLoginViaApp = false;
       $("qrModal").classList.add("hidden");
       try {
         await api("/api/douyin/login/cancel", { method: "POST", body: "{}" });
@@ -1304,12 +1405,20 @@
       $("addAccountModal").classList.add("hidden");
     }
     function chooseAddAccount(kind) {
-      closeAddAccount();
       const idx = Number.isInteger(window.__addReplaceIndex) ? window.__addReplaceIndex : -1;
+      if (kind === "app" && !isPhoneClient()) {
+        notice("请用手机打开", "「打开抖音登录」只能在手机浏览器里跳转到抖音 App。电脑请用扫码；请用手机打开本站后再点这个按钮。");
+        return;
+      }
+      closeAddAccount();
       if (kind === "ck") {
         $("ckJson").value = "";
         $("ckModal").classList.remove("hidden");
         setTimeout(() => $("ckJson").focus(), 50);
+        return;
+      }
+      if (kind === "app") {
+        startQrLogin(idx, { viaApp: true });
         return;
       }
       startQrLogin(idx);

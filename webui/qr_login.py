@@ -10,6 +10,7 @@ import threading
 import time
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from core.browser import get_browser
 from utils.logger import setup_logger
@@ -25,6 +26,58 @@ UA = (
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
 
+
+def is_image_qr_src(url: str) -> bool:
+    raw = str(url or "").strip()
+    if raw.startswith("data:image"):
+        return True
+    if not raw.startswith(("http://", "https://")):
+        return False
+    low = raw.lower().split("?", 1)[0]
+    return low.endswith((".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"))
+
+
+def is_app_jump_url(url: str) -> bool:
+    raw = str(url or "").strip()
+    if raw.startswith(("snssdk1128://", "aweme://", "sslocal://")):
+        return True
+    if not raw.startswith(("http://", "https://")):
+        return False
+    if raw.startswith("data:"):
+        return False
+    if is_image_qr_src(raw):
+        return False
+    host = raw.split("/", 3)[2].lower() if "://" in raw else ""
+    return any(
+        key in host
+        for key in (
+            "aweme.snssdk.com",
+            "snssdk.com",
+            "douyin.com",
+            "iesdouyin.com",
+            "ecombdapi.com",
+            "amemv.com",
+        )
+    )
+
+
+def douyin_app_scheme(url: str) -> str:
+    raw = str(url or "").strip()
+    if not raw:
+        return ""
+    if raw.startswith(("snssdk1128://", "aweme://", "sslocal://")):
+        return raw
+    if not raw.startswith(("http://", "https://")):
+        return ""
+    return "snssdk1128://webview?url=" + quote(raw, safe="")
+
+
+def _jump_fields(url: str) -> dict[str, str]:
+    jump = str(url or "").strip()
+    if not is_app_jump_url(jump):
+        return {"app_jump_url": "", "app_scheme": ""}
+    return {"app_jump_url": jump, "app_scheme": douyin_app_scheme(jump)}
+
 _lock = threading.Lock()
 _stop = threading.Event()
 _thread: threading.Thread | None = None
@@ -34,6 +87,8 @@ _state: dict[str, Any] = {
     "message": "",
     "qr_base64": "",
     "qr_url": "",
+    "app_jump_url": "",
+    "app_scheme": "",
     "username": "",
     "unique_id": "",
     "cookies": [],
@@ -87,6 +142,8 @@ def snapshot(include_cookies: bool = False) -> dict[str, Any]:
             "message": _state.get("message") or "",
             "qr_base64": _state.get("qr_base64") or "",
             "qr_url": _state.get("qr_url") or "",
+            "app_jump_url": _state.get("app_jump_url") or "",
+            "app_scheme": _state.get("app_scheme") or "",
             "username": _state.get("username") or "",
             "unique_id": _state.get("unique_id") or "",
             "replace_index": int(_state.get("replace_index") or -1),
@@ -501,16 +558,17 @@ def _ingest_packet(url: str, payload: Any, bag: dict[str, Any]):
     token = data.get("token")
     if token:
         bag["token"] = str(token)
-    qr_url = data.get("qrcode_url") or data.get("qr_url") or ""
-    if isinstance(qr_url, str) and qr_url.startswith(("http://", "https://", "data:image")):
+    jump_src = data.get("qrcode_index_url") or data.get("schema") or data.get("schema_url") or ""
+    if is_app_jump_url(str(jump_src or "")):
+        bag["app_jump_url"] = str(jump_src).strip()
+    qr_url = data.get("qrcode_url") or data.get("frontend_show_qrcode") or data.get("qr_url") or ""
+    if isinstance(qr_url, str) and is_image_qr_src(qr_url):
+        bag["qr_url"] = qr_url
+    elif isinstance(qr_url, str) and qr_url.startswith("data:image"):
         bag["qr_url"] = qr_url
     qrcode = data.get("qrcode")
     if isinstance(qrcode, str) and len(qrcode) > 80:
         bag["qr_url"] = qrcode if qrcode.startswith("data:") else f"data:image/png;base64,{qrcode.split(',', 1)[-1]}"
-    if not bag.get("qr_url"):
-        index_url = data.get("qrcode_index_url") or ""
-        if isinstance(index_url, str) and index_url.startswith(("http://", "https://")):
-            bag["qr_url"] = index_url
     status = data.get("status")
     if status is not None and status != "":
         bag["qr_status"] = str(status)
@@ -1452,15 +1510,17 @@ def _request_qr(context, fp: str) -> tuple[str, str, str]:
     qrcode = str(data.get("qrcode") or "")
     if qrcode.startswith("data:image"):
         qrcode = qrcode.split(",", 1)[-1]
-    qr_url = str(data.get("qrcode_index_url") or data.get("url") or "")
+    jump = str(data.get("qrcode_index_url") or data.get("url") or "")
+    if jump and not is_app_jump_url(jump):
+        jump = str(data.get("qrcode_index_url") or "")
     logger.info(
-        "get_qrcode token=%s qr_png=%s qr_url=%s payload=%s",
+        "get_qrcode token=%s qr_png=%s jump=%s payload=%s",
         "yes" if token else "no",
         len(qrcode),
-        "yes" if qr_url else "no",
+        "yes" if jump else "no",
         _brief_payload(payload),
     )
-    return token, qrcode, qr_url
+    return token, qrcode, jump
 
 
 def _check_qr(context, fp: str, token: str) -> dict[str, Any]:
@@ -1530,6 +1590,8 @@ def _worker(replace_index: int):
             message="正在生成二维码…",
             qr_base64="",
             qr_url="",
+            app_jump_url="",
+            app_scheme="",
             username="",
             unique_id="",
             cookies=[],
@@ -1563,7 +1625,7 @@ def _worker(replace_index: int):
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
         page = context.new_page()
-        sniff: dict[str, Any] = {"methods": [], "token": "", "redirect": "", "account": "", "qr_status": ""}
+        sniff: dict[str, Any] = {"methods": [], "token": "", "redirect": "", "account": "", "qr_status": "", "app_jump_url": ""}
         _attach_sniffer(page, sniff)
         fp = gen_verify_fp()
         try:
@@ -1582,31 +1644,40 @@ def _worker(replace_index: int):
             qr_url = ""
 
         token = str(sniff.get("token") or "")
+        app_jump = str(sniff.get("app_jump_url") or "")
         if sniff.get("qr_url") and not qr_url:
-            qr_url = str(sniff.get("qr_url") or "")
-            logger.info("从页面抓包拿到二维码地址")
+            maybe = str(sniff.get("qr_url") or "")
+            if is_image_qr_src(maybe) or maybe.startswith("data:image"):
+                qr_url = maybe
+                logger.info("从页面抓包拿到二维码图片")
         if not qr_url:
             logger.info("页面未拿到二维码地址，再试 SSO 接口")
-            token2, api_png, api_url = _request_qr(context, fp)
+            token2, api_png, api_jump = _request_qr(context, fp)
             token = token or token2
-            if api_url:
-                qr_url = api_url
-            elif api_png:
+            if api_jump:
+                app_jump = app_jump or api_jump
+            if api_png:
                 qr_url = api_png if str(api_png).startswith("data:") else f"data:image/png;base64,{api_png}"
+            elif api_jump and is_image_qr_src(api_jump):
+                qr_url = api_jump
         if sniff.get("token") and not token:
             token = str(sniff.get("token") or "")
             logger.info("从页面抓包拿到扫码 token")
+        if sniff.get("app_jump_url"):
+            app_jump = str(sniff.get("app_jump_url") or app_jump)
 
         if not qr_url:
             logger.error("获取二维码失败：没有二维码地址")
-            _set(status="error", message="获取二维码失败，请稍后点「刷新二维码」再试")
+            _set(status="error", message="获取二维码失败，请稍后点「刷新二维码」再试", app_jump_url="", app_scheme="")
             return
 
+        jump_fields = _jump_fields(app_jump)
         _set(
             status="waiting",
             message="请用抖音 App 扫码，并在手机上确认登录",
             qr_base64="",
             qr_url=qr_url,
+            **jump_fields,
         )
 
         deadline = time.time() + 180
@@ -1793,15 +1864,29 @@ def _worker(replace_index: int):
                 logger.info("等待扫码中 url=%s status=%s cookies=%s", page.url, _status(), list(_cookie_map(context)))
                 last_cookie_log = now
             if _status() != "verify" and now - last_shot > 2:
-                fresh = _extract_qr_url(page) or str(sniff.get("qr_url") or "")
+                fresh = _extract_qr_url(page)
+                sniff_src = str(sniff.get("qr_url") or "")
+                if (is_image_qr_src(sniff_src) or sniff_src.startswith("data:image")) and not fresh:
+                    fresh = sniff_src
                 if fresh:
                     had_qr = True
                     missing_qr = 0
-                    _set(qr_url=fresh, qr_base64="")
+                    patch = {"qr_url": fresh, "qr_base64": ""}
+                    sniffed_jump = str(sniff.get("app_jump_url") or "")
+                    if sniffed_jump:
+                        patch.update(_jump_fields(sniffed_jump))
+                    _set(**patch)
                 elif had_qr:
                     missing_qr += 1
                     logger.info("二维码地址已消失 %s 次", missing_qr)
                 last_shot = now
+            sniffed_jump = str(sniff.get("app_jump_url") or "")
+            if sniffed_jump:
+                fields = _jump_fields(sniffed_jump)
+                with _lock:
+                    current_jump = _state.get("app_jump_url") or ""
+                if fields.get("app_jump_url") and fields["app_jump_url"] != current_jump:
+                    _set(**fields)
             if _status() != "verify" and now - last_live >= 0.7:
                 _capture_live_card(page)
                 last_live = now
@@ -1850,6 +1935,8 @@ def _worker(replace_index: int):
             cookies=cookies,
             qr_base64="",
             qr_url="",
+            app_jump_url="",
+            app_scheme="",
             live_html="",
             live_hash="",
         )
@@ -1885,6 +1972,8 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
         message="正在生成二维码…",
         qr_base64="",
         qr_url="",
+        app_jump_url="",
+        app_scheme="",
         username="",
         unique_id="",
         cookies=[],
@@ -1918,6 +2007,8 @@ def cancel_qr_login() -> dict[str, Any]:
         message="",
         qr_base64="",
         qr_url="",
+        app_jump_url="",
+        app_scheme="",
         cookies=[],
         verify_methods=[],
         verify_account="",
