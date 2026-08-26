@@ -4,6 +4,7 @@ import json
 import os
 import re
 import secrets
+import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -14,6 +15,10 @@ LEGACY_SECRET = "dsf-user-v1"
 USERNAME_RE = re.compile(r"^[\w.-]{2,24}$", re.UNICODE)
 PROTECTED_USERNAMES = {"admin"}
 _secret_holder = {"value": ""}
+PASSWORD_CODE_TTL = 600
+PASSWORD_CODE_MAX_TRIES = 5
+_password_codes: dict[str, dict] = {}
+_password_code_lock = threading.Lock()
 
 
 def _digest_eq(left: str, right: str) -> bool:
@@ -361,6 +366,47 @@ def public_user(user: dict) -> dict:
         "last_login_label": _format_login_time(user.get("last_login_at")),
         "last_login_ip": str(user.get("last_login_ip") or "").strip() or "-",
     }
+
+
+def clear_password_code(username: str) -> None:
+    name = str(username or "").strip()
+    with _password_code_lock:
+        _password_codes.pop(name, None)
+
+
+def issue_password_code(username: str) -> str:
+    name = str(username or "").strip()
+    if not name:
+        raise ValueError("未登录")
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    row = {
+        "digest": _hmac_hex(f"pwcode|{name}|{code}"),
+        "expires": now_utc() + timedelta(seconds=PASSWORD_CODE_TTL),
+        "tries": 0,
+    }
+    with _password_code_lock:
+        _password_codes[name] = row
+    return code
+
+
+def consume_password_code(username: str, code: str) -> None:
+    name = str(username or "").strip()
+    raw = str(code or "").strip()
+    with _password_code_lock:
+        row = _password_codes.get(name)
+        if not row:
+            raise ValueError("请先发送微信验证码")
+        if now_utc() > row["expires"]:
+            _password_codes.pop(name, None)
+            raise ValueError("验证码已过期，请重新发送")
+        digest = _hmac_hex(f"pwcode|{name}|{raw}")
+        if not _digest_eq(str(row.get("digest") or ""), digest):
+            row["tries"] = int(row.get("tries") or 0) + 1
+            if row["tries"] >= PASSWORD_CODE_MAX_TRIES:
+                _password_codes.pop(name, None)
+                raise ValueError("验证码错误次数过多，请重新发送")
+            raise ValueError("微信验证码不对")
+        _password_codes.pop(name, None)
 
 
 def make_token(username: str) -> str:

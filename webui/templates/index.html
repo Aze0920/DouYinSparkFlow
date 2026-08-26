@@ -312,15 +312,10 @@
       </section>
 
       <section id="page-accounts" class="hidden">
-        <div class="cards">
-          <article class="card card-click" id="expiresCard" onclick="openRechargeModal()">
-            <label>到期时间</label>
-            <strong id="homeExpires">-</strong>
-            <div class="card-sub" id="homeRemain"></div>
-          </article>
-          <article class="card admin-only hidden" id="localVersionCard"><label>本地版本</label><strong id="localVersion">-</strong></article>
-          <article class="card admin-only hidden" id="remoteVersionCard"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
-          <article class="card admin-only hidden" id="accountCountCard">
+        <div class="cards admin-only hidden">
+          <article class="card" id="localVersionCard"><label>本地版本</label><strong id="localVersion">-</strong></article>
+          <article class="card" id="remoteVersionCard"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
+          <article class="card" id="accountCountCard">
             <label>全部账号数量</label>
             <strong id="accountCount">-</strong>
           </article>
@@ -333,7 +328,7 @@
             </div>
           </div>
           <p class="sub" id="accountQuota">账号额度会显示在这里。</p>
-          <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。点上面的「到期时间」可用卡密续期。</p>
+          <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。请到「我的」点会员到期，用卡密续期。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码、手机打开抖音，或粘贴 Cookie JSON。</p>
           <div id="accounts" class="accounts-grid"></div>
         </section>
@@ -371,14 +366,20 @@
             <div class="panel-head">
               <h2>修改密码</h2>
             </div>
-            <p class="sub">修改控制台登录密码，不影响已绑定的抖音号。</p>
+            <p class="sub" id="profilePassHint">请先绑定微信，再发送验证码，否则无法修改密码。</p>
             <div class="grid two">
-              <label>当前密码<input id="profileOldPass" type="password" autocomplete="current-password" /></label>
-              <label>新密码<input id="profileNewPass" type="password" autocomplete="new-password" /></label>
-              <label class="span-2">再输入一次<input id="profileNewPass2" type="password" autocomplete="new-password" /></label>
+              <label>当前密码<input id="profileOldPass" type="password" autocomplete="current-password" disabled /></label>
+              <label>新密码<input id="profileNewPass" type="password" autocomplete="new-password" disabled /></label>
+              <label class="span-2">再输入一次<input id="profileNewPass2" type="password" autocomplete="new-password" disabled /></label>
+              <label class="span-2">微信验证码
+                <div class="invite-link-box">
+                  <input id="profileWxCode" inputmode="numeric" maxlength="6" placeholder="6 位验证码" autocomplete="one-time-code" disabled />
+                  <button class="btn-ghost" type="button" id="profileSendCodeBtn" onclick="sendProfilePasswordCode()" disabled>发送验证码</button>
+                </div>
+              </label>
             </div>
             <div id="profileError" class="error"></div>
-            <button class="btn-primary mine-save" type="button" onclick="submitProfilePassword()">保存密码</button>
+            <button class="btn-primary mine-save" type="button" id="profileSaveBtn" onclick="submitProfilePassword()" disabled>保存密码</button>
           </section>
           <section class="panel admin-only hidden">
             <div class="panel-head">
@@ -642,6 +643,8 @@
     let githubCheckBusy = false;
     let wpBindOpen = false;
     let wpBindTimer = null;
+    let profileCodeLeft = 0;
+    let profileCodeTimer = 0;
     window.__accountCookies = {};
 
     function toast(message, type = "ok") {
@@ -767,7 +770,7 @@
           $("expiredBanner").textContent = "邀请注册后请先绑定微信，绑定成功才发放会员天数。打开「我的」扫码即可。";
           $("expiredBanner").classList.remove("hidden");
         } else {
-          $("expiredBanner").textContent = "卡密已到期，续火花按钮已禁用。点上面的「到期时间」可用卡密续期。";
+          $("expiredBanner").textContent = "卡密已到期，续火花按钮已禁用。请到「我的」点会员到期，用卡密续期。";
           $("expiredBanner").classList.toggle("hidden", ok);
         }
       }
@@ -822,29 +825,6 @@
       }
       if ($("dashLastLogin")) $("dashLastLogin").textContent = current ? (current.last_login_label || "-") : "-";
       if ($("dashLastIp")) $("dashLastIp").textContent = current ? (current.last_login_ip || "-") : "-";
-      if ($("homeExpires")) {
-        $("homeExpires").textContent = current
-          ? (isAdmin() || current.permanent ? "永久" : (current.expires_label || "-"))
-          : "-";
-      }
-      if ($("homeRemain")) {
-        if (!current) {
-          $("homeRemain").textContent = "";
-        } else if (isAdmin()) {
-          $("homeRemain").textContent = "不过期";
-        } else if (current.permanent) {
-          $("homeRemain").textContent = "永久账户，无需充值";
-        } else {
-          $("homeRemain").textContent = (current.remain_label || "") + " · 点击续期";
-        }
-      }
-      if ($("expiresCard")) {
-        const showTip = !!(current && !isAdmin());
-        $("expiresCard").classList.toggle("card-click", showTip);
-        $("expiresCard").title = !showTip
-          ? ""
-          : (current.permanent ? "当前为永久账户，无需充值" : "点击用卡密续期");
-      }
       if ($("mineAvatar")) {
         $("mineAvatar").textContent = current && current.username ? String(current.username).slice(0, 1).toUpperCase() : "?";
       }
@@ -909,11 +889,63 @@
     function openProfileModal() {
       showPage("mine");
     }
+    function syncPasswordFormLock() {
+      const bound = !!(current && current.wxpusher_bound);
+      ["profileOldPass", "profileNewPass", "profileNewPass2", "profileWxCode"].forEach((id) => {
+        if ($(id)) $(id).disabled = !bound;
+      });
+      if ($("profileSaveBtn")) $("profileSaveBtn").disabled = !bound;
+      if ($("profileSendCodeBtn") && profileCodeLeft <= 0) $("profileSendCodeBtn").disabled = !bound;
+      if ($("profilePassHint")) {
+        $("profilePassHint").textContent = bound
+          ? "验证码会发到已绑定的微信，10 分钟内有效。未绑定无法改密码。"
+          : "请先绑定微信，再发送验证码，否则无法修改密码。";
+      }
+    }
+    function tickProfileCodeBtn() {
+      const btn = $("profileSendCodeBtn");
+      if (!btn) return;
+      if (profileCodeLeft <= 0) {
+        btn.textContent = "发送验证码";
+        syncPasswordFormLock();
+        return;
+      }
+      btn.disabled = true;
+      btn.textContent = profileCodeLeft + " 秒后重发";
+      profileCodeLeft -= 1;
+      profileCodeTimer = setTimeout(tickProfileCodeBtn, 1000);
+    }
+    async function sendProfilePasswordCode() {
+      if ($("profileError")) $("profileError").textContent = "";
+      if (!(current && current.wxpusher_bound)) {
+        if ($("profileError")) $("profileError").textContent = "请先绑定微信";
+        return;
+      }
+      try {
+        await api("/api/me/password/code", { method: "POST", body: "{}" });
+        toast("验证码已发到微信");
+        if (profileCodeTimer) clearTimeout(profileCodeTimer);
+        profileCodeLeft = 60;
+        tickProfileCodeBtn();
+      } catch (err) {
+        if ($("profileError")) $("profileError").textContent = err.message;
+        toast(err.message, "err");
+      }
+    }
     async function submitProfilePassword() {
       const oldPass = ($("profileOldPass") && $("profileOldPass").value) || "";
       const next = ($("profileNewPass") && $("profileNewPass").value) || "";
       const again = ($("profileNewPass2") && $("profileNewPass2").value) || "";
+      const code = ($("profileWxCode") && $("profileWxCode").value) || "";
       if ($("profileError")) $("profileError").textContent = "";
+      if (!(current && current.wxpusher_bound)) {
+        if ($("profileError")) $("profileError").textContent = "请先绑定微信，再发送验证码";
+        return;
+      }
+      if (!code) {
+        if ($("profileError")) $("profileError").textContent = "请先发送并填写微信验证码";
+        return;
+      }
       if (next !== again) {
         if ($("profileError")) $("profileError").textContent = "两次新密码不一致";
         return;
@@ -921,11 +953,12 @@
       try {
         await api("/api/me/password", {
           method: "POST",
-          body: JSON.stringify({ old_password: oldPass, new_password: next }),
+          body: JSON.stringify({ old_password: oldPass, new_password: next, code }),
         });
         if ($("profileOldPass")) $("profileOldPass").value = "";
         if ($("profileNewPass")) $("profileNewPass").value = "";
         if ($("profileNewPass2")) $("profileNewPass2").value = "";
+        if ($("profileWxCode")) $("profileWxCode").value = "";
         toast("密码已更新");
       } catch (err) {
         if ($("profileError")) $("profileError").textContent = err.message;
@@ -945,6 +978,7 @@
       if ($("wpBindBtn")) $("wpBindBtn").classList.toggle("hidden", bound);
       if ($("wpTestBtn")) $("wpTestBtn").classList.toggle("hidden", !bound);
       if ($("wpUnbindBtn")) $("wpUnbindBtn").classList.toggle("hidden", !bound || !allowSelfUnbind);
+      syncPasswordFormLock();
     }
     function pagePath(name) {
       return { home: "/", accounts: "/accounts", logs: "/logs", users: "/users", cards: "/cards", invite: "/invite", settings: "/settings", mine: "/mine" }[name] || "/";

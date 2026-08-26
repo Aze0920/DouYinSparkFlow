@@ -59,6 +59,9 @@ from webui.users import (
     valid_username,
     verify_user,
     _hash_password,
+    clear_password_code,
+    consume_password_code,
+    issue_password_code,
 )
 from webui.cards import (
     consume_card,
@@ -638,17 +641,49 @@ def me(request: Request):
     return {"ok": True, "authed": True, "user": public_user(user)}
 
 
+@app.post("/api/me/password/code")
+def send_my_password_code(request: Request):
+    user = require_auth(request)
+    name = str(user.get("username") or "")
+    uid = user_wxpusher_uid(name)
+    if not uid:
+        raise HTTPException(status_code=400, detail="请先绑定微信，才能发送改密验证码")
+    if not _rate_allow(f"pwcode:{name}", 1, 60):
+        raise HTTPException(status_code=429, detail="请 60 秒后再发送验证码")
+    if not _rate_allow(f"pwcode-hour:{name}", 8, 3600):
+        raise HTTPException(status_code=429, detail="发送太频繁，请稍后再试")
+    code = issue_password_code(name)
+    try:
+        send_wxpusher(
+            "SparkFlow 改密验证码",
+            f"验证码 {code}，10 分钟内有效。不是本人操作请忽略。",
+            uids=[uid],
+        )
+    except Exception as exc:
+        clear_password_code(name)
+        raise HTTPException(status_code=400, detail=str(exc) or "验证码发送失败") from exc
+    logger.info("已发送改密验证码 user=%s", name)
+    return {"ok": True, "ttl": 600}
+
+
 @app.post("/api/me/password")
 def change_my_password(request: Request, payload: dict):
     user = require_auth(request)
+    name = str(user.get("username") or "")
     old = str(payload.get("old_password") or "")
     new = str(payload.get("new_password") or "")
+    code = str(payload.get("code") or payload.get("wx_code") or "")
+    if not user_wxpusher_uid(name):
+        raise HTTPException(status_code=400, detail="请先绑定微信，才能修改密码")
     if len(new) < 4:
         raise HTTPException(status_code=400, detail="密码至少 4 位")
-    if not verify_user(str(user.get("username") or ""), old):
+    try:
+        consume_password_code(name, code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not verify_user(name, old):
         raise HTTPException(status_code=403, detail="当前密码不对")
     users = load_users()
-    name = str(user.get("username") or "")
     for item in users:
         if item.get("username") == name:
             item["password_hash"] = _hash_password(name, new)

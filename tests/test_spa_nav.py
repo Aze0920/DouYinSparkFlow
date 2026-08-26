@@ -18,8 +18,10 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("修改密码", INDEX)
         self.assertIn("绑定微信", INDEX)
         self.assertIn('id="profileOldPass"', INDEX)
+        self.assertIn('id="profileWxCode"', INDEX)
         self.assertNotIn('id="profileModal"', INDEX)
         self.assertNotIn('id="wpBindCard"', INDEX)
+        self.assertNotIn('id="expiresCard"', INDEX)
 
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)
