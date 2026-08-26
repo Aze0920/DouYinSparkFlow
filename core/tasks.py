@@ -206,12 +206,12 @@ def _scroll_list(scope, list_loc, item_loc) -> bool:
               while (p) {
                 const s = getComputedStyle(p);
                 if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && p.scrollHeight > p.clientHeight + 8) {
-                  p.scrollTop += 800;
+                  p.scrollTop += 400;
                   return;
                 }
                 p = p.parentElement;
               }
-              if (el.scrollTop !== undefined) el.scrollTop += 800;
+              if (el.scrollTop !== undefined) el.scrollTop += 400;
             }""",
             handle,
         )

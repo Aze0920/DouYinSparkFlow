@@ -33,6 +33,8 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("CHAT_CACHE_VER", INDEX)
         self.assertIn("正在读取账号快照", INDEX)
         self.assertIn("force: !!force", INDEX)
+        self.assertIn("CHAT_CACHE_VER = 9", INDEX)
+        self.assertIn("这次没刷新到火花，请重新扫码后再检测", INDEX)
         self.assertIn("force=bool(payload.get(\"force\"))", APP_PY)
         self.assertIn('data-name="${escapeAttr(name)}"', INDEX)
         self.assertNotIn("toggleTargetRow(${JSON.stringify(name)})", INDEX)

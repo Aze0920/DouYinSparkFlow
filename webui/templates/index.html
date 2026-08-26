@@ -1441,7 +1441,7 @@
       const top = Math.max.apply(null, Object.keys(counts).map((k) => counts[k]));
       return days.length >= 5 && top >= Math.ceil(days.length * 0.6);
     }
-    const CHAT_CACHE_VER = 8;
+    const CHAT_CACHE_VER = 9;
     function renderTargetPickerList() {
       const state = window.__targetPicker;
       const box = $("targetList");
@@ -1518,7 +1518,11 @@
           acc.target_sparks = sparks;
         }
         renderTargetPickerList();
-        toast(data.message || ((data.from_snapshot ? "已用快照 " : "已读取 ") + items.length + " 个会话"));
+        if (force && data.from_snapshot) {
+          toast(data.message || "这次没刷新到火花，请重新扫码后再检测", "err");
+        } else {
+          toast(data.message || ((data.from_snapshot ? "已用快照 " : "已读取 ") + items.length + " 个会话"));
+        }
       } catch (err) {
         if ($("targetList")) $("targetList").innerHTML = `<div class="target-empty">${escapeHtml(err.message)}</div>`;
         toast(err.message, "err");

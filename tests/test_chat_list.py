@@ -45,6 +45,13 @@ class ChatListTests(unittest.TestCase):
         by_name = {item["name"]: item for item in rows}
         self.assertEqual(by_name["王洁"]["spark_days"], 711)
 
+    def test_merge_keeps_old_spark_if_dom_misses_it(self):
+        rows = merge_conversations(
+            [{"name": "家乐", "kind": "friend", "spark_days": 26, "avatar": ""}],
+            [{"name": "家乐", "kind": "friend", "spark_days": None, "avatar": ""}],
+        )
+        self.assertEqual(rows[0]["spark_days"], 26)
+
     def test_merge_spark_first(self):
         rows = merge_conversations(
             [{"name": "巧巧.", "kind": "friend", "spark_days": None}],
@@ -141,6 +148,17 @@ class ChatListTests(unittest.TestCase):
         """
         self.assertIsNone(spark_from_streak_html(fake_eight))
         self.assertIsNone(spark_from_title_row("彩虹糖", "彩虹糖 8分钟前"))
+        no_img = """
+        <div data-e2e="conversation-item" class="conversationConversationItemwrapper">
+          <div class="conversationConversationItemtitleWrapper">
+            <div class="conversationConversationItemtitle">家乐</div>
+            <div class="commonStreakstreakContainer">
+              <div class="commonStreaknormalText">26</div>
+            </div>
+          </div>
+        </div>
+        """
+        self.assertEqual(spark_from_streak_html(no_img), 26)
 
     def test_orange_friend_flame_from_title_row(self):
         from webui.chat_list import spark_from_title_row
@@ -196,8 +214,9 @@ class ChatListTests(unittest.TestCase):
         self.assertIn("conversationConversationItemtitle", EXTRACT_JS)
         self.assertIn('data-e2e="conversation-item"', EXTRACT_JS)
         self.assertIn("aweme-avatar", EXTRACT_JS)
-        self.assertIn("has_flame", EXTRACT_JS)
-        self.assertIn("hasFlame", EXTRACT_JS)
+        self.assertIn("fromStreakText", EXTRACT_JS)
+        self.assertIn("hasSparkWidget", EXTRACT_JS)
+        self.assertNotIn("hasFlame", EXTRACT_JS)
         self.assertIn("titleWrapper", EXTRACT_JS)
 
     def test_avatar_url_is_https_only(self):

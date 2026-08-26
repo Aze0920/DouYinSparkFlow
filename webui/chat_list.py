@@ -37,9 +37,14 @@ EXTRACT_JS = """() => {
     return n >= 1 && n <= 3660 && !(n >= 1900 && n <= 2099);
   };
   const nodeText = (n) => String((n && (n.innerText || n.textContent)) || '').replace(/[\\s\\u200b\\u00a0]+/g, ' ').trim();
+  const inPreview = (n) => !!(n && n.closest && n.closest('[class*="Desc"], [class*="Hint"], [class*="hintWrapper"], pre'));
   const titleWrap = (el) => el.querySelector(
     '.conversationConversationItemtitleWrapper, [class*="ItemtitleWrapper"], [class*="titleWrapper"]'
   );
+  const streakScope = (el) => {
+    const area = el.querySelector('[class*="rowArea2"]') || el;
+    return area;
+  };
   const titleOf = (el) => {
     const exact = el.querySelector('.conversationConversationItemtitle');
     if (exact) return nodeText(exact);
@@ -53,68 +58,114 @@ EXTRACT_JS = """() => {
     const t = String(raw || '').replace(/[\\s\\u200b\\u00a0]+/g, ' ').trim();
     if (!t || /点燃中/.test(t) || /\\d+\\s*\\/\\s*\\d+/.test(t) || looksTime(t)) return null;
     if (/^\\d{1,4}$/.test(t) && isSpark(Number(t))) return Number(t);
+    const m = t.match(/^火花\\s*[xX×]?\\s*(\\d{1,4})\\s*天?$/) || t.match(/^(\\d{1,4})\\s*天$/);
+    if (m && isSpark(Number(m[1]))) return Number(m[1]);
     return null;
   };
   const isFlameNode = (node) => {
-    if (!node) return false;
+    if (!node || inPreview(node)) return false;
     const src = String(node.currentSrc || node.src || node.getAttribute('src') || '');
     const cls = String(node.className || '');
     let bg = '';
     try { bg = (node.nodeType === 1 && getComputedStyle(node).backgroundImage) || ''; } catch (e) { bg = ''; }
-    return /flame_icon|commonStreakicon|Streakicon/i.test(src + ' ' + cls + ' ' + bg);
+    return /flame_icon|commonStreakicon|Streakicon|huohua/i.test(src + ' ' + cls + ' ' + bg);
   };
-  const hasFlame = (root) => {
-    if (!root) return false;
-    if (root.querySelector('img.commonStreakicon, img[src*="flame_icon"], [class*="commonStreakicon"], [class*="Streakicon"]')) return true;
-    return Array.from(root.querySelectorAll('img, [class*="Streak"], [class*="streak"], *[style]')).some(isFlameNode);
+  const fromStreakText = (root) => {
+    if (!root) return null;
+    const sels = [
+      '.commonStreaknormalText',
+      '[class*="StreaknormalText"]',
+      '[class*="commonStreak"] [class*="Text"]',
+      '[class*="streakContainer"]',
+      '[class*="StreakstreakContainer"]',
+    ];
+    for (const sel of sels) {
+      for (const n of root.querySelectorAll(sel)) {
+        if (inPreview(n) || looksTime(nodeText(n))) continue;
+        const got = cleanNum(nodeText(n));
+        if (got) return got;
+      }
+    }
+    return null;
   };
   const numBeside = (flame) => {
     let sib = flame.nextElementSibling;
     while (sib) {
-      const got = cleanNum(nodeText(sib));
-      if (got) return got;
+      if (!inPreview(sib)) {
+        const got = cleanNum(nodeText(sib));
+        if (got) return got;
+      }
       sib = sib.nextElementSibling;
     }
-    const box = flame.closest('.commonStreakstreakContainer, [class*="streakContainer"], [class*="commonStreak"]') || flame.parentElement;
-    if (!box) return null;
-    const exact = box.querySelector('.commonStreaknormalText, [class*="StreaknormalText"]');
-    if (exact) {
-      const got = cleanNum(nodeText(exact));
-      if (got) return got;
-    }
+    const box = flame.closest('.commonStreakstreakContainer, [class*="streakContainer"], [class*="commonStreak"], [class*="TagNextToTitleleft"]') || flame.parentElement;
+    if (!box || inPreview(box)) return null;
+    const exact = fromStreakText(box);
+    if (exact) return exact;
     const self = cleanNum(nodeText(box));
     if (self) return self;
     for (const n of box.querySelectorAll('span, div, em, b, strong')) {
-      if (looksTime(nodeText(n))) continue;
+      if (inPreview(n) || looksTime(nodeText(n))) continue;
       const got = cleanNum(nodeText(n));
       if (got) return got;
     }
     return null;
   };
-  const readStreak = (el) => {
-    const wrap = titleWrap(el);
-    if (!wrap || !hasFlame(wrap)) return null;
-    if (/点燃中/.test(nodeText(wrap))) return null;
-    const exact = wrap.querySelector('.commonStreaknormalText, [class*="StreaknormalText"]');
-    if (exact) {
-      const got = cleanNum(nodeText(exact));
-      if (got) return got;
-    }
-    const flames = Array.from(wrap.querySelectorAll('img, svg, [class*="Streakicon"], [class*="streak"], [class*="Streak"]')).filter(isFlameNode);
+  const fromFlame = (root) => {
+    const flames = Array.from(root.querySelectorAll('img, svg, [class*="Streakicon"], [class*="streak"], [class*="Streak"]')).filter(isFlameNode);
     for (const flame of flames) {
       const got = numBeside(flame);
       if (got) return got;
     }
     return null;
   };
+  const fromTitleLeft = (root) => {
+    for (const n of root.querySelectorAll('[class*="TagNextToTitleleft"], [class*="TagNextToTitlewrapper"]')) {
+      if (inPreview(n)) continue;
+      const parts = [];
+      const walk = (node) => {
+        if (!node) return;
+        if (node.nodeType === 1) {
+          const cls = String(node.className || '');
+          if (/timeStr|TimeStr|Desc|Hint|Itemtitle/i.test(cls)) return;
+          if (inPreview(node)) return;
+        }
+        if (node.nodeType === 3) {
+          const t = String(node.textContent || '').trim();
+          if (t && !looksTime(t)) parts.push(t);
+          return;
+        }
+        for (const c of node.childNodes || []) walk(c);
+      };
+      walk(n);
+      for (const p of parts) {
+        const got = cleanNum(p);
+        if (got) return got;
+      }
+    }
+    return null;
+  };
+  const readStreak = (el) => {
+    const root = streakScope(el);
+    if (/点燃中/.test(nodeText(titleWrap(el) || root))) return null;
+    const fromText = fromStreakText(root);
+    if (fromText) return fromText;
+    const flame = fromFlame(root);
+    if (flame) return flame;
+    return fromTitleLeft(root);
+  };
+  const hasSparkWidget = (el) => {
+    const root = streakScope(el);
+    if (fromStreakText(root)) return true;
+    if (root.querySelector('img.commonStreakicon, img[src*="flame_icon"], [class*="commonStreakicon"], [class*="Streakicon"], [class*="streakContainer"]')) return true;
+    return Array.from(root.querySelectorAll('img, svg, *[style]')).some(isFlameNode);
+  };
   return items.map((el) => {
     const name = titleOf(el).split('\\n').map((x) => x.trim()).filter(Boolean)[0] || '';
-    const wrap = titleWrap(el);
     const spark = readStreak(el);
     const img = el.querySelector('.commonIMAvataravatarContainer img, .semi-avatar img, img[src*="aweme-avatar"], img[src*="douyinpic.com"]');
     const avatar = img ? String(img.currentSrc || img.src || img.getAttribute('src') || '').trim() : '';
     const isGroup = /群/.test(name);
-    return { name, kind: isGroup ? 'group' : 'friend', spark_days: spark, avatar, has_flame: !!(wrap && hasFlame(wrap)) };
+    return { name, kind: isGroup ? 'group' : 'friend', spark_days: spark, avatar, has_flame: hasSparkWidget(el) };
   }).filter((row) => row.name);
 }"""
 
@@ -129,15 +180,22 @@ EXTRACT_SELF_AVATAR_JS = """() => {
 }"""
 
 SCROLL_JS = """() => {
-  const el = document.querySelector('.conversationConversationListwrapper, [class*="conversationListwrapper"], [class*="ConversationListwrapper"]');
-  let box = el;
-  if (!box) {
-    const item = document.querySelector('[class*="conversationItemwrapper"], [class*="ConversationItemwrapper"]');
-    box = item && item.parentElement;
+  const item = document.querySelector('[data-e2e="conversation-item"], [class*="conversationItemwrapper"]');
+  let box = document.querySelector('.conversationConversationListwrapper, [class*="conversationListwrapper"], [class*="ConversationListwrapper"]');
+  if (!box && item) {
+    let p = item.parentElement;
+    while (p) {
+      const s = getComputedStyle(p);
+      if ((s.overflowY === 'auto' || s.overflowY === 'scroll') && p.scrollHeight > p.clientHeight + 8) {
+        box = p;
+        break;
+      }
+      p = p.parentElement;
+    }
   }
   if (!box) return false;
   const before = box.scrollTop;
-  box.scrollTop += 720;
+  box.scrollTop += 360;
   return box.scrollTop !== before;
 }"""
 
@@ -456,13 +514,12 @@ def _collect_dom(page) -> list[dict]:
             name = str((item or {}).get("name") or "").strip()
             if not name or name in NOISE_NAMES:
                 continue
-            has_flame = bool((item or {}).get("has_flame"))
             spark = (item or {}).get("spark_days")
             try:
                 spark = int(spark) if spark not in (None, "", 0, "0") else None
             except (TypeError, ValueError):
                 spark = None
-            if not has_flame or not is_plausible_spark(spark):
+            if not is_plausible_spark(spark):
                 spark = None
             kind = _row_kind(name, "", str((item or {}).get("kind") or ""))
             rows.append({
@@ -558,40 +615,80 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
         try:
             page.wait_for_selector(
                 ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
-                timeout=2500,
+                timeout=5000,
             )
         except Exception:
             pass
-        time.sleep(0.9)
+        time.sleep(1.2)
 
         prev_items = []
         if account_id:
             prev = load_chats(account_id)
             prev_items = (prev or {}).get("items") or []
-        items = merge_conversations(prev_items, _collect_dom(page))
-        for _ in range(18):
+        # 只拿当前视口的 DOM，不要先合并旧快照。否则名单早已齐全，
+        # 滚两下天数不变就会停，下面那些有火的人永远扫不到。
+        seen_dom = _collect_dom(page)
+        stagnant = 0
+        for _ in range(28):
+            before = {(row.get("name"), row.get("spark_days")) for row in seen_dom}
             moved = False
             try:
-                moved = bool(_scroll_list(scope, list_loc, item_loc))
+                moved = bool(page.evaluate(SCROLL_JS))
             except Exception:
+                moved = False
+            if not moved:
                 try:
-                    moved = bool(page.evaluate(SCROLL_JS))
+                    moved = bool(_scroll_list(scope, list_loc, item_loc))
                 except Exception:
                     moved = False
-            time.sleep(0.85)
+            if not moved:
+                try:
+                    target = None
+                    if list_loc is not None:
+                        target = list_loc.first
+                    elif item_loc is not None:
+                        target = item_loc.first
+                    box = target.bounding_box() if target is not None else None
+                    if box:
+                        page.mouse.move(
+                            box["x"] + max(48, box["width"] * 0.4),
+                            box["y"] + min(220, max(40, box["height"] * 0.4)),
+                        )
+                        page.mouse.wheel(0, 420)
+                        moved = True
+                except Exception:
+                    moved = False
+            time.sleep(1.05)
+            try:
+                page.wait_for_selector(
+                    ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
+                    timeout=1200,
+                )
+            except Exception:
+                pass
             item_loc, scope, _ = _find_locator(page, CONVERSATION_ITEM_SELECTORS)
             list_loc, _, _ = _find_locator(page, CONVERSATION_LIST_SELECTORS)
-            items = merge_conversations(items, _collect_dom(page))
-            if items and not moved:
+            seen_dom = merge_conversations(seen_dom, _collect_dom(page))
+            after = {(row.get("name"), row.get("spark_days")) for row in seen_dom}
+            if after == before:
+                stagnant += 1
+            else:
+                stagnant = 0
+            if stagnant >= 4:
                 break
             if _looks_like_login(page):
                 break
 
         items = merge_conversations(
-            items,
+            seen_dom,
             prev_items,
             [
-                {"name": row.get("name"), "kind": row.get("kind") or "friend", "spark_days": None, "avatar": ""}
+                {
+                    "name": row.get("name"),
+                    "kind": row.get("kind") or "friend",
+                    "spark_days": row.get("spark_days"),
+                    "avatar": "",
+                }
                 for row in api_rows
                 if row.get("name")
             ],
