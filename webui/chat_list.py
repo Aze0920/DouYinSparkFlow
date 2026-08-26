@@ -9,7 +9,14 @@ from typing import Any
 from core.browser import get_browser
 from utils.logger import setup_logger
 from webui.cookie_probe import _probe_lock
-from webui.qr_login import CHAT
+from webui.qr_login import CHAT, wait_chat_access
+from webui.session_store import (
+    clear_account_session,
+    load_chats,
+    load_state_path,
+    save_chats,
+    save_state,
+)
 
 logger = setup_logger("app", "DEBUG")
 
@@ -459,7 +466,20 @@ def _collect_dom(page) -> list[dict]:
     return rows
 
 
-def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
+def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force: bool = False) -> dict[str, Any]:
+    account_id = str(unique_id or "").strip()
+    if account_id and not force:
+        cached = load_chats(account_id)
+        if cached and cached.get("items"):
+            items = cached.get("items") or []
+            logger.info("使用账号会话快照 unique_id=%s count=%s", account_id, len(items))
+            return {
+                "ok": True,
+                "items": items,
+                "self_avatar": str(cached.get("self_avatar") or ""),
+                "from_snapshot": True,
+                "message": f"已用账号快照，{len(items)} 个会话。要点「检测火花天数」才会重新打开私信页",
+            }
     if not _probe_lock.acquire(blocking=False):
         return {"ok": False, "items": [], "message": "正在检测另一个账号，请稍后再试"}
     playwright = None
@@ -479,12 +499,7 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         )
 
         playwright, browser = get_browser()
-        context = make_context(browser)
-        try:
-            context.add_cookies(cookies)
-        except Exception:
-            logger.exception("写入 Cookie 失败")
-            return {"ok": False, "items": [], "message": "Cookie 格式浏览器不接受，请重新登录"}
+        context = make_context(browser, storage_state=load_state_path(account_id), cookies=cookies)
 
         def on_response(response):
             url = str(getattr(response, "url", "") or "")
@@ -499,22 +514,28 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         page = context.new_page()
         page.on("response", on_response)
         page.goto(CHAT, wait_until="domcontentloaded", timeout=25000)
-        time.sleep(0.8)
-        if _looks_like_login(page):
+        chat_state = wait_chat_access(page, timeout_s=15)
+        if chat_state == "login" or _looks_like_login(page):
+            if account_id:
+                clear_account_session(account_id)
             _dump_chat_debug(page, "picker")
-            return {"ok": False, "items": [], "message": "Cookie 已失效，请重新登录后再选好友"}
+            return {
+                "ok": False,
+                "items": [],
+                "message": "网页私信在要求扫码。首页 Cookie 过了不等于私信能打开，请重新扫码登录这个号",
+            }
 
-        item_loc, scope, item_sel = _wait_locator(page, CONVERSATION_ITEM_SELECTORS, timeout_ms=15000)
+        item_loc, scope, item_sel = _wait_locator(page, CONVERSATION_ITEM_SELECTORS, timeout_ms=8000)
         list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
-        logger.info("选择好友等待会话列表 item=%s list=%s", item_sel or "无", list_sel or "无")
+        logger.info("选择好友等待会话列表 item=%s list=%s chat=%s", item_sel or "无", list_sel or "无", chat_state)
         try:
             page.wait_for_selector(
-                ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon'], [class*='titleWrapper']",
-                timeout=8000,
+                ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
+                timeout=4000,
             )
         except Exception:
             pass
-        time.sleep(1.2)
+        time.sleep(0.6)
 
         items: list[dict] = []
         for _ in range(14):
@@ -535,6 +556,8 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
             item_loc, scope, _ = _find_locator(page, CONVERSATION_ITEM_SELECTORS)
             list_loc, _, _ = _find_locator(page, CONVERSATION_LIST_SELECTORS)
             if items and not moved:
+                break
+            if _looks_like_login(page):
                 break
             time.sleep(0.55)
 
@@ -561,14 +584,19 @@ def list_conversations(cookies: list[dict[str, Any]]) -> dict[str, Any]:
         except Exception:
             self_avatar = ""
         if not items:
+            if _looks_like_login(page) and account_id:
+                clear_account_session(account_id)
             _dump_chat_debug(page, "picker")
             return {
                 "ok": False,
                 "items": [],
                 "self_avatar": self_avatar,
-                "message": "私信页没出现好友列表。Cookie 检测过首页不等于网页私信能打开，请确认这个号能打开抖音网页私信",
+                "message": "私信页没出现好友列表。请重新扫码登录这个号后再选好友",
             }
-        return {"ok": True, "items": items, "self_avatar": self_avatar, "message": f"已读取 {len(items)} 个会话"}
+        if account_id:
+            save_state(context, account_id)
+            save_chats(account_id, items, self_avatar)
+        return {"ok": True, "items": items, "self_avatar": self_avatar, "from_snapshot": False, "message": f"已读取 {len(items)} 个会话"}
     except Exception as exc:
         logger.exception("读取会话列表失败")
         return {"ok": False, "items": [], "message": f"读取失败：{exc}"}

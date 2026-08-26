@@ -8,17 +8,19 @@ import time
 from typing import Any
 from urllib.parse import urlparse
 
-from core.browser import get_browser
+from core.browser import get_browser, make_context
 from utils.logger import setup_logger
 from webui.qr_login import (
+    CHAT,
     HOME,
-    UA,
     _cookies_for_save,
     _has_session,
     _page_signals,
     extract_profile,
     is_display_unique_id,
+    wait_chat_access,
 )
+from webui.session_store import load_state_path, save_state
 
 logger = setup_logger("app", "DEBUG")
 
@@ -110,83 +112,87 @@ def parse_cookie_payload(raw: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def probe_cookies(cookies: list[dict[str, Any]]) -> dict[str, Any]:
+def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "") -> dict[str, Any]:
     if not _probe_lock.acquire(blocking=False):
         return {"ok": False, "valid": False, "message": "正在检测另一个账号，请稍后再试"}
 
     playwright = None
     browser = None
+    context = None
     try:
-        logger.info("开始检测 Cookie 共 %s 条", len(cookies))
+        logger.info("开始检测 Cookie 共 %s 条 unique_id=%s", len(cookies), unique_id or "-")
         playwright, browser = get_browser()
-        context = browser.new_context(
-            user_agent=UA,
-            locale="zh-CN",
-            viewport={"width": 1280, "height": 860},
-        )
-        context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
-        try:
-            context.add_cookies(cookies)
-        except Exception:
-            logger.exception("写入 Cookie 失败")
-            return {"ok": True, "valid": False, "username": "", "unique_id": "", "cookies": cookies, "message": "Cookie 格式浏览器不接受，请用扫码登录或换一份 JSON"}
+        context = make_context(browser, storage_state=load_state_path(unique_id), cookies=cookies)
 
         page = context.new_page()
         profile = extract_profile(page, context, allow_stop=False)
-        signals: dict[str, Any] = {}
         try:
-            page.goto(HOME + "/", wait_until="domcontentloaded", timeout=25000)
-            time.sleep(0.8)
-            signals = _page_signals(page)
+            page.goto(CHAT, wait_until="domcontentloaded", timeout=25000)
         except Exception:
-            logger.warning("打开首页检查登录态失败", exc_info=True)
-            if not profile.get("unique_id"):
-                profile = extract_profile(page, context, allow_stop=False)
-            signals = _page_signals(page)
+            logger.warning("打开私信页检查登录态失败", exc_info=True)
+        chat_state = wait_chat_access(page, timeout_s=12)
+        signals = _page_signals(page)
+        if not signals:
+            try:
+                page.goto(HOME + "/", wait_until="domcontentloaded", timeout=15000)
+                time.sleep(0.6)
+                signals = _page_signals(page)
+            except Exception:
+                signals = {}
 
         has_session = _has_session(context)
-        login_wall = bool(signals.get("hasScan") or signals.get("hasEnjoy"))
+        login_wall = chat_state == "login" or bool(signals.get("hasScan") or signals.get("hasEnjoy"))
+        chat_ok = chat_state == "chat"
         username = str(profile.get("username") or "").strip()
-        unique_id = str(profile.get("unique_id") or "").strip()
-        if unique_id and not is_display_unique_id(unique_id):
-            unique_id = ""
-        named = bool(username) and username not in {unique_id, "抖音账号"}
-        valid = bool((named or has_session) and not login_wall)
-        if login_wall and not named:
-            valid = False
+        got_uid = str(profile.get("unique_id") or "").strip()
+        if got_uid and not is_display_unique_id(got_uid):
+            got_uid = ""
+        named = bool(username) and username not in {got_uid, "抖音账号"}
+        account_id = got_uid or str(unique_id or "").strip()
+        valid = bool(chat_ok and (named or has_session) and not login_wall)
         saved = _cookies_for_save(context) or cookies
         if valid:
+            save_state(context, account_id)
             message = (
-                f"Cookie 有效 · {username or '已登录'}"
-                + (f" · 抖音号 {unique_id}" if unique_id else "")
+                f"Cookie 有效 · 网页私信可打开 · {username or '已登录'}"
+                + (f" · 抖音号 {got_uid}" if got_uid else "")
             )
         elif login_wall:
-            message = "Cookie 已失效，需要重新扫码或更换 JSON"
+            message = "首页 Cookie 可能还在，但网页私信在要求扫码。请重新扫码登录这个号，不要只贴 JSON Cookie"
         elif not has_session:
             message = "Cookie 无效：没有可用的登录态"
+        elif not chat_ok:
+            message = "Cookie 还在，但网页私信没有出现好友列表，请重新扫码登录后再选好友"
         else:
             message = "Cookie 还在，但没抓到昵称和抖音号，可能被风控，建议重新扫码"
         logger.info(
-            "Cookie 检测结果 valid=%s username=%s unique_id=%s wall=%s session=%s",
+            "Cookie 检测结果 valid=%s username=%s unique_id=%s wall=%s session=%s chat=%s",
             valid,
             username,
-            unique_id,
+            got_uid,
             login_wall,
             has_session,
+            chat_state,
         )
         return {
             "ok": True,
             "valid": valid,
             "username": username,
-            "unique_id": unique_id,
+            "unique_id": got_uid,
             "avatar": str(profile.get("avatar") or "").strip(),
             "cookies": saved,
+            "chat_ok": chat_ok,
             "message": message,
         }
     except Exception as exc:
         logger.exception("检测 Cookie 失败")
         return {"ok": False, "valid": False, "username": "", "unique_id": "", "cookies": cookies, "message": f"检测失败：{exc}"}
     finally:
+        try:
+            if context:
+                context.close()
+        except Exception:
+            pass
         try:
             if browser:
                 browser.close()

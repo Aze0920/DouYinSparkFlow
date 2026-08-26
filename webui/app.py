@@ -1542,7 +1542,7 @@ def check_account_cookie(request: Request, payload: dict | None = None):
         cookies = parse_cookie_payload(raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    result = probe_cookies(cookies)
+    result = probe_cookies(cookies, unique_id=unique_id)
     if not result.get("ok"):
         raise HTTPException(
             status_code=409 if "稍后再试" in (result.get("message") or "") else 500,
@@ -1618,7 +1618,11 @@ def list_account_conversations(request: Request, payload: dict | None = None):
         cookies = parse_cookie_payload(raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    result = list_conversations(cookies)
+    result = list_conversations(
+        cookies,
+        unique_id=unique_id,
+        force=bool(payload.get("force")),
+    )
     if not result.get("ok"):
         raise HTTPException(
             status_code=409 if "稍后再试" in (result.get("message") or "") else 400,

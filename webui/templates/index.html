@@ -1441,7 +1441,7 @@
       const top = Math.max.apply(null, Object.keys(counts).map((k) => counts[k]));
       return days.length >= 5 && top >= Math.ceil(days.length * 0.6);
     }
-    const CHAT_CACHE_VER = 6;
+    const CHAT_CACHE_VER = 7;
     function renderTargetPickerList() {
       const state = window.__targetPicker;
       const box = $("targetList");
@@ -1497,7 +1497,7 @@
       try {
         const data = await api("/api/account/conversations", {
           method: "POST",
-          body: JSON.stringify({ unique_id: uid, cookies: window.__accountCookies[uid] || "" }),
+          body: JSON.stringify({ unique_id: uid, cookies: window.__accountCookies[uid] || "", force: !!force }),
         });
         const items = data.items || [];
         window.__accountChats[uid] = { items, at: Date.now(), ver: CHAT_CACHE_VER };
@@ -1516,7 +1516,7 @@
           acc.target_sparks = sparks;
         }
         renderTargetPickerList();
-        toast(data.message || ("已读取 " + items.length + " 个会话"));
+        toast(data.message || ((data.from_snapshot ? "已用快照 " : "已读取 ") + items.length + " 个会话"));
       } catch (err) {
         if ($("targetList")) $("targetList").innerHTML = `<div class="target-empty">${escapeHtml(err.message)}</div>`;
         toast(err.message, "err");

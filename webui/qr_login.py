@@ -386,6 +386,26 @@ def _page_signals(page) -> dict[str, Any]:
         return {}
 
 
+def wait_chat_access(page, timeout_s: float = 12) -> str:
+    """等私信页出现会话列表，或确认其实在扫码登录。返回 chat / login / empty。"""
+    deadline = time.time() + max(timeout_s, 1)
+    last = "empty"
+    while time.time() < deadline:
+        signals = _page_signals(page)
+        if signals.get("hasScan") or signals.get("hasEnjoy"):
+            return "login"
+        if signals.get("hasChat"):
+            return "chat"
+        last = "empty"
+        time.sleep(0.4)
+    signals = _page_signals(page)
+    if signals.get("hasScan") or signals.get("hasEnjoy"):
+        return "login"
+    if signals.get("hasChat"):
+        return "chat"
+    return last
+
+
 def _page_logged_in(page) -> bool:
     flags = _page_signals(page)
     if not flags:
@@ -2166,6 +2186,11 @@ def _worker(replace_index: int):
         if not profile.get("unique_id"):
             _set(status="error", message="登录成功，但没有读到抖音号，请再扫一次")
             return
+        try:
+            from webui.session_store import save_state
+            save_state(context, profile.get("unique_id") or "")
+        except Exception:
+            logger.exception("扫码后保存账号快照失败")
         _set(
             status="success",
             message="登录成功，已自动抓取用户名、抖音号和 Cookie",

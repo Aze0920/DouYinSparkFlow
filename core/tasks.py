@@ -338,17 +338,18 @@ def _send_chat_message(page, message: str):
     chat_input.first.press("Enter")
 
 
-def do_user_task(username, cookies, targets, message_template=""):
+def do_user_task(username, cookies, targets, message_template="", unique_id=""):
     user_id_dict = {}
     playwright, browser = get_browser()
     context = None
     try:
-        context = make_context(browser)
+        from webui.session_store import load_state_path, save_state
+
+        context = make_context(browser, storage_state=load_state_path(unique_id), cookies=cookies)
         context.set_default_navigation_timeout(config["browserTimeout"])
         context.set_default_timeout(8000)
         page = context.new_page()
         page.on("response", _make_info_handler(user_id_dict))
-        context.add_cookies(cookies)
 
         retry_operation(
             "打开抖音网页聊天页面",
@@ -370,6 +371,8 @@ def do_user_task(username, cookies, targets, message_template=""):
                 f"账号 {username} 打不开会话列表。不是扫码失败，是私信页没有出现好友列表，已截图到 logs/chat-debug-*.png"
             )
         logger.info("账号 %s 已找到会话列表 item=%s list=%s", username, item_sel, list_sel or "父级滚动")
+        if unique_id:
+            save_state(context, unique_id)
 
         logger.debug(f"账号 {username} 开始发送消息")
         for target_symbol, friend_name in scroll_and_select_user(
@@ -408,7 +411,13 @@ def _max_task_threads(n_users: int) -> int:
 def _run_one_account(user: dict):
     username = user.get("username", "未知用户")
     logger.info(f"开始处理账号 {username}")
-    do_user_task(username, user["cookies"], user["targets"], user.get("messageTemplate") or "")
+    do_user_task(
+        username,
+        user["cookies"],
+        user["targets"],
+        user.get("messageTemplate") or "",
+        unique_id=str(user.get("unique_id") or ""),
+    )
     logger.info(f"账号 {username} 任务完成")
 
 

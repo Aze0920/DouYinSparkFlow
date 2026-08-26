@@ -54,14 +54,27 @@ def get_browser(retried=False):
         raise
 
 
-def make_context(browser):
-    context = browser.new_context(
-        user_agent=BROWSER_UA,
-        locale="zh-CN",
-        viewport={"width": 1280, "height": 860},
-    )
+def make_context(browser, storage_state=None, cookies=None):
+    kwargs = {
+        "user_agent": BROWSER_UA,
+        "locale": "zh-CN",
+        "viewport": {"width": 1280, "height": 860},
+    }
+    if storage_state:
+        kwargs["storage_state"] = str(storage_state)
+    try:
+        context = browser.new_context(**kwargs)
+    except Exception:
+        kwargs.pop("storage_state", None)
+        context = browser.new_context(**kwargs)
     context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
     context.add_init_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
     )
+    if cookies:
+        try:
+            from utils.config import sanitize_cookies
+            context.add_cookies(sanitize_cookies([dict(item) for item in cookies]))
+        except Exception:
+            pass
     return context

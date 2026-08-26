@@ -13,3 +13,4 @@ config/notify.json
 config/invite.json
 config/auth_secret
 config/spark_stats.json
+data/sessions/
