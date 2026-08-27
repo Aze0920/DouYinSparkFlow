@@ -3,6 +3,7 @@ import secrets
 import threading
 from pathlib import Path
 
+from utils.logger import setup_logger
 from webui.users import (
     extend_user,
     find_user,
@@ -22,6 +23,7 @@ ROOT = Path(__file__).resolve().parent.parent
 INVITE_FILE = ROOT / "config" / "invite.json"
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _lock = threading.Lock()
+logger = setup_logger("invite")
 
 
 def default_invite_data() -> dict:
@@ -383,6 +385,22 @@ def complete_invite_on_bind(username: str) -> dict | None:
         invitee_days,
         inviter_already_permanent=inviter_already_permanent,
     )
+    try:
+        from webui.notify import notify_invite_rewards
+
+        invitee = find_user(name) or invitee
+        inviter = find_user(inviter_name) if inviter_name else None
+        notify_invite_rewards(
+            invitee_name=name,
+            inviter_name=inviter_name,
+            invitee_days=invitee_days,
+            awarded_inviter_days=awarded_inviter_days,
+            inviter_already_permanent=inviter_already_permanent,
+            invitee=invitee,
+            inviter=inviter,
+        )
+    except Exception:
+        logger.exception("邀请奖励通知失败 invitee=%s inviter=%s", name, inviter_name)
     return invitee
 
 

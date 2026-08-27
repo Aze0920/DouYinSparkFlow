@@ -81,9 +81,11 @@ from webui.invite import (
 )
 from webui.notify import (
     apply_wxpusher_callback,
+    broadcast_to_bound,
     cancel_wxpusher_qr,
     load_notify,
     notify_event,
+    notify_recharge_success,
     poll_wxpusher_qr,
     public_notify,
     public_wxpusher,
@@ -91,6 +93,7 @@ from webui.notify import (
     send_wechat,
     send_wxpusher,
     start_wxpusher_qr,
+    tick_expire_reminders,
     unbind_user_wxpusher,
     user_wxpusher_uid,
     verify_wechat_signature,
@@ -1067,6 +1070,10 @@ def recharge(request: Request, payload: dict | None = None):
         card.get("max_accounts"),
         card.get("code"),
     )
+    try:
+        notify_recharge_success(name, card, saved)
+    except Exception:
+        logger.exception("充值通知失败 user=%s", name)
     return {"ok": True, "user": public_user(saved)}
 
 
@@ -1126,6 +1133,19 @@ def test_notify_settings(request: Request, payload: dict | None = None):
     if not notes:
         raise HTTPException(status_code=400, detail="；".join(failed))
     return {"ok": True, "message": "；".join(notes + failed)}
+
+
+@app.post("/api/settings/notify/broadcast")
+def broadcast_notify(request: Request, payload: dict | None = None):
+    require_admin(request)
+    payload = payload or {}
+    title = str(payload.get("title") or "").strip() or "SparkFlow 通知"
+    body = str(payload.get("body") or "").strip()
+    try:
+        result = broadcast_to_bound(title, body)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, **result}
 
 
 @app.get("/api/notify/wxpusher")
@@ -1744,6 +1764,10 @@ def _now_local():
 def _scheduler_loop():
     while True:
         time.sleep(20)
+        try:
+            tick_expire_reminders()
+        except Exception:
+            logger.exception("到期提醒失败")
         try:
             if time.time() - _sched_boot < 50:
                 continue

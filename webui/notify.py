@@ -9,13 +9,33 @@ from pathlib import Path
 import httpx
 
 from utils.logger import setup_logger
-from webui.users import find_user, load_users, now_utc, save_users, to_iso
+from webui.users import (
+    find_user,
+    is_permanent,
+    load_users,
+    now_utc,
+    parse_days,
+    parse_iso,
+    parse_max_accounts,
+    remaining_label,
+    save_users,
+    to_iso,
+)
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTIFY_FILE = ROOT / "config" / "notify.json"
 logger = setup_logger("notify")
 
-EVENT_KEYS = ("task_done", "task_fail", "cookie_offline")
+EVENT_KEYS = (
+    "task_done",
+    "task_fail",
+    "cookie_offline",
+    "expire_soon",
+    "recharge",
+    "invite_reward",
+)
+USER_EVENT_KEYS = ("expire_soon", "recharge", "invite_reward")
+WP_UID_BATCH = 100
 WP_QR_TTL = 1800
 WP_POLL_MIN = 10
 WP_CREATE_QR = "https://wxpusher.zjiecode.com/api/fun/create/qrcode"
@@ -47,6 +67,9 @@ def default_notify() -> dict:
             "task_done": True,
             "task_fail": True,
             "cookie_offline": True,
+            "expire_soon": True,
+            "recharge": True,
+            "invite_reward": True,
         },
         "wxpusher": {
             "enabled": False,
@@ -77,6 +100,10 @@ def load_notify() -> dict:
                 data = _deep_merge(data, raw)
         except Exception:
             logger.exception("读取推送配置失败")
+    events = dict(data.get("events") or {})
+    for key in EVENT_KEYS:
+        events.setdefault(key, True)
+    data["events"] = events
     return data
 
 
@@ -416,27 +443,62 @@ def send_wxpusher(title: str, body: str = "", uids=None) -> dict:
     if not targets:
         raise RuntimeError("还没扫码绑定微信")
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    payload = {
-        "appToken": token,
-        "content": f"{title}\n{body or '-'}\n{now}",
-        "summary": (title or "SparkFlow")[:20],
-        "contentType": 1,
-        "uids": targets,
-    }
+    last = {}
     with httpx.Client(timeout=8.0) as client:
-        resp = client.post(WP_SEND, json=payload)
-        data = resp.json()
-    if int(data.get("code") or 0) != 1000:
-        raise RuntimeError(data.get("msg") or "WxPusher 发送失败")
+        for i in range(0, len(targets), WP_UID_BATCH):
+            chunk = targets[i : i + WP_UID_BATCH]
+            payload = {
+                "appToken": token,
+                "content": f"{title}\n{body or '-'}\n{now}",
+                "summary": (title or "SparkFlow")[:20],
+                "contentType": 1,
+                "uids": chunk,
+            }
+            resp = client.post(WP_SEND, json=payload)
+            data = resp.json()
+            if int(data.get("code") or 0) != 1000:
+                raise RuntimeError(data.get("msg") or "WxPusher 发送失败")
+            last = data
     logger.info("WxPusher 推送成功 title=%s uids=%s", title, len(targets))
-    return data
+    return last
 
 
-def notify_event(kind: str, title: str, body: str = "", usernames=None) -> None:
+def list_bound_wxpusher_uids() -> list[str]:
+    uids = []
+    seen = set()
+    for item in load_users():
+        uid = str(item.get("wxpusher_uid") or "").strip()
+        if uid and uid not in seen:
+            seen.add(uid)
+            uids.append(uid)
+    return uids
+
+
+def broadcast_to_bound(title: str, body: str) -> dict:
+    title = str(title or "").strip() or "SparkFlow 通知"
+    body = str(body or "").strip()
+    if not body:
+        raise RuntimeError("请填写通知内容")
+    uids = list_bound_wxpusher_uids()
+    if not uids:
+        raise RuntimeError("还没有用户绑定微信")
+    send_wxpusher(title, body, uids=uids)
+    logger.info("已群发通知 title=%s users=%s", title, len(uids))
+    return {"sent": len(uids)}
+
+
+def _days_text(days, default: int = 1) -> str:
+    n = parse_days(days, default=default)
+    return "永久" if n == 0 else f"{n} 天"
+
+
+def notify_event(kind: str, title: str, body: str = "", usernames=None, wechat_admin=None) -> None:
     cfg = load_notify()
     events = cfg.get("events") or {}
     if kind != "test" and not events.get(kind, True):
         return
+    if wechat_admin is None:
+        wechat_admin = kind not in USER_EVENT_KEYS
     wechat = cfg.get("wechat") or {}
     wxpusher = cfg.get("wxpusher") or {}
     names = []
@@ -451,25 +513,131 @@ def notify_event(kind: str, title: str, body: str = "", usernames=None) -> None:
         uid = user_wxpusher_uid(name)
         if uid and uid not in uids:
             uids.append(uid)
-    if not wechat.get("enabled") and not (wxpusher.get("enabled") and uids):
+    can_wp = bool(wxpusher.get("enabled") and uids)
+    can_wx = bool(wechat_admin and wechat.get("enabled"))
+    if not can_wp and not can_wx:
         if wxpusher.get("enabled") and names and not uids:
             logger.warning("WxPusher 跳过 kind=%s owners=%s 未绑定微信", kind, ",".join(names))
         return
     owners = ",".join(names) or "-"
 
     def _run():
-        if wxpusher.get("enabled") and uids:
+        if can_wp:
             try:
                 send_wxpusher(title, body, uids=uids)
             except Exception as exc:
                 logger.warning("WxPusher 未发出 kind=%s owners=%s: %s", kind, owners, exc)
-        if wechat.get("enabled"):
+        if can_wx:
             try:
                 send_wechat(kind, title, body)
             except Exception as exc:
                 logger.warning("公众号未发出 kind=%s: %s", kind, exc)
 
     threading.Thread(target=_run, daemon=True).start()
+
+
+def notify_recharge_success(username: str, card: dict | None = None, user: dict | None = None) -> None:
+    name = str(username or "").strip()
+    if not name:
+        return
+    card = card or {}
+    days_txt = _days_text(card.get("days"), default=1)
+    acc = parse_max_accounts(card.get("max_accounts"), default=1)
+    acc_txt = "账号不限" if acc == 0 else f"{acc} 个账号"
+    body = f"卡密充值成功，到账 {days_txt}，额度 {acc_txt}"
+    remain = remaining_label(user) if user else ""
+    if remain:
+        body += f"。当前{remain}"
+    notify_event("recharge", "充值成功", body, usernames=[name])
+
+
+def notify_invite_rewards(
+    invitee_name: str,
+    inviter_name: str = "",
+    invitee_days=None,
+    awarded_inviter_days=None,
+    inviter_already_permanent: bool = False,
+    invitee: dict | None = None,
+    inviter: dict | None = None,
+) -> None:
+    guest = str(invitee_name or "").strip()
+    host = str(inviter_name or "").strip()
+    if guest:
+        days_txt = _days_text(invitee_days, default=1)
+        body = f"已绑定微信，邀请成功。获得 {days_txt}"
+        remain = remaining_label(invitee) if invitee else ""
+        if remain:
+            body += f"，当前{remain}"
+        notify_event("invite_reward", "邀请奖励已到账", body, usernames=[guest])
+    if not host:
+        return
+    if inviter_already_permanent:
+        host_body = f"好友 {guest} 已绑定微信。你是永久会员，未再加时长"
+    else:
+        host_body = f"好友 {guest} 已绑定微信。你获得 {_days_text(awarded_inviter_days, default=1)}"
+        remain = remaining_label(inviter) if inviter else ""
+        if remain:
+            host_body += f"，当前{remain}"
+    notify_event("invite_reward", "邀请成功", host_body, usernames=[host])
+
+
+def tick_expire_reminders() -> dict:
+    cfg = load_notify()
+    events = cfg.get("events") or {}
+    if not events.get("expire_soon", True):
+        return {"ok": True, "sent": 0, "skipped": "disabled"}
+    wxpusher = cfg.get("wxpusher") or {}
+    if not wxpusher.get("enabled"):
+        return {"ok": True, "sent": 0, "skipped": "wxpusher"}
+    now = now_utc()
+    users = load_users()
+    sent = 0
+    dirty = False
+    for user in users:
+        name = str(user.get("username") or "").strip()
+        if not name or is_permanent(user):
+            continue
+        exp = parse_iso(user.get("expires_at"))
+        if not exp:
+            continue
+        seconds = (exp - now).total_seconds()
+        if seconds <= 0:
+            continue
+        exp_key = str(user.get("expires_at") or "")
+        if str(user.get("expire_notice_for") or "") != exp_key:
+            user["expire_notice_for"] = exp_key
+            user["expire_notice_24h"] = False
+            user["expire_notice_12h"] = False
+            dirty = True
+        if not str(user.get("wxpusher_uid") or "").strip():
+            continue
+        hours = seconds / 3600.0
+        remain = remaining_label(user)
+        if 12 < hours <= 24 and not user.get("expire_notice_24h"):
+            notify_event(
+                "expire_soon",
+                "会员即将到期",
+                f"你的会员将在 24 小时内到期。当前{remain}。到期后可在「我的」用卡密续费。",
+                usernames=[name],
+            )
+            user["expire_notice_24h"] = True
+            dirty = True
+            sent += 1
+        if 0 < hours <= 12 and not user.get("expire_notice_12h"):
+            notify_event(
+                "expire_soon",
+                "会员即将到期",
+                f"你的会员将在 12 小时内到期。当前{remain}。到期后可在「我的」用卡密续费。",
+                usernames=[name],
+            )
+            user["expire_notice_12h"] = True
+            dirty = True
+            sent += 1
+    if dirty:
+        save_users(users)
+    if sent:
+        logger.info("到期提醒已排队 sent=%s", sent)
+    return {"ok": True, "sent": sent}
 
 
 def start_wxpusher_qr(username: str, force: bool = False) -> dict:

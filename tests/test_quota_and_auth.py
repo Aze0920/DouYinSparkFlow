@@ -9,6 +9,7 @@ os.environ.setdefault("AUTH_SECRET", "test-auth-secret-key-32chars!!")
 
 from webui import invite as invite_mod
 from webui import users as users_mod
+from webui import notify as notify_mod
 from webui.cards import public_card
 from webui.invite import (
     apply_invite_register,
@@ -120,11 +121,14 @@ class InviteTests(unittest.TestCase):
         root = Path(self.tmp.name)
         self.users_patch = patch.object(users_mod, "USERS_FILE", root / "users.json")
         self.invite_patch = patch.object(invite_mod, "INVITE_FILE", root / "invite.json")
+        self.notify_patch = patch.object(notify_mod, "NOTIFY_FILE", root / "notify.json")
         self.users_patch.start()
         self.invite_patch.start()
+        self.notify_patch.start()
         self.addCleanup(self.tmp.cleanup)
         self.addCleanup(self.users_patch.stop)
         self.addCleanup(self.invite_patch.stop)
+        self.addCleanup(self.notify_patch.stop)
         save_users([make_user("host", "pass1234", role="user", days=7, max_accounts=1)])
         save_invite_settings({"enabled": True, "inviter_days": 3, "invitee_days": 2})
         self.host_code = set_user_invite_enabled("host", True)["code"]

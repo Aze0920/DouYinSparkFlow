@@ -697,6 +697,13 @@ body.spark-locked .spark-action {
 .settings-row-btn {
   min-height: 42px;
 }
+.settings-broadcast-body {
+  grid-column: span 2;
+}
+.settings-broadcast textarea {
+  min-height: 72px;
+  resize: vertical;
+}
 .settings-save {
   width: 100%;
 }
@@ -1055,6 +1062,7 @@ body.spark-locked .spark-action {
   .login-card { padding: 26px 20px 22px; }
   .cards, .grid.two, .accounts-grid, .users-grid, .dash-body { grid-template-columns: 1fr; }
   .settings-row { grid-template-columns: 1fr; }
+  .settings-broadcast-body { grid-column: auto; }
   .dash-admin-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-hero { flex-direction: column; align-items: stretch; gap: 0; }
   .dash-hero-copy { display: none; }
