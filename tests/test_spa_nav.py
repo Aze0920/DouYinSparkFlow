@@ -96,5 +96,19 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("88px + env(safe-area-inset-bottom)", CSS)
 
 
+class PublicOriginTests(unittest.TestCase):
+    def test_omits_default_ports_keeps_custom(self):
+        from webui.origin import public_origin
+
+        self.assertEqual(public_origin("https", "douyin.lxmz.fun"), "https://douyin.lxmz.fun")
+        self.assertEqual(public_origin("https", "douyin.lxmz.fun:443"), "https://douyin.lxmz.fun")
+        self.assertEqual(public_origin("http", "127.0.0.1:80"), "http://127.0.0.1")
+        self.assertEqual(public_origin("http", "127.0.0.1:8888"), "http://127.0.0.1:8888")
+        self.assertEqual(public_origin("https", "douyin.lxmz.fun", "8443"), "https://douyin.lxmz.fun:8443")
+        self.assertEqual(public_origin("https", "douyin.lxmz.fun:8443", "443"), "https://douyin.lxmz.fun:8443")
+        self.assertEqual(public_origin("http", "[::1]:9000"), "http://[::1]:9000")
+        self.assertIn("encodeURIComponent(data.code)", INDEX)
+
+
 if __name__ == "__main__":
     unittest.main()

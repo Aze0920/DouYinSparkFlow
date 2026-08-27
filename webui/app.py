@@ -15,6 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
+from webui.origin import public_origin, split_host_port
 from webui.legal_docs import (
     PRIVACY_HTML,
     PRIVACY_LEAD,
@@ -264,10 +265,17 @@ def _client_ip(request: Request) -> str:
 
 def _request_origin(request: Request) -> str:
     proto = (request.headers.get("x-forwarded-proto") or request.url.scheme or "http").split(",")[0].strip()
-    host = (request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc or "").split(",")[0].strip()
-    if not host:
-        return str(request.base_url).rstrip("/")
-    return f"{proto}://{host}".rstrip("/")
+    forwarded_host = (request.headers.get("x-forwarded-host") or "").split(",")[0].strip()
+    host = forwarded_host or (request.headers.get("host") or request.url.netloc or "").split(",")[0].strip()
+    forwarded_port = (request.headers.get("x-forwarded-port") or "").split(",")[0].strip()
+    if not split_host_port(host)[1] and not forwarded_port and not forwarded_host:
+        url_port = request.url.port
+        if url_port:
+            forwarded_port = str(url_port)
+    origin = public_origin(proto, host, forwarded_port)
+    if origin:
+        return origin
+    return public_origin(request.url.scheme, request.url.netloc) or str(request.base_url).rstrip("/")
 
 
 def _rate_allow(key: str, limit: int, window: float) -> bool:

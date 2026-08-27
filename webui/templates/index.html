@@ -2799,8 +2799,10 @@
         else if (data.permanent) $("inviteHint").textContent = "把固定链接发给朋友，对方不用填卡密就能注册。你已是永久会员，邀请成功不会再给你加天数。";
         else $("inviteHint").textContent = "把固定链接发给朋友，对方不用填卡密就能注册。你的会员过期后链接会失效，续期后不用换链接。";
       }
-      let link = data.link || "";
-      if (link && link.startsWith("/")) link = location.origin + link;
+      let link = data.code
+        ? ((location.origin || "").replace(/\/$/, "") + "/?invite=" + encodeURIComponent(data.code))
+        : (data.link || "");
+      if (link && link.startsWith("/")) link = (location.origin || "").replace(/\/$/, "") + link;
       if ($("inviteLink")) {
         $("inviteLink").value = link;
         $("inviteLink").placeholder = "开启邀请后即可复制固定链接";
