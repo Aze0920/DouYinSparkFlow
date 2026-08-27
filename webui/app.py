@@ -337,7 +337,10 @@ def _notify_account_owners(kind: str, title: str, unique_ids=None, extra: str = 
         body = "、".join(names)
         if extra:
             body = f"{body} {extra}".strip()
-        notify_event(kind, title, body, usernames=[owner])
+        rows = [{"label": "账号", "value": "、".join(names)}]
+        if extra:
+            rows.append({"label": "说明", "value": extra})
+        notify_event(kind, title, body, usernames=[owner], rows=rows)
 
 
 def _filter_accounts(user: dict | None, accounts: list) -> list:
@@ -682,9 +685,13 @@ def send_my_password_code(request: Request):
     code = issue_password_code(name)
     try:
         send_wxpusher(
-            "SparkFlow 改密验证码",
+            "改密验证码",
             f"验证码 {code}，10 分钟内有效。不是本人操作请忽略。",
             uids=[uid],
+            kind="password_code",
+            copy_text=code,
+            rows=[{"label": "有效期", "value": "10 分钟内有效"}],
+            footer="不是本人操作请忽略这封消息",
         )
     except Exception as exc:
         clear_password_code(name)
@@ -1114,7 +1121,14 @@ def test_notify_settings(request: Request, payload: dict | None = None):
             failed.append("WxPusher：请先在账号列表扫码绑定微信")
         else:
             try:
-                send_wxpusher("SparkFlow 测试推送", "WxPusher 通道正常", uids=[uid])
+                send_wxpusher(
+                    "通道测试",
+                    "WxPusher 通道正常",
+                    uids=[uid],
+                    kind="test",
+                    rows=[{"label": "状态", "value": "通道正常，可以正常收消息"}],
+                    footer="这是管理员在设置页发出的测试通知",
+                )
                 notes.append("WxPusher 已发送")
             except Exception as exc:
                 failed.append("WxPusher：" + str(exc))
@@ -1213,7 +1227,14 @@ def test_wxpusher_bind(request: Request):
     if not uid:
         raise HTTPException(status_code=400, detail="请先扫码绑定微信")
     try:
-        send_wxpusher("SparkFlow 测试推送", "绑定成功，以后你名下的抖音号消息会发到这里", uids=[uid])
+        send_wxpusher(
+            "绑定成功",
+            "绑定成功，以后你名下的抖音号消息会发到这里",
+            uids=[uid],
+            kind="test",
+            rows=[{"label": "状态", "value": "微信已绑定，后续通知会发到这里"}],
+            footer="可在「我的」里管理绑定",
+        )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "message": "测试消息已发送"}
@@ -1633,6 +1654,11 @@ def check_account_cookie(request: Request, payload: dict | None = None):
             "抖音账号掉线",
             f"{account_name} {unique_id}",
             usernames=[owner_name] if owner_name else None,
+            rows=[
+                {"label": "账号", "value": account_name},
+                {"label": "抖音号", "value": unique_id},
+            ],
+            footer="请重新扫码登录，或粘贴对应 Cookie",
         )
     logger.info(
         "检测账号 Cookie unique_id=%s valid=%s mismatch=%s got=%s",

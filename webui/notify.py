@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import html
 import json
 import threading
 import time
@@ -437,21 +438,149 @@ def send_wechat(kind: str, title: str, body: str = "") -> dict:
     return data
 
 
-def send_wxpusher(title: str, body: str = "", uids=None) -> dict:
+def _esc(text) -> str:
+    return html.escape(str(text or ""), quote=False)
+
+
+def _attr(text) -> str:
+    return html.escape(str(text or ""), quote=True)
+
+
+def _html_text(text) -> str:
+    return _esc(text).replace("\n", "<br/>")
+
+
+def _kind_theme(kind: str) -> dict:
+    key = str(kind or "").strip()
+    if key in ("task_fail", "cookie_offline"):
+        return {"accent": "#ff5d7a", "tag": "需要处理"}
+    if key == "expire_soon":
+        return {"accent": "#e8a317", "tag": "到期提醒"}
+    if key in ("recharge", "invite_reward", "task_done"):
+        return {"accent": "#ff7a3a", "tag": "已完成"}
+    if key == "password_code":
+        return {"accent": "#ff7a3a", "tag": "安全验证"}
+    if key == "broadcast":
+        return {"accent": "#ff7a3a", "tag": "系统通知"}
+    if key == "test":
+        return {"accent": "#ff7a3a", "tag": "通道测试"}
+    return {"accent": "#ff7a3a", "tag": "SparkFlow"}
+
+
+def render_wxpusher_html(
+    title: str,
+    body: str = "",
+    kind: str = "",
+    rows=None,
+    footer: str = "",
+    copy_text: str = "",
+) -> str:
+    theme = _kind_theme(kind)
+    accent = theme["accent"]
+    items = []
+    for item in rows or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not value:
+            continue
+        items.append((label, value))
+    if not items:
+        text = str(body or "").strip()
+        if text:
+            items.append(("", text))
+    row_html = []
+    for index, (label, value) in enumerate(items):
+        line = "border-top:1px solid #f0e0d2;" if index else "border-top:none;"
+        label_html = (
+            f'<p style="margin:0;font-size:12px;color:#8a7466;letter-spacing:.04em;" '
+            f'data-darkmode-color="#b9a394">{_esc(label)}</p>'
+            if label
+            else ""
+        )
+        value_margin = "margin:4px 0 0;" if label else "margin:0;"
+        row_html.append(
+            "<tr>"
+            f'<td style="padding:12px 0;{line}">'
+            f"{label_html}"
+            f'<p style="{value_margin}font-size:15px;line-height:1.65;color:#24180f;" '
+            f'data-darkmode-color="#f4efe8">{_html_text(value)}</p>'
+            "</td>"
+            "</tr>"
+        )
+    code = str(copy_text or "").strip()
+    copy_html = ""
+    if code:
+        copy_html = (
+            '<section style="padding:4px 18px 14px;" data-darkmode-bgcolor="#1a1410">'
+            f'<copy data-clipboard-text="{_attr(code)}" style="display:block;text-align:center;'
+            "padding:14px 12px;border-radius:12px;background:#ff7a3a;color:#fff;"
+            'font-size:28px;font-weight:700;letter-spacing:8px;">'
+            f"{_esc(code)}</copy>"
+            '<p style="margin:8px 0 0;text-align:center;font-size:12px;color:#8a7466;" '
+            'data-darkmode-color="#b9a394">点击验证码即可复制</p>'
+            "</section>"
+        )
+    footer_html = ""
+    note = str(footer or "").strip()
+    if note:
+        footer_html = (
+            '<section style="padding:12px 18px 16px;background:#fff3ea;" '
+            'data-darkmode-bgcolor="#24180f" data-darkmode-color="#d7c4b6">'
+            f'<p style="margin:0;font-size:12px;line-height:1.6;color:#8a7466;" '
+            f'data-darkmode-color="#d7c4b6">{_html_text(note)}</p>'
+            "</section>"
+        )
+    rows_wrap = ""
+    if row_html:
+        rows_wrap = (
+            '<section style="padding:2px 18px 10px;" data-darkmode-bgcolor="#1a1410">'
+            '<table style="width:100%;border-collapse:collapse;">'
+            f"{''.join(row_html)}</table></section>"
+        )
+    return (
+        '<section style="margin:0;padding:2px 0 6px;font-family:-apple-system,BlinkMacSystemFont,'
+        "'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif;\" "
+        'data-darkmode-bgcolor="transparent" data-darkmode-color="#f4efe8">'
+        '<section style="border:1px solid #f0d9c8;border-radius:16px;overflow:hidden;'
+        'background:#fffaf6;" data-darkmode-bgcolor="#1a1410" data-darkmode-color="#f4efe8">'
+        f'<section style="height:4px;background:{accent};font-size:0;line-height:0;">&nbsp;</section>'
+        '<section style="padding:16px 18px 8px;" data-darkmode-bgcolor="#1a1410">'
+        f'<p style="margin:0;font-size:11px;color:{accent};letter-spacing:.06em;" '
+        f'data-darkmode-color="#ffb07a">{_esc(theme["tag"]).upper()}</p>'
+        "</section>"
+        f"{copy_html}{rows_wrap}{footer_html}"
+        "</section></section>"
+    )
+
+
+def send_wxpusher(
+    title: str,
+    body: str = "",
+    uids=None,
+    kind: str = "",
+    rows=None,
+    footer: str = "",
+    copy_text: str = "",
+) -> dict:
     token = _app_token()
     targets = _parse_uids(uids)
     if not targets:
         raise RuntimeError("还没扫码绑定微信")
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
     last = {}
+    payload_content = render_wxpusher_html(
+        title, body, kind=kind, rows=rows, footer=footer, copy_text=copy_text
+    )
+    summary = (str(title or "").strip() or "SparkFlow")[:20]
     with httpx.Client(timeout=8.0) as client:
         for i in range(0, len(targets), WP_UID_BATCH):
             chunk = targets[i : i + WP_UID_BATCH]
             payload = {
                 "appToken": token,
-                "content": f"{title}\n{body or '-'}\n{now}",
-                "summary": (title or "SparkFlow")[:20],
-                "contentType": 1,
+                "content": payload_content,
+                "summary": summary,
+                "contentType": 2,
                 "uids": chunk,
             }
             resp = client.post(WP_SEND, json=payload)
@@ -482,7 +611,14 @@ def broadcast_to_bound(title: str, body: str) -> dict:
     uids = list_bound_wxpusher_uids()
     if not uids:
         raise RuntimeError("还没有用户绑定微信")
-    send_wxpusher(title, body, uids=uids)
+    send_wxpusher(
+        title,
+        body,
+        uids=uids,
+        kind="broadcast",
+        rows=[{"label": "内容", "value": body}],
+        footer="此消息由管理员发给所有已绑定微信的用户",
+    )
     logger.info("已群发通知 title=%s users=%s", title, len(uids))
     return {"sent": len(uids)}
 
@@ -492,7 +628,16 @@ def _days_text(days, default: int = 1) -> str:
     return "永久" if n == 0 else f"{n} 天"
 
 
-def notify_event(kind: str, title: str, body: str = "", usernames=None, wechat_admin=None) -> None:
+def notify_event(
+    kind: str,
+    title: str,
+    body: str = "",
+    usernames=None,
+    wechat_admin=None,
+    rows=None,
+    footer: str = "",
+    copy_text: str = "",
+) -> None:
     cfg = load_notify()
     events = cfg.get("events") or {}
     if kind != "test" and not events.get(kind, True):
@@ -524,7 +669,15 @@ def notify_event(kind: str, title: str, body: str = "", usernames=None, wechat_a
     def _run():
         if can_wp:
             try:
-                send_wxpusher(title, body, uids=uids)
+                send_wxpusher(
+                    title,
+                    body,
+                    uids=uids,
+                    kind=kind,
+                    rows=rows,
+                    footer=footer,
+                    copy_text=copy_text,
+                )
             except Exception as exc:
                 logger.warning("WxPusher 未发出 kind=%s owners=%s: %s", kind, owners, exc)
         if can_wx:
@@ -544,11 +697,24 @@ def notify_recharge_success(username: str, card: dict | None = None, user: dict 
     days_txt = _days_text(card.get("days"), default=1)
     acc = parse_max_accounts(card.get("max_accounts"), default=1)
     acc_txt = "账号不限" if acc == 0 else f"{acc} 个账号"
-    body = f"卡密充值成功，到账 {days_txt}，额度 {acc_txt}"
     remain = remaining_label(user) if user else ""
+    body = f"卡密充值成功，到账 {days_txt}，额度 {acc_txt}"
     if remain:
         body += f"。当前{remain}"
-    notify_event("recharge", "充值成功", body, usernames=[name])
+    rows = [
+        {"label": "到账时长", "value": days_txt},
+        {"label": "账号额度", "value": acc_txt},
+    ]
+    if remain:
+        rows.append({"label": "当前有效期", "value": remain})
+    notify_event(
+        "recharge",
+        "充值成功",
+        body,
+        usernames=[name],
+        rows=rows,
+        footer="可在控制台继续添加账号、续火花",
+    )
 
 
 def notify_invite_rewards(
@@ -564,21 +730,54 @@ def notify_invite_rewards(
     host = str(inviter_name or "").strip()
     if guest:
         days_txt = _days_text(invitee_days, default=1)
-        body = f"已绑定微信，邀请成功。获得 {days_txt}"
         remain = remaining_label(invitee) if invitee else ""
+        body = f"已绑定微信，邀请成功。获得 {days_txt}"
         if remain:
             body += f"，当前{remain}"
-        notify_event("invite_reward", "邀请奖励已到账", body, usernames=[guest])
+        rows = [
+            {"label": "奖励", "value": days_txt},
+            {"label": "状态", "value": "已绑定微信，邀请成功"},
+        ]
+        if remain:
+            rows.append({"label": "当前有效期", "value": remain})
+        notify_event(
+            "invite_reward",
+            "邀请奖励已到账",
+            body,
+            usernames=[guest],
+            rows=rows,
+            footer="邀请奖励需绑定微信后才会发放",
+        )
     if not host:
         return
     if inviter_already_permanent:
         host_body = f"好友 {guest} 已绑定微信。你是永久会员，未再加时长"
+        host_rows = [
+            {"label": "好友", "value": guest or "-"},
+            {"label": "状态", "value": "已绑定微信"},
+            {"label": "你的奖励", "value": "永久会员，未再加时长"},
+        ]
     else:
-        host_body = f"好友 {guest} 已绑定微信。你获得 {_days_text(awarded_inviter_days, default=1)}"
+        host_days = _days_text(awarded_inviter_days, default=1)
+        host_body = f"好友 {guest} 已绑定微信。你获得 {host_days}"
         remain = remaining_label(inviter) if inviter else ""
         if remain:
             host_body += f"，当前{remain}"
-    notify_event("invite_reward", "邀请成功", host_body, usernames=[host])
+        host_rows = [
+            {"label": "好友", "value": guest or "-"},
+            {"label": "状态", "value": "已绑定微信"},
+            {"label": "你的奖励", "value": host_days},
+        ]
+        if remain:
+            host_rows.append({"label": "当前有效期", "value": remain})
+    notify_event(
+        "invite_reward",
+        "邀请成功",
+        host_body,
+        usernames=[host],
+        rows=host_rows,
+        footer="邀请成功以好友绑定微信为准",
+    )
 
 
 def tick_expire_reminders() -> dict:
@@ -619,6 +818,11 @@ def tick_expire_reminders() -> dict:
                 "会员即将到期",
                 f"你的会员将在 24 小时内到期。当前{remain}。到期后可在「我的」用卡密续费。",
                 usernames=[name],
+                rows=[
+                    {"label": "提醒节点", "value": "到期前 24 小时"},
+                    {"label": "当前剩余", "value": remain},
+                ],
+                footer="到期后可在「我的」用卡密续费",
             )
             user["expire_notice_24h"] = True
             dirty = True
@@ -629,6 +833,11 @@ def tick_expire_reminders() -> dict:
                 "会员即将到期",
                 f"你的会员将在 12 小时内到期。当前{remain}。到期后可在「我的」用卡密续费。",
                 usernames=[name],
+                rows=[
+                    {"label": "提醒节点", "value": "到期前 12 小时"},
+                    {"label": "当前剩余", "value": remain},
+                ],
+                footer="到期后可在「我的」用卡密续费",
             )
             user["expire_notice_12h"] = True
             dirty = True

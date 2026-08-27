@@ -72,6 +72,7 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("broadcast_to_bound", chunk)
         self.assertIn("tick_expire_reminders()", APP_PY)
         self.assertIn("notify_recharge_success", APP_PY)
+        self.assertIn("render_wxpusher_html", (ROOT / "webui" / "notify.py").read_text(encoding="utf-8"))
         self.assertIn("user-edit-grid", INDEX)
         self.assertIn("user-edit-grid", CSS)
         self.assertIn("到期时间", INDEX)

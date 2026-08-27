@@ -17,6 +17,7 @@ from webui.notify import (
     load_notify,
     notify_invite_rewards,
     notify_recharge_success,
+    render_wxpusher_html,
     save_notify,
     tick_expire_reminders,
 )
@@ -168,6 +169,38 @@ class NotifyEventsTests(unittest.TestCase):
             titles = [call.args[1] for call in mocked.call_args_list]
             self.assertIn("邀请奖励已到账", titles)
             self.assertIn("邀请成功", titles)
+
+    def test_wxpusher_html_card_and_escape(self):
+        card = render_wxpusher_html(
+            "邀请成功",
+            "好友 test 已绑定微信。你是永久会员，未再加时长",
+            kind="invite_reward",
+            rows=[
+                {"label": "好友", "value": "test"},
+                {"label": "你的奖励", "value": "永久会员，未再加时长"},
+            ],
+            footer="邀请成功以好友绑定微信为准",
+        )
+        self.assertIn("已完成", card)
+        self.assertIn("好友", card)
+        self.assertIn("test", card)
+        self.assertIn("永久会员，未再加时长", card)
+        self.assertIn("border-radius", card)
+        self.assertIn("data-darkmode-color", card)
+        self.assertNotIn("邀请成功\n好友", card)
+        escaped = render_wxpusher_html("测试", "<script>alert(1)</script>")
+        self.assertIn("&lt;script&gt;", escaped)
+        self.assertNotIn("<script>alert", escaped)
+        code = render_wxpusher_html(
+            "改密验证码",
+            "",
+            kind="password_code",
+            copy_text="123456",
+            rows=[{"label": "有效期", "value": "10 分钟内有效"}],
+        )
+        self.assertIn('data-clipboard-text="123456"', code)
+        self.assertIn("安全验证", code)
+        self.assertIn('"contentType": 2', (Path(__file__).resolve().parents[1] / "webui" / "notify.py").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
