@@ -1658,15 +1658,20 @@ def list_account_conversations(request: Request, payload: dict | None = None):
 def _cookie_copy_text(raw) -> str:
     if raw in (None, ""):
         return ""
-    if isinstance(raw, (list, dict)):
-        return json.dumps(raw, ensure_ascii=False)
-    text = str(raw).strip()
-    if not text:
-        return ""
-    try:
-        return json.dumps(json.loads(text), ensure_ascii=False)
-    except json.JSONDecodeError:
-        return text
+    obj = raw
+    if not isinstance(raw, (list, dict)):
+        text = str(raw).strip()
+        if not text:
+            return ""
+        try:
+            obj = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+    from webui.qr_login import cookies_for_cookie_editor
+    rows = cookies_for_cookie_editor(obj)
+    if rows:
+        return json.dumps(rows, ensure_ascii=False)
+    return json.dumps(obj, ensure_ascii=False)
 
 
 @app.post("/api/account/copy-cookies")

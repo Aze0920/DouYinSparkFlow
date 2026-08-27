@@ -1348,27 +1348,69 @@ def is_display_unique_id(value: Any) -> bool:
     return True
 
 
-def _cookies_for_save(context) -> list[dict[str, Any]]:
+# Cookie-Editor / chrome.cookies.set 只认这四个；Playwright 写的是 None/Lax/Strict。
+_CHROME_SAMESITE = {
+    "none": "no_restriction",
+    "no_restriction": "no_restriction",
+    "lax": "lax",
+    "strict": "strict",
+    "unspecified": "unspecified",
+}
+
+
+def chrome_samesite(value: Any) -> str:
+    key = str(value or "").strip().lower()
+    if key in {"", "null", "undefined"}:
+        return "unspecified"
+    return _CHROME_SAMESITE.get(key, "unspecified")
+
+
+def cookie_editor_row(item: dict[str, Any]) -> dict[str, Any]:
+    """转成 Cookie-Editor 能直接导入的一条 cookie。"""
+    domain = str(item.get("domain") or ".douyin.com")
+    row: dict[str, Any] = {
+        "name": item.get("name"),
+        "value": item.get("value"),
+        "domain": domain,
+        "path": item.get("path") or "/",
+        "hostOnly": not domain.startswith("."),
+        "httpOnly": bool(item.get("httpOnly")),
+        "secure": bool(item.get("secure")),
+        "session": False,
+        "storeId": "0",
+        "sameSite": chrome_samesite(item.get("sameSite")),
+    }
+    if row["sameSite"] == "no_restriction":
+        row["secure"] = True
+    expires = item.get("expires")
+    if expires in (None, "", -1):
+        expires = item.get("expirationDate")
+    try:
+        exp = float(expires)
+    except (TypeError, ValueError):
+        exp = -1
+    if exp > 0:
+        row["expires"] = exp
+        row["expirationDate"] = exp
+    else:
+        row["session"] = True
+    return row
+
+
+def cookies_for_cookie_editor(items: Any) -> list[dict[str, Any]]:
+    if isinstance(items, dict):
+        items = items.get("cookies") or [items]
+    if not isinstance(items, list):
+        return []
     out = []
-    for item in _all_cookie_list(context):
-        row = {
-            "name": item.get("name"),
-            "value": item.get("value"),
-            "domain": item.get("domain") or ".douyin.com",
-            "path": item.get("path") or "/",
-        }
-        expires = item.get("expires")
-        if expires not in (None, -1):
-            row["expires"] = expires
-        if "httpOnly" in item:
-            row["httpOnly"] = item["httpOnly"]
-        if "secure" in item:
-            row["secure"] = item["secure"]
-        same_site = item.get("sameSite")
-        if same_site in ("Strict", "Lax", "None"):
-            row["sameSite"] = same_site
-        out.append(row)
+    for item in items:
+        if isinstance(item, dict) and item.get("name") is not None:
+            out.append(cookie_editor_row(item))
     return out
+
+
+def _cookies_for_save(context) -> list[dict[str, Any]]:
+    return cookies_for_cookie_editor(_all_cookie_list(context))
 
 
 def _http_avatar(url: str) -> str:
