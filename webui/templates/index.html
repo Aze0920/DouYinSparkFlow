@@ -548,81 +548,51 @@
       </section>
 
       <section id="page-settings" class="hidden">
-        <section class="panel">
+        <section class="panel settings-card">
           <div class="panel-head">
-            <h2>邀请</h2>
+            <h2>设置</h2>
           </div>
-          <div class="grid two">
-            <label class="check-line span-2"><input id="inviteAdminEnabled" type="checkbox" /> 开启邀请</label>
-            <label>邀请人获得天数<input id="inviteInviterDays" type="number" min="0" max="3650" value="1" /></label>
-            <label>被邀请人获得天数<input id="inviteInviteeDays" type="number" min="0" max="3650" value="1" /></label>
-            <label class="span-2">&nbsp;<button class="btn-primary" type="button" onclick="saveInviteSettings()">保存邀请设置</button></label>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>续火花并发</h2>
-          </div>
-          <div class="grid two">
-            <label>同时处理账号数
-              <input id="maxTaskThreads" type="number" min="1" max="32" value="10" />
-            </label>
-            <label class="span-2">
-              <button class="btn-primary" type="button" onclick="saveRuntimeSettings()">保存并发</button>
-            </label>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>WxPusher</h2>
-            <span class="ck-status" id="wpStatus">未配置</span>
-          </div>
-          <div class="grid two">
-            <label class="check-line"><input id="wpEnabled" type="checkbox" /> 启用 WxPusher</label>
-            <label>appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
-            <label class="check-line span-2"><input id="wpAllowUnbind" type="checkbox" checked /> 允许用户自行解绑微信</label>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>推送事件</h2>
-          </div>
-          <div class="grid two">
-            <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
-            <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
-            <label class="check-line"><input id="wxEventOffline" type="checkbox" checked /> 抖音账号掉线</label>
-            <label class="span-2">
-              <span class="row">
-                <button class="btn-primary" type="button" onclick="saveNotifySettings()">保存设置</button>
-                <button class="btn-ghost" type="button" onclick="testNotifySettings()">发送测试</button>
-              </span>
-            </label>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-head">
-            <h2>微信公众号（管理员配置）</h2>
-            <span class="ck-status" id="wxBindStatus">未绑定</span>
-          </div>
-          <div class="grid two">
-            <label class="check-line"><input id="wxEnabled" type="checkbox" /> 启用公众号推送</label>
-            <label>AppID<input id="wxAppId" placeholder="wx 开头的公众号 AppID" autocomplete="off" /></label>
-            <label>AppSecret<input id="wxAppSecret" type="password" placeholder="公众号 AppSecret" autocomplete="off" /></label>
-            <label>管理员 OpenID<input id="wxOpenId" placeholder="关注公众号后的 OpenID" autocomplete="off" /></label>
-            <label>Token<input id="wxToken" placeholder="服务器配置里的 Token" autocomplete="off" /></label>
-            <label>EncodingAESKey<input id="wxAesKey" placeholder="可选，安全模式才需要" autocomplete="off" /></label>
-            <label>完成模板 ID<input id="wxTplDone" placeholder="续火花完成" autocomplete="off" /></label>
-            <label>失败模板 ID<input id="wxTplFail" placeholder="续火花失败" autocomplete="off" /></label>
-            <label>掉线模板 ID<input id="wxTplOffline" placeholder="Cookie 失效 / 抖音掉线" autocomplete="off" /></label>
-            <label>模板字段
-              <select id="wxTplStyle">
-                <option value="thing">新版 thing1 / time2 / thing3</option>
-                <option value="keyword">旧版 first / keyword / remark</option>
-              </select>
-            </label>
-            <label class="span-2">
-              <button class="btn-ghost" type="button" onclick="testNotifySettings('wechat')">发送公众号测试</button>
-            </label>
+          <div class="settings-rows">
+            <div class="settings-row">
+              <label class="check-line"><input id="inviteAdminEnabled" type="checkbox" onchange="syncSettingsVisibility()" /> 开启邀请</label>
+              <label class="settings-if-invite">邀请人获得天数<input id="inviteInviterDays" type="number" min="0" max="3650" value="1" /></label>
+              <label class="settings-if-invite">被邀请人获得天数<input id="inviteInviteeDays" type="number" min="0" max="3650" value="1" /></label>
+            </div>
+            <div class="settings-row">
+              <label>同时处理账号数<input id="maxTaskThreads" type="number" min="1" max="32" value="10" /></label>
+            </div>
+            <div class="settings-row">
+              <label class="check-line"><input id="wpEnabled" type="checkbox" onchange="syncSettingsVisibility()" /> 启用 WxPusher <span class="ck-status" id="wpStatus">未配置</span></label>
+              <label class="settings-if-wp">appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
+              <label class="check-line settings-if-wp"><input id="wpAllowUnbind" type="checkbox" checked /> 允许用户自行解绑微信</label>
+            </div>
+            <div class="settings-row settings-if-push">
+              <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
+              <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
+              <label class="check-line"><input id="wxEventOffline" type="checkbox" checked /> 抖音账号掉线</label>
+              <button class="btn-ghost settings-row-btn" type="button" onclick="testNotifySettings()">发送测试</button>
+            </div>
+            <div class="settings-row">
+              <label class="check-line"><input id="wxEnabled" type="checkbox" onchange="syncSettingsVisibility()" /> 启用公众号推送 <span class="ck-status" id="wxBindStatus">未绑定</span></label>
+            </div>
+            <div class="settings-row settings-if-wx">
+              <label>AppID<input id="wxAppId" placeholder="wx 开头的公众号 AppID" autocomplete="off" /></label>
+              <label>AppSecret<input id="wxAppSecret" type="password" placeholder="公众号 AppSecret" autocomplete="off" /></label>
+              <label>管理员 OpenID<input id="wxOpenId" placeholder="关注公众号后的 OpenID" autocomplete="off" /></label>
+              <label>Token<input id="wxToken" placeholder="服务器配置里的 Token" autocomplete="off" /></label>
+              <label>EncodingAESKey<input id="wxAesKey" placeholder="可选，安全模式才需要" autocomplete="off" /></label>
+              <label>完成模板 ID<input id="wxTplDone" placeholder="续火花完成" autocomplete="off" /></label>
+              <label>失败模板 ID<input id="wxTplFail" placeholder="续火花失败" autocomplete="off" /></label>
+              <label>掉线模板 ID<input id="wxTplOffline" placeholder="Cookie 失效 / 抖音掉线" autocomplete="off" /></label>
+              <label>模板字段
+                <select id="wxTplStyle">
+                  <option value="thing">新版 thing1 / time2 / thing3</option>
+                  <option value="keyword">旧版 first / keyword / remark</option>
+                </select>
+              </label>
+              <button class="btn-ghost settings-row-btn" type="button" onclick="testNotifySettings('wechat')">发送公众号测试</button>
+            </div>
+            <button class="btn-primary settings-save" type="button" onclick="saveAllSettings()">保存</button>
           </div>
         </section>
       </section>
@@ -2269,6 +2239,25 @@
         toast(err.message, "err");
       }
     }
+    async function saveAllSettings() {
+      try {
+        await saveInviteSettings(true);
+        await saveConfig(true, false);
+        await saveNotifySettings(true);
+        toast("设置已保存");
+      } catch (err) {
+        toast(err.message, "err");
+      }
+    }
+    function syncSettingsVisibility() {
+      const inviteOn = !!( $("inviteAdminEnabled") && $("inviteAdminEnabled").checked );
+      const wpOn = !!( $("wpEnabled") && $("wpEnabled").checked );
+      const wxOn = !!( $("wxEnabled") && $("wxEnabled").checked );
+      document.querySelectorAll(".settings-if-invite").forEach((el) => el.classList.toggle("hidden", !inviteOn));
+      document.querySelectorAll(".settings-if-wp").forEach((el) => el.classList.toggle("hidden", !wpOn));
+      document.querySelectorAll(".settings-if-wx").forEach((el) => el.classList.toggle("hidden", !wxOn));
+      document.querySelectorAll(".settings-if-push").forEach((el) => el.classList.toggle("hidden", !wpOn && !wxOn));
+    }
     async function saveGlobalSettings() {
       await saveRuntimeSettings();
     }
@@ -2747,6 +2736,7 @@
         $("wxBindStatus").textContent = data.ready ? "可推送" : (data.bound ? "已填 OpenID" : "未绑定");
         $("wxBindStatus").className = "ck-status " + (data.ready ? "ck-ok" : "ck-unknown");
       }
+      syncSettingsVisibility();
     }
     async function loadNotifySettings() {
       const data = await api("/api/settings/notify");
@@ -2764,23 +2754,21 @@
       if ($("inviteAdminEnabled")) $("inviteAdminEnabled").checked = data.enabled !== false;
       if ($("inviteInviterDays")) $("inviteInviterDays").value = String(data.inviter_days ?? 1);
       if ($("inviteInviteeDays")) $("inviteInviteeDays").value = String(data.invitee_days ?? 1);
+      syncSettingsVisibility();
     }
-    async function saveInviteSettings() {
-      try {
-        const data = await api("/api/settings/invite", {
-          method: "POST",
-          body: JSON.stringify({
-            enabled: !!( $("inviteAdminEnabled") && $("inviteAdminEnabled").checked ),
-            inviter_days: parseQuotaNumber($("inviteInviterDays"), 1),
-            invitee_days: parseQuotaNumber($("inviteInviteeDays"), 1),
-          }),
-        });
-        fillInviteSettings(data);
-        setInviteEnabled(!!data.enabled);
-        toast("邀请设置已保存");
-      } catch (err) {
-        toast(err.message, "err");
-      }
+    async function saveInviteSettings(silent) {
+      const data = await api("/api/settings/invite", {
+        method: "POST",
+        body: JSON.stringify({
+          enabled: !!( $("inviteAdminEnabled") && $("inviteAdminEnabled").checked ),
+          inviter_days: parseQuotaNumber($("inviteInviterDays"), 1),
+          invitee_days: parseQuotaNumber($("inviteInviteeDays"), 1),
+        }),
+      });
+      fillInviteSettings(data);
+      setInviteEnabled(!!data.enabled);
+      if (!silent) toast("邀请设置已保存");
+      return data;
     }
     function renderInvitePage(data) {
       const userOn = !!data.user_enabled;
@@ -2907,44 +2895,41 @@
         if ($("regCard")) $("regCard").classList.toggle("hidden", !!data.valid);
       } catch (e) {}
     }
-    async function saveNotifySettings() {
-      try {
-        const data = await api("/api/settings/notify", {
-          method: "POST",
-          body: JSON.stringify({
-            wxpusher: {
-              enabled: !!( $("wpEnabled") && $("wpEnabled").checked ),
-              app_token: ($("wpAppToken") && $("wpAppToken").value) || "",
-              allow_self_unbind: !!( $("wpAllowUnbind") && $("wpAllowUnbind").checked ),
-            },
-            wechat: {
-              enabled: !!( $("wxEnabled") && $("wxEnabled").checked ),
-              app_id: ($("wxAppId") && $("wxAppId").value) || "",
-              app_secret: ($("wxAppSecret") && $("wxAppSecret").value) || "",
-              token: ($("wxToken") && $("wxToken").value) || "",
-              aes_key: ($("wxAesKey") && $("wxAesKey").value) || "",
-              admin_openid: ($("wxOpenId") && $("wxOpenId").value) || "",
-              tpl_task_done: ($("wxTplDone") && $("wxTplDone").value) || "",
-              tpl_task_fail: ($("wxTplFail") && $("wxTplFail").value) || "",
-              tpl_cookie_offline: ($("wxTplOffline") && $("wxTplOffline").value) || "",
-              tpl_style: ($("wxTplStyle") && $("wxTplStyle").value) || "thing",
-            },
-            events: {
-              task_done: !!( $("wxEventDone") && $("wxEventDone").checked ),
-              task_fail: !!( $("wxEventFail") && $("wxEventFail").checked ),
-              cookie_offline: !!( $("wxEventOffline") && $("wxEventOffline").checked ),
-            },
-          }),
-        });
-        fillNotifySettings(data);
-        if (typeof (data.wxpusher || {}).allow_self_unbind === "boolean") {
-          allowSelfUnbind = data.wxpusher.allow_self_unbind;
-          renderWxpusherCard();
-        }
-        toast("设置已保存");
-      } catch (err) {
-        toast(err.message, "err");
+    async function saveNotifySettings(silent) {
+      const data = await api("/api/settings/notify", {
+        method: "POST",
+        body: JSON.stringify({
+          wxpusher: {
+            enabled: !!( $("wpEnabled") && $("wpEnabled").checked ),
+            app_token: ($("wpAppToken") && $("wpAppToken").value) || "",
+            allow_self_unbind: !!( $("wpAllowUnbind") && $("wpAllowUnbind").checked ),
+          },
+          wechat: {
+            enabled: !!( $("wxEnabled") && $("wxEnabled").checked ),
+            app_id: ($("wxAppId") && $("wxAppId").value) || "",
+            app_secret: ($("wxAppSecret") && $("wxAppSecret").value) || "",
+            token: ($("wxToken") && $("wxToken").value) || "",
+            aes_key: ($("wxAesKey") && $("wxAesKey").value) || "",
+            admin_openid: ($("wxOpenId") && $("wxOpenId").value) || "",
+            tpl_task_done: ($("wxTplDone") && $("wxTplDone").value) || "",
+            tpl_task_fail: ($("wxTplFail") && $("wxTplFail").value) || "",
+            tpl_cookie_offline: ($("wxTplOffline") && $("wxTplOffline").value) || "",
+            tpl_style: ($("wxTplStyle") && $("wxTplStyle").value) || "thing",
+          },
+          events: {
+            task_done: !!( $("wxEventDone") && $("wxEventDone").checked ),
+            task_fail: !!( $("wxEventFail") && $("wxEventFail").checked ),
+            cookie_offline: !!( $("wxEventOffline") && $("wxEventOffline").checked ),
+          },
+        }),
+      });
+      fillNotifySettings(data);
+      if (typeof (data.wxpusher || {}).allow_self_unbind === "boolean") {
+        allowSelfUnbind = data.wxpusher.allow_self_unbind;
+        renderWxpusherCard();
       }
+      if (!silent) toast("设置已保存");
+      return data;
     }
     async function testNotifySettings(channel) {
       try {

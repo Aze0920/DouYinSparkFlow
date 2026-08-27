@@ -488,6 +488,7 @@ html.sidebar-collapsed .logout-btn { padding-left: 8px; padding-right: 8px; }
 @media (max-width: 1180px) and (min-width: 861px) {
   .dash-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-body { grid-template-columns: 1fr; }
+  .settings-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 @media (min-width: 861px) {
@@ -675,6 +676,30 @@ body.spark-locked .spark-action {
   color: var(--text);
 }
 .check-line input { width: auto; margin: 0; }
+.settings-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-row {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px 14px;
+  align-items: end;
+}
+.settings-row .check-line {
+  min-height: 42px;
+  align-items: center;
+}
+.settings-row .check-line .ck-status {
+  margin-left: 4px;
+}
+.settings-row-btn {
+  min-height: 42px;
+}
+.settings-save {
+  width: 100%;
+}
 .accounts-grid, .users-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
@@ -1029,6 +1054,7 @@ body.spark-locked .spark-action {
   .login-page { min-height: 100dvh; }
   .login-card { padding: 26px 20px 22px; }
   .cards, .grid.two, .accounts-grid, .users-grid, .dash-body { grid-template-columns: 1fr; }
+  .settings-row { grid-template-columns: 1fr; }
   .dash-admin-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-hero { flex-direction: column; align-items: stretch; gap: 0; }
   .dash-hero-copy { display: none; }
