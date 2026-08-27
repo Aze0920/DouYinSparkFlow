@@ -19,6 +19,7 @@ from webui.notify import (
     notify_recharge_success,
     render_wxpusher_html,
     save_notify,
+    send_notifyx,
     tick_expire_reminders,
 )
 from webui.users import find_user, make_user, now_utc, save_users, to_iso
@@ -169,6 +170,25 @@ class NotifyEventsTests(unittest.TestCase):
             titles = [call.args[1] for call in mocked.call_args_list]
             self.assertIn("邀请奖励已到账", titles)
             self.assertIn("邀请成功", titles)
+
+    def test_notifyx_send_and_config(self):
+        self.assertIn("notifyx", default_notify())
+        save_notify({"notifyx": {"enabled": True, "api_key": "nx_test_key", "team": "team1"}})
+        loaded = load_notify()["notifyx"]
+        self.assertTrue(loaded.get("enabled"))
+        self.assertEqual(loaded.get("api_key"), "nx_test_key")
+        self.assertEqual(loaded.get("team"), "team1")
+        with patch.object(notify_mod.httpx, "Client") as client_cls:
+            client = client_cls.return_value.__enter__.return_value
+            resp = client.post.return_value
+            resp.status_code = 200
+            resp.json.return_value = {"success": True}
+            send_notifyx("标题", "正文内容", description="简介")
+            args, kwargs = client.post.call_args
+            self.assertIn("/api/v1/send/nx_test_key", args[0])
+            self.assertEqual(kwargs["json"]["title"], "标题")
+            self.assertEqual(kwargs["json"]["content"], "正文内容")
+            self.assertEqual(kwargs["json"]["team"], "team1")
 
     def test_wxpusher_html_card_and_escape(self):
         card = render_wxpusher_html(

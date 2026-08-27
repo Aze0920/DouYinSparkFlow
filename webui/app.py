@@ -91,6 +91,7 @@ from webui.notify import (
     public_notify,
     public_wxpusher,
     save_notify,
+    send_notifyx,
     send_wechat,
     send_wxpusher,
     start_wxpusher_qr,
@@ -1119,10 +1120,12 @@ def test_notify_settings(request: Request, payload: dict | None = None):
     cfg = load_notify()
     wxpusher = cfg.get("wxpusher") or {}
     wechat = cfg.get("wechat") or {}
+    notifyx = cfg.get("notifyx") or {}
     notes = []
     failed = []
     want_wp = channel in ("", "wxpusher", "all")
     want_wx = channel in ("", "wechat", "all")
+    want_nx = channel in ("", "notifyx", "all")
     if want_wp and wxpusher.get("enabled"):
         uid = user_wxpusher_uid(admin.get("username") or "")
         if not uid:
@@ -1146,12 +1149,24 @@ def test_notify_settings(request: Request, payload: dict | None = None):
             notes.append("公众号已发送")
         except Exception as exc:
             failed.append("公众号：" + str(exc))
+    if want_nx and notifyx.get("enabled"):
+        try:
+            send_notifyx(
+                "通道测试",
+                "**状态**：NotifyX 通道正常\n\n这是管理员在设置页发出的测试通知",
+                description="SparkFlow NotifyX 测试",
+            )
+            notes.append("NotifyX 已发送")
+        except Exception as exc:
+            failed.append("NotifyX：" + str(exc))
     if channel == "wechat" and not wechat.get("enabled"):
         raise HTTPException(status_code=400, detail="公众号推送还没打开")
     if channel == "wxpusher" and not wxpusher.get("enabled"):
         raise HTTPException(status_code=400, detail="WxPusher 还没打开")
+    if channel == "notifyx" and not notifyx.get("enabled"):
+        raise HTTPException(status_code=400, detail="NotifyX 还没打开")
     if not notes and not failed:
-        raise HTTPException(status_code=400, detail="请先启用 WxPusher 或公众号推送")
+        raise HTTPException(status_code=400, detail="请先启用 WxPusher、NotifyX 或公众号推送")
     if not notes:
         raise HTTPException(status_code=400, detail="；".join(failed))
     return {"ok": True, "message": "；".join(notes + failed)}

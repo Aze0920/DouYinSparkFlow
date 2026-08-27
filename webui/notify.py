@@ -44,6 +44,7 @@ WP_SCAN_UID = "https://wxpusher.zjiecode.com/api/fun/scan-qrcode-uid"
 WP_SEND = "https://wxpusher.zjiecode.com/api/send/message"
 WP_USER_LIST = "https://wxpusher.zjiecode.com/api/fun/wxuser/v2"
 WP_REMOVE = "https://wxpusher.zjiecode.com/api/fun/remove"
+NOTIFYX_SEND = "https://www.notifyx.cn/api/v1/send/{key}"
 
 _token_cache = {"token": "", "expire": 0}
 _bind_lock = threading.Lock()
@@ -77,6 +78,11 @@ def default_notify() -> dict:
             "app_token": "",
             "uids": "",
             "allow_self_unbind": True,
+        },
+        "notifyx": {
+            "enabled": False,
+            "api_key": "",
+            "team": "",
         },
     }
 
@@ -146,7 +152,15 @@ def save_notify(payload: dict) -> dict:
         wxpusher["allow_self_unbind"] = bool(incoming_wp.get("allow_self_unbind"))
     if "allow_self_unbind" not in wxpusher:
         wxpusher["allow_self_unbind"] = True
-    data = {"wechat": wechat, "wxpusher": wxpusher, "events": events}
+    notifyx = dict(current.get("notifyx") or {})
+    incoming_nx = payload.get("notifyx") if isinstance(payload.get("notifyx"), dict) else {}
+    if "enabled" in incoming_nx:
+        notifyx["enabled"] = bool(incoming_nx.get("enabled"))
+    if "api_key" in incoming_nx:
+        notifyx["api_key"] = str(incoming_nx.get("api_key") or "").strip()
+    if "team" in incoming_nx:
+        notifyx["team"] = str(incoming_nx.get("team") or "").strip()
+    data = {"wechat": wechat, "wxpusher": wxpusher, "notifyx": notifyx, "events": events}
     NOTIFY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
 
@@ -171,13 +185,17 @@ def public_notify(data: dict | None = None) -> dict:
         wxpusher["allow_self_unbind"] = True
     else:
         wxpusher["allow_self_unbind"] = bool(wxpusher.get("allow_self_unbind"))
+    notifyx = dict(data.get("notifyx") or {})
+    nx_key = str(notifyx.get("api_key") or "").strip()
     return {
         "wechat": wechat,
         "wxpusher": wxpusher,
+        "notifyx": notifyx,
         "events": dict(data.get("events") or {}),
         "bound": bool(wechat.get("admin_openid")),
         "ready": bool(wechat.get("enabled") and wechat.get("app_id") and secret and wechat.get("admin_openid")),
         "wxpusher_ready": bool(wxpusher.get("enabled") and wp_token),
+        "notifyx_ready": bool(notifyx.get("enabled") and nx_key),
     }
 
 
@@ -438,6 +456,63 @@ def send_wechat(kind: str, title: str, body: str = "") -> dict:
     return data
 
 
+def _notifyx_markdown(title: str = "", body: str = "", rows=None, footer: str = "") -> str:
+    lines = []
+    for item in rows or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()
+        value = str(item.get("value") or "").strip()
+        if not value:
+            continue
+        lines.append(f"**{label}**：{value}" if label else value)
+    if not lines:
+        text = str(body or "").strip()
+        if text:
+            lines.append(text)
+    note = str(footer or "").strip()
+    if note:
+        if lines:
+            lines.append("")
+        lines.append(note)
+    content = "\n\n".join(lines).strip()
+    return (content or str(title or "SparkFlow").strip() or "-")[:2000]
+
+
+def send_notifyx(title: str, content: str = "", description: str = "") -> dict:
+    cfg = load_notify().get("notifyx") or {}
+    if not cfg.get("enabled"):
+        raise RuntimeError("还没打开 NotifyX，请管理员先在设置里启用并填写 API Key")
+    key = str(cfg.get("api_key") or "").strip()
+    if not key:
+        raise RuntimeError("请管理员先在设置里填写 NotifyX API Key")
+    team = str(cfg.get("team") or "").strip()
+    payload = {
+        "title": (str(title or "SparkFlow").strip() or "SparkFlow")[:100],
+        "content": (str(content or "-").strip() or "-")[:2000],
+    }
+    desc = str(description or "").strip()
+    if desc:
+        payload["description"] = desc[:500]
+    if team:
+        payload["team"] = team[:32]
+    url = NOTIFYX_SEND.format(key=key)
+    with httpx.Client(timeout=8.0) as client:
+        resp = client.post(url, json=payload)
+        try:
+            data = resp.json()
+        except Exception:
+            data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if resp.status_code >= 400 or data.get("success") is False or data.get("error"):
+        raise RuntimeError(
+            str(data.get("error") or data.get("message") or f"NotifyX 发送失败 HTTP {resp.status_code}")
+        )
+    logger.info("NotifyX 推送成功 title=%s", title)
+    return data
+
+
 def _esc(text) -> str:
     return html.escape(str(text or ""), quote=False)
 
@@ -609,18 +684,31 @@ def broadcast_to_bound(title: str, body: str) -> dict:
     if not body:
         raise RuntimeError("请填写通知内容")
     uids = list_bound_wxpusher_uids()
-    if not uids:
-        raise RuntimeError("还没有用户绑定微信")
-    send_wxpusher(
-        title,
-        body,
-        uids=uids,
-        kind="broadcast",
-        rows=[{"label": "内容", "value": body}],
-        footer="此消息由管理员发给所有已绑定微信的用户",
-    )
-    logger.info("已群发通知 title=%s users=%s", title, len(uids))
-    return {"sent": len(uids)}
+    nx = load_notify().get("notifyx") or {}
+    can_nx = bool(nx.get("enabled") and str(nx.get("api_key") or "").strip())
+    if not uids and not can_nx:
+        raise RuntimeError("还没有用户绑定微信，也未配置 NotifyX")
+    sent = 0
+    if uids:
+        send_wxpusher(
+            title,
+            body,
+            uids=uids,
+            kind="broadcast",
+            rows=[{"label": "内容", "value": body}],
+            footer="此消息由管理员发给所有已绑定微信的用户",
+        )
+        sent = len(uids)
+    notifyx_sent = False
+    if can_nx:
+        send_notifyx(
+            title,
+            _notifyx_markdown(title, body, rows=[{"label": "内容", "value": body}], footer="管理员群发通知"),
+            description=title,
+        )
+        notifyx_sent = True
+    logger.info("已群发通知 title=%s users=%s notifyx=%s", title, sent, notifyx_sent)
+    return {"sent": sent, "notifyx": notifyx_sent}
 
 
 def _days_text(days, default: int = 1) -> str:
@@ -646,6 +734,7 @@ def notify_event(
         wechat_admin = kind not in USER_EVENT_KEYS
     wechat = cfg.get("wechat") or {}
     wxpusher = cfg.get("wxpusher") or {}
+    notifyx = cfg.get("notifyx") or {}
     names = []
     seen = set()
     for name in usernames or []:
@@ -660,7 +749,8 @@ def notify_event(
             uids.append(uid)
     can_wp = bool(wxpusher.get("enabled") and uids)
     can_wx = bool(wechat_admin and wechat.get("enabled"))
-    if not can_wp and not can_wx:
+    can_nx = bool(notifyx.get("enabled") and str(notifyx.get("api_key") or "").strip())
+    if not can_wp and not can_wx and not can_nx:
         if wxpusher.get("enabled") and names and not uids:
             logger.warning("WxPusher 跳过 kind=%s owners=%s 未绑定微信", kind, ",".join(names))
         return
@@ -685,6 +775,15 @@ def notify_event(
                 send_wechat(kind, title, body)
             except Exception as exc:
                 logger.warning("公众号未发出 kind=%s: %s", kind, exc)
+        if can_nx:
+            try:
+                send_notifyx(
+                    title,
+                    _notifyx_markdown(title, body, rows=rows, footer=footer),
+                    description=str(title or "")[:500],
+                )
+            except Exception as exc:
+                logger.warning("NotifyX 未发出 kind=%s: %s", kind, exc)
 
     threading.Thread(target=_run, daemon=True).start()
 
@@ -786,8 +885,10 @@ def tick_expire_reminders() -> dict:
     if not events.get("expire_soon", True):
         return {"ok": True, "sent": 0, "skipped": "disabled"}
     wxpusher = cfg.get("wxpusher") or {}
-    if not wxpusher.get("enabled"):
-        return {"ok": True, "sent": 0, "skipped": "wxpusher"}
+    notifyx = cfg.get("notifyx") or {}
+    can_nx = bool(notifyx.get("enabled") and str(notifyx.get("api_key") or "").strip())
+    if not wxpusher.get("enabled") and not can_nx:
+        return {"ok": True, "sent": 0, "skipped": "channel"}
     now = now_utc()
     users = load_users()
     sent = 0
@@ -808,7 +909,8 @@ def tick_expire_reminders() -> dict:
             user["expire_notice_24h"] = False
             user["expire_notice_12h"] = False
             dirty = True
-        if not str(user.get("wxpusher_uid") or "").strip():
+        has_uid = bool(str(user.get("wxpusher_uid") or "").strip())
+        if not has_uid and not can_nx:
             continue
         hours = seconds / 3600.0
         remain = remaining_label(user)

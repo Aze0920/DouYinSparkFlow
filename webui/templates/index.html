@@ -566,6 +566,12 @@
               <label class="settings-if-wp">appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
               <label class="check-line settings-if-wp"><input id="wpAllowUnbind" type="checkbox" checked /> 允许用户自行解绑微信</label>
             </div>
+            <div class="settings-row">
+              <label class="check-line"><input id="nxEnabled" type="checkbox" onchange="syncSettingsVisibility()" /> 启用 NotifyX <span class="ck-status" id="nxStatus">未配置</span></label>
+              <label class="settings-if-nx">API Key<input id="nxApiKey" placeholder="在 notifyx.cn 获取" autocomplete="off" /></label>
+              <label class="settings-if-nx">群组 ID（可选）<input id="nxTeam" placeholder="可选，群组推送" autocomplete="off" /></label>
+              <button class="btn-ghost settings-row-btn settings-if-nx" type="button" onclick="testNotifySettings('notifyx')">发送 NotifyX 测试</button>
+            </div>
             <div class="settings-row settings-if-push">
               <label class="check-line"><input id="wxEventDone" type="checkbox" checked /> 续火花完成</label>
               <label class="check-line"><input id="wxEventFail" type="checkbox" checked /> 续火花失败</label>
@@ -2262,11 +2268,13 @@
     function syncSettingsVisibility() {
       const inviteOn = !!( $("inviteAdminEnabled") && $("inviteAdminEnabled").checked );
       const wpOn = !!( $("wpEnabled") && $("wpEnabled").checked );
+      const nxOn = !!( $("nxEnabled") && $("nxEnabled").checked );
       const wxOn = !!( $("wxEnabled") && $("wxEnabled").checked );
       document.querySelectorAll(".settings-if-invite").forEach((el) => el.classList.toggle("hidden", !inviteOn));
       document.querySelectorAll(".settings-if-wp").forEach((el) => el.classList.toggle("hidden", !wpOn));
+      document.querySelectorAll(".settings-if-nx").forEach((el) => el.classList.toggle("hidden", !nxOn));
       document.querySelectorAll(".settings-if-wx").forEach((el) => el.classList.toggle("hidden", !wxOn));
-      document.querySelectorAll(".settings-if-push").forEach((el) => el.classList.toggle("hidden", !wpOn && !wxOn));
+      document.querySelectorAll(".settings-if-push").forEach((el) => el.classList.toggle("hidden", !wpOn && !nxOn && !wxOn));
     }
     async function saveGlobalSettings() {
       await saveRuntimeSettings();
@@ -2721,6 +2729,7 @@
     function fillNotifySettings(data) {
       const wx = data.wechat || {};
       const wp = data.wxpusher || {};
+      const nx = data.notifyx || {};
       const events = data.events || {};
       if ($("wxAppId")) $("wxAppId").value = wx.app_id || "";
       if ($("wxAppSecret")) $("wxAppSecret").value = wx.app_secret || "";
@@ -2735,6 +2744,9 @@
       if ($("wpEnabled")) $("wpEnabled").checked = !!wp.enabled;
       if ($("wpAppToken")) $("wpAppToken").value = wp.app_token || "";
       if ($("wpAllowUnbind")) $("wpAllowUnbind").checked = wp.allow_self_unbind !== false;
+      if ($("nxEnabled")) $("nxEnabled").checked = !!nx.enabled;
+      if ($("nxApiKey")) $("nxApiKey").value = nx.api_key || "";
+      if ($("nxTeam")) $("nxTeam").value = nx.team || "";
       if ($("wxEventDone")) $("wxEventDone").checked = events.task_done !== false;
       if ($("wxEventFail")) $("wxEventFail").checked = events.task_fail !== false;
       if ($("wxEventOffline")) $("wxEventOffline").checked = events.cookie_offline !== false;
@@ -2744,6 +2756,10 @@
       if ($("wpStatus")) {
         $("wpStatus").textContent = data.wxpusher_ready ? "可推送" : "未配置";
         $("wpStatus").className = "ck-status " + (data.wxpusher_ready ? "ck-ok" : "ck-unknown");
+      }
+      if ($("nxStatus")) {
+        $("nxStatus").textContent = data.notifyx_ready ? "可推送" : "未配置";
+        $("nxStatus").className = "ck-status " + (data.notifyx_ready ? "ck-ok" : "ck-unknown");
       }
       if ($("wxBindStatus")) {
         $("wxBindStatus").textContent = data.ready ? "可推送" : (data.bound ? "已填 OpenID" : "未绑定");
@@ -2919,6 +2935,11 @@
             app_token: ($("wpAppToken") && $("wpAppToken").value) || "",
             allow_self_unbind: !!( $("wpAllowUnbind") && $("wpAllowUnbind").checked ),
           },
+          notifyx: {
+            enabled: !!( $("nxEnabled") && $("nxEnabled").checked ),
+            api_key: ($("nxApiKey") && $("nxApiKey").value) || "",
+            team: ($("nxTeam") && $("nxTeam").value) || "",
+          },
           wechat: {
             enabled: !!( $("wxEnabled") && $("wxEnabled").checked ),
             app_id: ($("wxAppId") && $("wxAppId").value) || "",
@@ -2957,7 +2978,10 @@
           method: "POST",
           body: JSON.stringify({ title, body }),
         });
-        toast("已发给 " + (data.sent || 0) + " 个已绑定用户");
+        const parts = [];
+        if (data.sent) parts.push(data.sent + " 个已绑定用户");
+        if (data.notifyx) parts.push("NotifyX");
+        toast(parts.length ? ("已发送：" + parts.join("、")) : "已发送");
       } catch (err) {
         toast(err.message, "err");
       }
