@@ -26,6 +26,58 @@ UA = (
     "(KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 )
 
+CLICK_SAVE_LOGIN_JS = """() => {
+  const textOf = (el) => String((el && (el.innerText || el.textContent)) || '').replace(/\\s+/g, '');
+  const looksPrompt = (t) => /是否保存登录信息|下次登录更便捷/.test(String(t || ''));
+  const roots = Array.from(document.querySelectorAll('div, section, article, [role="dialog"]'));
+  let dialog = null;
+  for (const el of roots) {
+    const t = String(el.innerText || '');
+    if (!looksPrompt(t) || t.length > 600) continue;
+    dialog = el;
+    break;
+  }
+  if (!dialog) return false;
+  const nodes = Array.from(dialog.querySelectorAll('button, [role="button"], a, span, div'));
+  const save = nodes.find((el) => textOf(el) === '保存');
+  if (!save) return false;
+  save.click();
+  return true;
+}"""
+
+AUTO_SAVE_LOGIN_INIT_JS = """
+(() => {
+  if (window.__dsfSaveLoginWatch) return;
+  window.__dsfSaveLoginWatch = true;
+  const textOf = (el) => String((el && (el.innerText || el.textContent)) || '').replace(/\\s+/g, '');
+  const looksPrompt = (t) => /是否保存登录信息|下次登录更便捷/.test(String(t || ''));
+  const tryClick = () => {
+    if (window.__dsfSavedLoginPrompt) return true;
+    const roots = Array.from(document.querySelectorAll('div, section, article, [role="dialog"]'));
+    for (const el of roots) {
+      const t = String(el.innerText || '');
+      if (!looksPrompt(t) || t.length > 600) continue;
+      const save = Array.from(el.querySelectorAll('button, [role="button"], a, span, div')).find((n) => textOf(n) === '保存');
+      if (!save) continue;
+      save.click();
+      window.__dsfSavedLoginPrompt = true;
+      return true;
+    }
+    return false;
+  };
+  const start = () => {
+    tryClick();
+    try {
+      const obs = new MutationObserver(() => { tryClick(); });
+      if (document.body) obs.observe(document.body, { childList: true, subtree: true });
+    } catch (e) {}
+    setInterval(tryClick, 300);
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start);
+  else start();
+})();
+"""
+
 
 def is_image_qr_src(url: str) -> bool:
     raw = str(url or "").strip()
@@ -427,6 +479,48 @@ def _page_logged_in(page) -> bool:
 def _login_modal_visible(page) -> bool:
     flags = _page_signals(page)
     return bool(flags.get("hasScan") or flags.get("hasEnjoy"))
+
+
+def _click_save_login_prompt(page) -> bool:
+    for scope in _iter_scopes(page):
+        try:
+            if scope.evaluate(CLICK_SAVE_LOGIN_JS):
+                logger.info("已自动点击「保存登录信息」")
+                return True
+        except Exception:
+            continue
+        try:
+            box = scope.locator("div, section, article, [role=dialog]").filter(has_text="下次登录更便捷")
+            if box.count() == 0:
+                box = scope.locator("div, section, article, [role=dialog]").filter(has_text="是否保存登录信息")
+            if box.count() == 0:
+                continue
+            btn = box.first.get_by_text("保存", exact=True)
+            if btn.count() == 0:
+                continue
+            btn.last.click(timeout=1200)
+            logger.info("已自动点击「保存登录信息」")
+            return True
+        except Exception:
+            continue
+    return False
+
+
+def _confirm_persist_login(page) -> bool:
+    """登录后立刻点「保存登录信息」，否则 Cookie 往往只有一天。"""
+    deadline = time.time() + 8
+    clicked = False
+    while time.time() < deadline and not _stop.is_set():
+        if _click_save_login_prompt(page):
+            clicked = True
+            time.sleep(1.4)
+            break
+        time.sleep(0.3)
+    if clicked:
+        logger.info("已确认保存登录信息")
+    else:
+        logger.warning("8 秒内没有点到「保存登录信息」，Cookie 可能偏短效")
+    return clicked
 
 
 SNIFF_URL_HINTS = (
@@ -1909,6 +2003,7 @@ def _worker(replace_index: int):
         context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
         )
+        context.add_init_script(AUTO_SAVE_LOGIN_INIT_JS)
         page = context.new_page()
         sniff: dict[str, Any] = {"methods": [], "token": "", "redirect": "", "account": "", "qr_status": "", "app_jump_url": ""}
         _attach_sniffer(page, sniff)
@@ -2158,6 +2253,8 @@ def _worker(replace_index: int):
                 verify_gone = 0
 
             now = time.time()
+            if _has_session(context) or _page_logged_in(page):
+                _click_save_login_prompt(page)
             if now - last_cookie_log > 5:
                 logger.info("等待扫码中 url=%s status=%s cookies=%s", page.url, _status(), list(_cookie_map(context)))
                 last_cookie_log = now
@@ -2204,6 +2301,7 @@ def _worker(replace_index: int):
             return
 
         for i in range(12):
+            _click_save_login_prompt(page)
             if _has_session(context):
                 break
             logger.info("登录后等待 Cookie %s/12 names=%s", i + 1, list(_cookie_map(context)))
@@ -2212,6 +2310,14 @@ def _worker(replace_index: int):
             except Exception:
                 logger.debug("刷新私信页失败", exc_info=True)
             time.sleep(1)
+
+        _set(status="scanned", message="已登录，正在自动保存登录信息…")
+        try:
+            if "/chat" not in str(getattr(page, "url", "") or ""):
+                page.goto(CHAT, wait_until="domcontentloaded", timeout=30000)
+        except Exception:
+            logger.debug("打开私信页等待保存登录失败", exc_info=True)
+        _confirm_persist_login(page)
 
         profile = extract_profile(page, context)
         cookies = _cookies_for_save(context)
@@ -2235,7 +2341,7 @@ def _worker(replace_index: int):
             logger.exception("扫码后保存账号快照失败")
         _set(
             status="success",
-            message="登录成功，已自动抓取用户名、抖音号和 Cookie",
+            message="登录成功，已自动保存登录信息并抓取账号",
             username=profile.get("username") or "抖音账号",
             unique_id=profile.get("unique_id") or "",
             avatar=profile.get("avatar") or "",

@@ -90,7 +90,12 @@ class QrJumpTests(unittest.TestCase):
         self.assertEqual(extract_jump_from_data(data), landing)
         self.assertEqual(pick_best_jump(short, landing), landing)
 
-    def test_decode_empty_png(self):
+    def test_save_login_prompt_js_targets_douyin_dialog(self):
+        from webui.qr_login import AUTO_SAVE_LOGIN_INIT_JS, CLICK_SAVE_LOGIN_JS
+        for blob in (CLICK_SAVE_LOGIN_JS, AUTO_SAVE_LOGIN_INIT_JS):
+            self.assertIn("是否保存登录信息", blob)
+            self.assertIn("下次登录更便捷", blob)
+            self.assertIn("保存", blob)
         self.assertEqual(decode_qr_payload(""), "")
         self.assertEqual(decode_qr_payload("AAAA"), "")
 
