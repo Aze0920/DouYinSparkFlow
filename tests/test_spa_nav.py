@@ -98,13 +98,39 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn('id="accountsTitle"', INDEX)
         self.assertIn("抖音账号【${list.length}】", INDEX)
         self.assertIn("const ACCOUNTS_PER_PAGE = 10;", INDEX)
-        self.assertIn('id="accountsPager"', INDEX)
+        self.assertIn('id="accountsPager" class="page-bar hidden"', INDEX)
         self.assertIn("function gotoAccountsPage", INDEX)
-        self.assertIn(".pager", CSS)
+        self.assertIn(".page-bar {", CSS)
         # 翻页后要按全局下标定位，否则会保存/续火花到别的账号上
         self.assertIn("accountCard(item, start + offset)", INDEX)
         self.assertIn("function accountNode", INDEX)
         self.assertNotIn('document.querySelectorAll(".account")[index]', INDEX)
+
+    def test_users_page_shows_count_and_paginates_by_ten(self):
+        self.assertIn('id="usersTitle"', INDEX)
+        self.assertIn("控制台用户【${list.length}】", INDEX)
+        self.assertIn("const USERS_PER_PAGE = 10;", INDEX)
+        self.assertIn('id="usersPager" class="page-bar hidden"', INDEX)
+        self.assertIn("function gotoUsersPage", INDEX)
+        self.assertIn("function renderUsers", INDEX)
+        self.assertIn("USERS_PER_PAGE)", INDEX)
+
+    def test_page_bar_styles_do_not_clash_with_card_table_pager(self):
+        """卡密表格用的是 .pager，账号/用户分页必须用独立类名，否则会改掉卡密页外观。"""
+        self.assertIn('id="cardPager"', INDEX)
+        self.assertIn(".pager button.active", CSS)
+        self.assertEqual(CSS.count(".pager {"), 1, "卡密表格的 .pager 被重复定义会改掉它的外观")
+        self.assertIn(".page-bar-num.is-current", CSS)
+        self.assertNotIn('class="pager hidden"', INDEX)
+
+    def test_create_forms_sit_on_one_row(self):
+        self.assertIn("form-row form-row-6", INDEX)
+        self.assertIn("form-row form-row-5", INDEX)
+        self.assertIn(".form-row-6 {", CSS)
+        self.assertIn(".form-row-5 {", CSS)
+        # 按钮不再靠 &nbsp; 撑成一个假 label
+        self.assertNotIn('<label class="span-2">&nbsp;<button class="btn-primary" onclick="createUser()"', INDEX)
+        self.assertNotIn('<label class="span-2">&nbsp;<button class="btn-primary" onclick="generateCards()"', INDEX)
 
     def test_collect_accounts_keeps_rows_outside_current_page(self):
         start = INDEX.find("function collectAccounts()")

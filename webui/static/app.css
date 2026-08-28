@@ -757,7 +757,7 @@ body.spark-locked .spark-action {
   margin-top: 16px;
   align-items: stretch;
 }
-.pager {
+.page-bar {
   display: flex;
   align-items: center;
   justify-content: flex-start;
@@ -767,8 +767,8 @@ body.spark-locked .spark-action {
   padding-top: 16px;
   border-top: 1px solid var(--line);
 }
-.pager-nums { display: flex; gap: 6px; flex-wrap: wrap; }
-.pager-nav, .pager-num {
+.page-bar-nums { display: flex; gap: 6px; flex-wrap: wrap; }
+.page-bar-nav, .page-bar-num {
   min-width: 36px;
   height: 34px;
   padding: 0 12px;
@@ -780,18 +780,29 @@ body.spark-locked .spark-action {
   cursor: pointer;
   transition: border-color .18s ease, background .18s ease, color .18s ease;
 }
-.pager-nav:hover:not(:disabled), .pager-num:hover:not(.is-current) {
+.page-bar-nav:hover:not(:disabled), .page-bar-num:hover:not(.is-current) {
   border-color: rgba(255, 122, 58, .45);
   background: rgba(255, 122, 58, .1);
 }
-.pager-nav:disabled { opacity: .4; cursor: not-allowed; }
-.pager-num.is-current {
+.page-bar-nav:disabled { opacity: .4; cursor: not-allowed; }
+.page-bar-num.is-current {
   background: linear-gradient(135deg, var(--ember), var(--rose));
   border-color: transparent;
   color: #fff;
   font-weight: 700;
 }
-.pager-info { color: var(--muted); font-size: 12px; margin-left: auto; }
+.page-bar-info { color: var(--muted); font-size: 12px; margin-left: auto; }
+.form-row {
+  display: grid;
+  gap: 12px;
+  align-items: end;
+  margin-top: 4px;
+}
+.form-row-6 { grid-template-columns: repeat(5, minmax(0, 1fr)) auto; }
+.form-row-5 { grid-template-columns: repeat(4, minmax(0, 1fr)) auto; }
+.form-row label { margin-bottom: 0; min-width: 0; }
+.form-row input, .form-row select { width: 100%; }
+.form-row .btn-primary { white-space: nowrap; height: 38px; padding: 0 22px; }
 .accounts-grid .account {
   margin-top: 0;
   min-height: 320px;
@@ -1138,6 +1149,8 @@ body.spark-locked .spark-action {
   .user-row { grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) auto; gap: 12px; }
   .user-row-fields { gap: 8px; }
   .user-row-actions button { padding-left: 10px; padding-right: 10px; }
+  .form-row { gap: 8px; }
+  .form-row .btn-primary { padding: 0 14px; }
 }
 
 @media (max-width: 1040px) {
@@ -1154,8 +1167,10 @@ body.spark-locked .spark-action {
   .user-row { grid-template-columns: 1fr; gap: 12px; }
   .user-row-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .user-row-actions button { flex: 1; }
-  .pager { justify-content: center; }
-  .pager-info { margin-left: 0; width: 100%; text-align: center; }
+  .page-bar { justify-content: center; }
+  .page-bar-info { margin-left: 0; width: 100%; text-align: center; }
+  .form-row-6, .form-row-5 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .form-row .btn-primary { grid-column: 1 / -1; width: 100%; }
   .settings-row { grid-template-columns: 1fr; }
   .settings-broadcast-body { grid-column: auto; }
   .dash-admin-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }

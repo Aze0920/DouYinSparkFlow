@@ -344,7 +344,7 @@
           <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。请到「我的」点会员到期，用卡密续期。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码、手机打开抖音，或粘贴 Cookie JSON。</p>
           <div id="accounts" class="accounts-grid"></div>
-          <div id="accountsPager" class="pager hidden"></div>
+          <div id="accountsPager" class="page-bar hidden"></div>
         </section>
       </section>
 
@@ -478,9 +478,9 @@
       <section id="page-users" class="hidden">
         <section class="panel">
           <div class="panel-head">
-            <h2>控制台用户</h2>
+            <h2 id="usersTitle">控制台用户</h2>
           </div>
-          <div class="grid two">
+          <div class="form-row form-row-6">
             <label>用户名<input id="newUsername" placeholder="请输入用户名" /></label>
             <label>密码<input id="newPassword" type="password" placeholder="请输入密码" /></label>
             <label>角色
@@ -491,9 +491,10 @@
             </label>
             <label>有效天数（0 永久）<input id="newDays" type="number" min="0" max="3650" value="1" /></label>
             <label>可添加账号数（0 不限）<input id="newMaxAccounts" type="number" min="0" max="100" value="1" /></label>
-            <label class="span-2">&nbsp;<button class="btn-primary" onclick="createUser()">添加账户</button></label>
+            <button class="btn-primary" onclick="createUser()">添加账户</button>
           </div>
           <div id="userList" class="users-list"></div>
+          <div id="usersPager" class="page-bar hidden"></div>
         </section>
       </section>
 
@@ -503,12 +504,12 @@
             <h2>生成卡密</h2>
             <button class="btn-ghost" type="button" onclick="return navTo(event, 'settings')">设置</button>
           </div>
-          <div class="grid two">
+          <div class="form-row form-row-5">
             <label>有效天数<input id="cardDays" type="number" min="0" max="3650" value="1" /></label>
             <label>可添加账号数<input id="cardMaxAccounts" type="number" min="0" max="100" value="1" /></label>
             <label>生成数量<input id="cardCount" type="number" min="1" max="50" value="1" /></label>
             <label>备注<input id="cardNote" placeholder="可选，例如 7天体验" /></label>
-            <label class="span-2">&nbsp;<button class="btn-primary" onclick="generateCards()">生成卡密</button></label>
+            <button class="btn-primary" onclick="generateCards()">生成卡密</button>
           </div>
           <div class="key-result hidden" id="newCardWrap">
             <pre id="newCardCodes"></pre>
@@ -1323,40 +1324,44 @@
       </div>`;
     }
     const ACCOUNTS_PER_PAGE = 10;
+    const USERS_PER_PAGE = 10;
     window.__accountsPage = 1;
-    function accountPageCount(total) {
-      return Math.max(1, Math.ceil(total / ACCOUNTS_PER_PAGE));
+    window.__usersPage = 1;
+    function pageCount(total, perPage) {
+      return Math.max(1, Math.ceil(total / perPage));
+    }
+    function renderPageBar(elId, current, pages, total, unit, handler) {
+      const bar = $(elId);
+      if (!bar) return;
+      bar.classList.toggle("hidden", pages <= 1);
+      if (pages <= 1) {
+        bar.innerHTML = "";
+        return;
+      }
+      const buttons = [];
+      for (let page = 1; page <= pages; page += 1) {
+        buttons.push(
+          `<button type="button" class="page-bar-num${page === current ? " is-current" : ""}" onclick="${handler}(${page})">${page}</button>`
+        );
+      }
+      bar.innerHTML = `
+        <button type="button" class="page-bar-nav" onclick="${handler}(${current - 1})" ${current <= 1 ? "disabled" : ""}>上一页</button>
+        <div class="page-bar-nums">${buttons.join("")}</div>
+        <button type="button" class="page-bar-nav" onclick="${handler}(${current + 1})" ${current >= pages ? "disabled" : ""}>下一页</button>
+        <span class="page-bar-info">共 ${total} ${unit} · 第 ${current}/${pages} 页</span>`;
+    }
+    function scrollToTitle(id) {
+      const el = $(id);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
     }
     function gotoAccountsPage(page) {
       window.__accountsPage = page;
       renderAccounts();
-      const panel = $("accountsTitle");
-      if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
-    }
-    function renderAccountsPager(total, pages) {
-      const pager = $("accountsPager");
-      if (!pager) return;
-      pager.classList.toggle("hidden", pages <= 1);
-      if (pages <= 1) {
-        pager.innerHTML = "";
-        return;
-      }
-      const current = window.__accountsPage;
-      const buttons = [];
-      for (let page = 1; page <= pages; page += 1) {
-        buttons.push(
-          `<button type="button" class="pager-num${page === current ? " is-current" : ""}" onclick="gotoAccountsPage(${page})">${page}</button>`
-        );
-      }
-      pager.innerHTML = `
-        <button type="button" class="pager-nav" onclick="gotoAccountsPage(${current - 1})" ${current <= 1 ? "disabled" : ""}>上一页</button>
-        <div class="pager-nums">${buttons.join("")}</div>
-        <button type="button" class="pager-nav" onclick="gotoAccountsPage(${current + 1})" ${current >= pages ? "disabled" : ""}>下一页</button>
-        <span class="pager-info">共 ${total} 个账号 · 第 ${current}/${pages} 页</span>`;
+      scrollToTitle("accountsTitle");
     }
     function renderAccounts() {
       const list = window.__accounts || [];
-      const pages = accountPageCount(list.length);
+      const pages = pageCount(list.length, ACCOUNTS_PER_PAGE);
       window.__accountsPage = Math.min(Math.max(window.__accountsPage || 1, 1), pages);
       const start = (window.__accountsPage - 1) * ACCOUNTS_PER_PAGE;
       if ($("accountsTitle")) $("accountsTitle").textContent = `抖音账号【${list.length}】`;
@@ -1367,7 +1372,7 @@
           .map((item, offset) => accountCard(item, start + offset))
           .join("");
       }
-      renderAccountsPager(list.length, pages);
+      renderPageBar("accountsPager", window.__accountsPage, pages, list.length, "个账号", "gotoAccountsPage");
       if ($("noAccounts")) $("noAccounts").classList.toggle("hidden", !!list.length);
       updateAccountQuota();
       const st = window.__lastStatus;
@@ -2491,9 +2496,23 @@
         toast(err.message, "err");
       }
     }
+    function gotoUsersPage(page) {
+      window.__usersPage = page;
+      renderUsers();
+      scrollToTitle("usersTitle");
+    }
     async function loadUsers() {
       const data = await api("/api/users");
-      $("userList").innerHTML = data.users.map((u) => {
+      window.__users = data.users || [];
+      renderUsers();
+    }
+    function renderUsers() {
+      const list = window.__users || [];
+      const pages = pageCount(list.length, USERS_PER_PAGE);
+      window.__usersPage = Math.min(Math.max(window.__usersPage || 1, 1), pages);
+      const start = (window.__usersPage - 1) * USERS_PER_PAGE;
+      if ($("usersTitle")) $("usersTitle").textContent = `控制台用户【${list.length}】`;
+      $("userList").innerHTML = list.slice(start, start + USERS_PER_PAGE).map((u) => {
         const admin = u.role === "admin";
         const protectedUser = !!u.protected || String(u.username || "").toLowerCase() === "admin";
         const statusCls = admin || !u.expired ? "ck-ok" : "ck-bad";
@@ -2538,6 +2557,7 @@
           </div>
         </div>`;
       }).join("");
+      renderPageBar("usersPager", window.__usersPage, pages, list.length, "个用户", "gotoUsersPage");
     }
     function toggleNewUserDays() {
       const admin = $("newRole") && $("newRole").value === "admin";
