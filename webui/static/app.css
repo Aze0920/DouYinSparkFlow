@@ -292,7 +292,7 @@ html.sidebar-collapsed .logout-btn { padding-left: 8px; padding-right: 8px; }
 .page-title { font-size: 28px; margin: 0; letter-spacing: .01em; }
 .sub { color: var(--muted); margin: 6px 0 18px; }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
-.card, .panel, .account, .user-card {
+.card, .panel, .account {
   background: linear-gradient(180deg, rgba(255,255,255,.035), transparent 42%), var(--card);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -529,25 +529,68 @@ button:disabled {
 .btn-ghost { background: transparent; }
 .btn-ghost:hover { background: rgba(255, 255, 255, .06); }
 .mini { padding: 6px 10px; font-size: 12px; }
-.account, .user-card { padding: 16px; margin-top: 12px; }
-.users-grid .user-card {
-  margin-top: 0;
-  min-height: 280px;
+.account { padding: 16px; margin-top: 12px; }
+.users-list {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  padding: 18px;
+  margin-top: 16px;
 }
-.users-grid .user-card .user-edit-grid {
+.user-row {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: minmax(190px, 240px) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 14px 18px;
+  background: linear-gradient(180deg, rgba(255,255,255,.035), transparent 42%), var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  transition: border-color .18s ease;
 }
-.users-grid .user-card .expires-mode:disabled {
+.user-row:hover { border-color: rgba(255, 122, 58, .28); }
+.user-row-id { min-width: 0; }
+.user-row-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.user-row-name strong {
+  font-size: 15px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-row-name .ck-status { min-width: 0; text-align: left; }
+.user-row-id .account-id { margin-top: 4px; line-height: 1.5; }
+.user-row-bound { color: var(--ok); font-weight: 600; }
+.user-row-fields {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  min-width: 0;
+}
+.user-row-fields label {
+  display: block;
   color: var(--muted);
-  cursor: default;
+  font-size: 11px;
+  margin: 0;
+  min-width: 0;
 }
-.users-grid .user-card .account-actions { margin-top: auto; }
+.user-row-fields input, .user-row-fields select {
+  display: block;
+  width: 100%;
+  margin-top: 4px;
+}
+.user-row-fields .expires-mode:disabled { color: var(--muted); cursor: default; }
+.user-row-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.user-row-actions button { white-space: nowrap; }
+.pill-ok { color: var(--ok); border-color: rgba(79, 210, 165, .4); }
 body.spark-locked .spark-action {
   opacity: 0.55;
   cursor: not-allowed;
@@ -707,13 +750,48 @@ body.spark-locked .spark-action {
 .settings-save {
   width: 100%;
 }
-.accounts-grid, .users-grid {
+.accounts-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
   gap: 16px;
   margin-top: 16px;
   align-items: stretch;
 }
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+.pager-nums { display: flex; gap: 6px; flex-wrap: wrap; }
+.pager-nav, .pager-num {
+  min-width: 36px;
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: border-color .18s ease, background .18s ease, color .18s ease;
+}
+.pager-nav:hover:not(:disabled), .pager-num:hover:not(.is-current) {
+  border-color: rgba(255, 122, 58, .45);
+  background: rgba(255, 122, 58, .1);
+}
+.pager-nav:disabled { opacity: .4; cursor: not-allowed; }
+.pager-num.is-current {
+  background: linear-gradient(135deg, var(--ember), var(--rose));
+  border-color: transparent;
+  color: #fff;
+  font-weight: 700;
+}
+.pager-info { color: var(--muted); font-size: 12px; margin-left: auto; }
 .accounts-grid .account {
   margin-top: 0;
   min-height: 320px;
@@ -1056,11 +1134,28 @@ body.spark-locked .spark-action {
 }
 .error { color: var(--rose); min-height: 18px; }
 
+@media (max-width: 1280px) {
+  .user-row { grid-template-columns: minmax(150px, 190px) minmax(0, 1fr) auto; gap: 12px; }
+  .user-row-fields { gap: 8px; }
+  .user-row-actions button { padding-left: 10px; padding-right: 10px; }
+}
+
+@media (max-width: 1040px) {
+  .user-row { grid-template-columns: minmax(150px, 200px) minmax(0, 1fr); }
+  .user-row-fields { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .user-row-actions { grid-column: 1 / -1; justify-content: flex-end; }
+}
+
 @media (max-width: 860px) {
   html, body { overflow: auto; height: auto; }
   .login-page { min-height: 100dvh; }
   .login-card { padding: 26px 20px 22px; }
-  .cards, .grid.two, .accounts-grid, .users-grid, .dash-body { grid-template-columns: 1fr; }
+  .cards, .grid.two, .accounts-grid, .dash-body { grid-template-columns: 1fr; }
+  .user-row { grid-template-columns: 1fr; gap: 12px; }
+  .user-row-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .user-row-actions button { flex: 1; }
+  .pager { justify-content: center; }
+  .pager-info { margin-left: 0; width: 100%; text-align: center; }
   .settings-row { grid-template-columns: 1fr; }
   .settings-broadcast-body { grid-column: auto; }
   .dash-admin-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }

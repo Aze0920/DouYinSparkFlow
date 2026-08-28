@@ -105,7 +105,23 @@ class SendChatMessageTests(unittest.TestCase):
         page = _patched(editor)
         with self.assertRaises(RuntimeError) as ctx:
             tasks._send_chat_message(page, "你好")
-        self.assertIn("没能发出去", str(ctx.exception))
+        self.assertIn("没发出去", str(ctx.exception))
+
+    def test_never_presses_enter_twice(self):
+        """回车之后重发会让好友收到两条，任何情况下都只能按一次。"""
+        editor = FakeEditor(sends=False)
+        page = _patched(editor)
+        with self.assertRaises(RuntimeError):
+            tasks._send_chat_message(page, "你好")
+        self.assertEqual(page.keyboard.presses.count("Enter"), 1)
+
+    def test_stray_placeholder_chars_do_not_look_like_leftover_text(self):
+        """清空后残留零宽字符时不能误判成没发出去。"""
+        editor = FakeEditor()
+        page = _patched(editor)
+        editor.on_enter = lambda: setattr(editor, "text", "\u200b\n")
+        tasks._send_chat_message(page, "你好")
+        self.assertEqual(page.keyboard.presses.count("Enter"), 1)
 
     def test_raises_when_text_never_lands_in_editor(self):
         editor = FakeEditor()

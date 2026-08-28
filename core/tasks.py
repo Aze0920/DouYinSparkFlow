@@ -434,10 +434,14 @@ def _editor_target(page, chat_input):
 
 
 def _editor_text(editor) -> str:
+    """富文本清空后常留下 <br>、零宽字符和换行，全部当成空，否则会误判成没发出去。"""
     try:
-        return (editor.evaluate("el => el.innerText || el.textContent || ''") or "").strip()
+        raw = editor.evaluate("el => el.innerText || el.textContent || ''") or ""
     except Exception:
         return ""
+    for junk in ("\u200b", "\u200c", "\u200d", "\ufeff", "\xa0"):
+        raw = raw.replace(junk, "")
+    return raw.strip()
 
 
 def _type_message(page, editor, lines):
@@ -478,38 +482,39 @@ def _send_chat_message(page, message: str, send_records=None):
     logger.debug("使用输入框 selector=%s", selector)
     editor = _editor_target(page, chat_input)
     lines = message.split("\\n")
-    last_error = "未知原因"
+
+    # 回车之前可以重试：还没发出去，重来一次不会造成重复
+    typed = False
     for attempt in range(2):
         if send_records is not None:
             send_records.clear()
         _type_message(page, editor, lines)
+        if _editor_text(editor):
+            typed = True
+            break
+        logger.warning("输入框没收到文字，第 %s 次重试", attempt + 1)
+    if not typed:
+        raise RuntimeError("消息没能发出去：文字没有进入输入框")
+
+    # 回车之后一律不再重发。此刻消息可能已经送达，重试就会让好友收到两条
+    page.keyboard.press("Enter")
+    cleared = False
+    for _ in range(20):
+        time.sleep(0.15)
         if not _editor_text(editor):
-            last_error = "文字没有进入输入框"
-            logger.warning("输入框没收到文字，第 %s 次重试", attempt + 1)
-            continue
+            cleared = True
+            break
 
-        page.keyboard.press("Enter")
-        cleared = False
-        for _ in range(20):
-            time.sleep(0.15)
-            if not _editor_text(editor):
-                cleared = True
-                break
-        if not cleared:
-            last_error = "回车后输入框内容没有被清空"
-            logger.warning("消息可能没发出去，第 %s 次重试", attempt + 1)
-            continue
-
-        # 输入框清空只说明前端收下了，服务端有没有投递还得看接口和提示条
-        time.sleep(0.6)
-        api_error = _send_failure_from_api(list(send_records or []))
-        if api_error:
-            raise RuntimeError(f"抖音拒绝了这条消息：{api_error}")
-        toast = _toast_warning(page)
-        if toast:
-            raise RuntimeError(f"抖音提示：{toast}")
-        return
-    raise RuntimeError(f"消息没能发出去：{last_error}")
+    # 输入框清空只说明前端收下了，服务端有没有投递还得看接口和提示条
+    time.sleep(0.6)
+    api_error = _send_failure_from_api(list(send_records or []))
+    if api_error:
+        raise RuntimeError(f"抖音拒绝了这条消息：{api_error}")
+    toast = _toast_warning(page)
+    if toast:
+        raise RuntimeError(f"抖音提示：{toast}")
+    if not cleared:
+        raise RuntimeError("消息可能没发出去：回车后输入框内容没有被清空")
 
 
 def do_user_task(username, cookies, targets, message_template="", unique_id=""):

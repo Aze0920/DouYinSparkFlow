@@ -77,14 +77,41 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("tick_expire_reminders()", APP_PY)
         self.assertIn("notify_recharge_success", APP_PY)
         self.assertIn("render_wxpusher_html", (ROOT / "webui" / "notify.py").read_text(encoding="utf-8"))
-        self.assertIn("user-edit-grid", INDEX)
-        self.assertIn("user-edit-grid", CSS)
+        self.assertIn("user-row-fields", INDEX)
+        self.assertIn("user-row-fields", CSS)
         self.assertIn("到期时间", INDEX)
-        self.assertLess(INDEX.find("重置密码"), INDEX.find("user-edit-grid"))
         self.assertLess(INDEX.find("class=\"reset-role\""), INDEX.find("class=\"max-accounts\""))
         self.assertLess(INDEX.find("expires-mode"), INDEX.find("class=\"extra-days\""))
         self.assertIn("0 为永久", INDEX)
         self.assertIn('value="permanent"', INDEX)
+
+    def test_user_management_is_a_one_per_row_list(self):
+        self.assertIn('id="userList" class="users-list"', INDEX)
+        self.assertIn(".users-list", CSS)
+        self.assertIn("flex-direction: column", CSS)
+        self.assertIn("user-row", INDEX)
+        self.assertIn(".user-row {", CSS)
+        self.assertNotIn('class="users-grid"', INDEX)
+        self.assertNotIn('class="user-card"', INDEX)
+
+    def test_accounts_page_shows_count_and_paginates_by_ten(self):
+        self.assertIn('id="accountsTitle"', INDEX)
+        self.assertIn("抖音账号【${list.length}】", INDEX)
+        self.assertIn("const ACCOUNTS_PER_PAGE = 10;", INDEX)
+        self.assertIn('id="accountsPager"', INDEX)
+        self.assertIn("function gotoAccountsPage", INDEX)
+        self.assertIn(".pager", CSS)
+        # 翻页后要按全局下标定位，否则会保存/续火花到别的账号上
+        self.assertIn("accountCard(item, start + offset)", INDEX)
+        self.assertIn("function accountNode", INDEX)
+        self.assertNotIn('document.querySelectorAll(".account")[index]', INDEX)
+
+    def test_collect_accounts_keeps_rows_outside_current_page(self):
+        start = INDEX.find("function collectAccounts()")
+        self.assertGreaterEqual(start, 0)
+        chunk = INDEX[start:start + 700]
+        self.assertIn("(window.__accounts || []).slice()", chunk)
+        self.assertIn("node.dataset.index", chunk)
 
     def test_github_update_uses_current_mirrors(self):
         self.assertIn("ghfast.top", APP_PY)

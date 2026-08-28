@@ -336,7 +336,7 @@
       <section id="page-accounts" class="hidden">
         <section class="panel">
           <div class="panel-head">
-            <h2>抖音账号</h2>
+            <h2 id="accountsTitle">抖音账号</h2>
             <div>
               <button class="btn-ghost spark-action" type="button" onclick="openAddAccount()">添加账号</button>
             </div>
@@ -344,6 +344,7 @@
           <p class="sub hidden" id="expiredBanner">卡密已到期，续火花按钮已禁用。请到「我的」点会员到期，用卡密续期。</p>
           <p class="sub" id="noAccounts">还没有抖音账号。点「添加账号」，可以扫码、手机打开抖音，或粘贴 Cookie JSON。</p>
           <div id="accounts" class="accounts-grid"></div>
+          <div id="accountsPager" class="pager hidden"></div>
         </section>
       </section>
 
@@ -492,7 +493,7 @@
             <label>可添加账号数（0 不限）<input id="newMaxAccounts" type="number" min="0" max="100" value="1" /></label>
             <label class="span-2">&nbsp;<button class="btn-primary" onclick="createUser()">添加账户</button></label>
           </div>
-          <div id="userList" class="users-grid"></div>
+          <div id="userList" class="users-list"></div>
         </section>
       </section>
 
@@ -1321,9 +1322,53 @@
         </div>
       </div>`;
     }
+    const ACCOUNTS_PER_PAGE = 10;
+    window.__accountsPage = 1;
+    function accountPageCount(total) {
+      return Math.max(1, Math.ceil(total / ACCOUNTS_PER_PAGE));
+    }
+    function gotoAccountsPage(page) {
+      window.__accountsPage = page;
+      renderAccounts();
+      const panel = $("accountsTitle");
+      if (panel) panel.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+    function renderAccountsPager(total, pages) {
+      const pager = $("accountsPager");
+      if (!pager) return;
+      pager.classList.toggle("hidden", pages <= 1);
+      if (pages <= 1) {
+        pager.innerHTML = "";
+        return;
+      }
+      const current = window.__accountsPage;
+      const buttons = [];
+      for (let page = 1; page <= pages; page += 1) {
+        buttons.push(
+          `<button type="button" class="pager-num${page === current ? " is-current" : ""}" onclick="gotoAccountsPage(${page})">${page}</button>`
+        );
+      }
+      pager.innerHTML = `
+        <button type="button" class="pager-nav" onclick="gotoAccountsPage(${current - 1})" ${current <= 1 ? "disabled" : ""}>上一页</button>
+        <div class="pager-nums">${buttons.join("")}</div>
+        <button type="button" class="pager-nav" onclick="gotoAccountsPage(${current + 1})" ${current >= pages ? "disabled" : ""}>下一页</button>
+        <span class="pager-info">共 ${total} 个账号 · 第 ${current}/${pages} 页</span>`;
+    }
     function renderAccounts() {
-      if ($("accounts")) $("accounts").innerHTML = (window.__accounts || []).map(accountCard).join("");
-      if ($("noAccounts")) $("noAccounts").classList.toggle("hidden", !!(window.__accounts && window.__accounts.length));
+      const list = window.__accounts || [];
+      const pages = accountPageCount(list.length);
+      window.__accountsPage = Math.min(Math.max(window.__accountsPage || 1, 1), pages);
+      const start = (window.__accountsPage - 1) * ACCOUNTS_PER_PAGE;
+      if ($("accountsTitle")) $("accountsTitle").textContent = `抖音账号【${list.length}】`;
+      // 传全局下标，翻页后 saveAccount/runAccount 才不会认错账号
+      if ($("accounts")) {
+        $("accounts").innerHTML = list
+          .slice(start, start + ACCOUNTS_PER_PAGE)
+          .map((item, offset) => accountCard(item, start + offset))
+          .join("");
+      }
+      renderAccountsPager(list.length, pages);
+      if ($("noAccounts")) $("noAccounts").classList.toggle("hidden", !!list.length);
       updateAccountQuota();
       const st = window.__lastStatus;
       if (st) setBusy(st.running, st.run_message || "空闲", st.running_ids || []);
@@ -1372,8 +1417,20 @@
         target_sparks: readHiddenJson(node, ".target-sparks-json", {}),
       };
     }
+    function accountNode(index) {
+      return document.querySelector(`.account[data-index="${index}"]`);
+    }
     function collectAccounts() {
-      return [...document.querySelectorAll(".account")].map(collectAccount).filter((item) => item.unique_id);
+      // 页面上只渲染当前一页，其余账号必须原样保留，否则翻页后一保存就把它们抹了
+      const list = (window.__accounts || []).slice();
+      document.querySelectorAll(".account").forEach((node) => {
+        const item = collectAccount(node);
+        if (!item.unique_id) return;
+        const index = Number(node.dataset.index);
+        if (Number.isInteger(index) && index >= 0 && index < list.length) list[index] = item;
+        else list.push(item);
+      });
+      return list.filter((item) => item && item.unique_id);
     }
     async function removeTargetChip(index, name) {
       if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
@@ -2180,7 +2237,7 @@
     }
     async function checkAccount(index) {
       if (!canSpark()) { toast(sparkLockMsg(), "err"); return; }
-      const node = document.querySelectorAll(".account")[index];
+      const node = accountNode(index);
       if (!node) return;
       const item = collectAccount(node);
       if (!item.unique_id) {
@@ -2308,7 +2365,7 @@
     }
     async function saveAccount(index, silent = false) {
       if (!canSpark()) { toast(sparkLockMsg(), "err"); return false; }
-      const node = document.querySelectorAll(".account")[index];
+      const node = accountNode(index);
       if (!node) return;
       const item = collectAccount(node);
       if (!item.unique_id) {
@@ -2331,7 +2388,7 @@
     }
     async function runAccount(index) {
       if (!canSpark()) { toast(sparkLockMsg("无法续火花"), "err"); return; }
-      const node = document.querySelectorAll(".account")[index];
+      const node = accountNode(index);
       if (!node) return;
       const item = collectAccount(node);
       if (!item.unique_id) {
@@ -2443,19 +2500,19 @@
         const accountsValue = u.max_accounts == null ? 1 : u.max_accounts;
         const metaBits = ["注册 " + (u.created_label || "-")];
         if (u.card_code) metaBits.push("卡密 " + u.card_code);
-        return `<div class="user-card">
-          <div class="account-head">
-            <div>
+        return `<div class="user-row">
+          <div class="user-row-id">
+            <div class="user-row-name">
               <strong>${escapeHtml(u.username)}</strong>
-              <div class="account-id">${escapeHtml(metaBits.join(" · "))}</div>
-            </div>
-            <div class="account-head-right">
               <span class="pill">${admin ? "管理员" : "普通用户"}</span>
               <span class="ck-status ${statusCls}">${escapeHtml(u.remain_label || "")}</span>
             </div>
+            <div class="account-id">
+              ${escapeHtml(metaBits.join(" · "))}
+              ${u.wxpusher_bound ? `<b class="user-row-bound">· 已绑微信</b>` : ""}
+            </div>
           </div>
-          <label>重置密码<input data-user="${escapeAttr(u.username)}" class="reset-pass" type="password" placeholder="留空则不改" autocomplete="new-password" /></label>
-          <div class="user-edit-grid">
+          <div class="user-row-fields">
             <label>角色
               <select data-user="${escapeAttr(u.username)}" class="reset-role" ${protectedUser ? "disabled" : ""}>
                 <option value="user" ${u.role === "user" ? "selected" : ""}>普通用户</option>
@@ -2472,8 +2529,9 @@
               </select>
             </label>
             <label>延长天数<input data-user="${escapeAttr(u.username)}" class="extra-days" type="number" min="0" max="3650" placeholder="0 为永久" ${admin ? "disabled" : ""} /></label>
+            <label>重置密码<input data-user="${escapeAttr(u.username)}" class="reset-pass" type="password" placeholder="留空则不改" autocomplete="new-password" /></label>
           </div>
-          <div class="account-actions">
+          <div class="user-row-actions">
             <button class="btn-ghost" type="button" onclick="saveUser('${escapeAttr(u.username)}')">保存</button>
             <button class="btn-ghost" type="button" ${u.wxpusher_bound ? "" : "disabled"} onclick="adminUnbindWx('${escapeAttr(u.username)}')">解绑微信</button>
             ${protectedUser ? "" : `<button class="btn-run" type="button" onclick="removeUser('${escapeAttr(u.username)}')">删除</button>`}
