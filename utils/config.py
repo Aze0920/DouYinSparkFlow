@@ -68,6 +68,9 @@ def get_config():
             os.getenv("FRIEND_LIST_WAIT_TIME", "2000")
         ),  # 好友列表加载超时时间，单位毫秒
         "taskRetryTimes": int(os.getenv("TASK_RETRY_TIMES", "3")),  # 任务重试次数
+        # 好友之间的随机发送间隔，单位秒。间隔太短容易触发抖音频控
+        "sendMinDelay": float(os.getenv("SEND_MIN_DELAY", "2")),
+        "sendMaxDelay": float(os.getenv("SEND_MAX_DELAY", "5")),
         "maxTaskThreads": _clamp_threads(os.getenv("MAX_TASK_THREADS", "10")),
         "logLevel": os.getenv("LOG_LEVEL", "DEBUG"),  # 日志级别
     }

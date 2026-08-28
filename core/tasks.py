@@ -1,3 +1,4 @@
+import random
 import traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -50,6 +51,35 @@ CHAT_EDITOR_SELECTORS = [
     "[contenteditable='true']",
 ]
 LOGIN_HINTS = ("扫码登录", "登录后免费畅享", "打开「抖音APP」", "验证码登录", "请使用抖音APP")
+TOAST_SELECTORS = [
+    "[class*='toast']",
+    "[class*='Toast']",
+    "[class*='messageNotice']",
+    "[class*='message-notice']",
+    "[role='alert']",
+]
+# 抖音把消息拦下来时，前端照样会清空输入框，只在这些提示里说明原因
+BLOCK_HINTS = (
+    "操作频繁",
+    "操作过于频繁",
+    "发送太快",
+    "请稍后再试",
+    "稍后重试",
+    "发送失败",
+    "账号异常",
+    "存在异常",
+    "涉嫌违规",
+    "违规",
+    "已被限制",
+    "限制使用",
+    "触发风控",
+    "还不是好友",
+    "需要先关注",
+    "好友验证",
+    "拒收",
+    "拉黑",
+)
+SEND_API_HINTS = ("message/send", "/im/send", "send_message")
 
 
 def _make_info_handler(store: dict):
@@ -75,6 +105,67 @@ def _make_info_handler(store: dict):
             )
 
     return handle_response
+
+
+def _make_send_handler(store: list):
+    """记录 IM 发送接口的返回。status_code 非 0 就是服务端把消息拦下来了。"""
+
+    def handle_response(response: Response):
+        url = response.url
+        if not any(hint in url for hint in SEND_API_HINTS):
+            return
+        record = {"url": url, "http": response.status, "code": None, "msg": ""}
+        try:
+            data = response.json()
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            for key in ("status_code", "statusCode", "status", "code", "err_no", "error_code"):
+                if key in data:
+                    try:
+                        record["code"] = int(data[key])
+                    except (TypeError, ValueError):
+                        pass
+                    break
+            for key in ("status_msg", "status_message", "message", "msg", "err_msg", "prompt"):
+                value = data.get(key)
+                if value:
+                    record["msg"] = str(value)
+                    break
+        store.append(record)
+
+    return handle_response
+
+
+def _send_failure_from_api(records: list) -> str:
+    for record in records:
+        code = record.get("code")
+        if code not in (None, 0):
+            return f"接口返回 status_code={code} {record.get('msg') or ''}".strip()
+        if not 200 <= int(record.get("http") or 0) < 400:
+            return f"接口 HTTP {record.get('http')} {record.get('msg') or ''}".strip()
+    return ""
+
+
+def _toast_warning(page) -> str:
+    """只扫提示条，不扫全页，避免把聊天记录里的历史文字误判成风控。"""
+    for scope in _iter_scopes(page):
+        for selector in TOAST_SELECTORS:
+            try:
+                loc = scope.locator(selector)
+                count = min(_locator_count(loc), 5)
+            except Exception:
+                continue
+            for index in range(count):
+                try:
+                    text = (loc.nth(index).inner_text(timeout=800) or "").strip()
+                except Exception:
+                    continue
+                if not text or len(text) > 60:
+                    continue
+                if any(hint in text for hint in BLOCK_HINTS):
+                    return text
+    return ""
 
 
 def _iter_scopes(page):
@@ -364,7 +455,23 @@ def _type_message(page, editor, lines):
             page.keyboard.press("Shift+Enter")
 
 
-def _send_chat_message(page, message: str):
+def _looks_blocked(exc) -> bool:
+    text = str(exc)
+    return "抖音拒绝" in text or "抖音提示" in text
+
+
+def _send_gap() -> float:
+    """好友之间留随机间隔，固定节奏最容易撞上频控。"""
+    low = float(config.get("sendMinDelay") or 0)
+    high = float(config.get("sendMaxDelay") or 0)
+    if high < low:
+        low, high = high, low
+    if high <= 0:
+        return 0.5
+    return random.uniform(max(low, 0), high)
+
+
+def _send_chat_message(page, message: str, send_records=None):
     chat_input, _, selector = _wait_locator(page, CHAT_EDITOR_SELECTORS, timeout_ms=15000)
     if chat_input is None:
         raise RuntimeError("找不到聊天输入框，会话可能没打开")
@@ -373,18 +480,35 @@ def _send_chat_message(page, message: str):
     lines = message.split("\\n")
     last_error = "未知原因"
     for attempt in range(2):
+        if send_records is not None:
+            send_records.clear()
         _type_message(page, editor, lines)
         if not _editor_text(editor):
             last_error = "文字没有进入输入框"
             logger.warning("输入框没收到文字，第 %s 次重试", attempt + 1)
             continue
+
         page.keyboard.press("Enter")
+        cleared = False
         for _ in range(20):
             time.sleep(0.15)
             if not _editor_text(editor):
-                return
-        last_error = "回车后输入框内容没有被清空"
-        logger.warning("消息可能没发出去，第 %s 次重试", attempt + 1)
+                cleared = True
+                break
+        if not cleared:
+            last_error = "回车后输入框内容没有被清空"
+            logger.warning("消息可能没发出去，第 %s 次重试", attempt + 1)
+            continue
+
+        # 输入框清空只说明前端收下了，服务端有没有投递还得看接口和提示条
+        time.sleep(0.6)
+        api_error = _send_failure_from_api(list(send_records or []))
+        if api_error:
+            raise RuntimeError(f"抖音拒绝了这条消息：{api_error}")
+        toast = _toast_warning(page)
+        if toast:
+            raise RuntimeError(f"抖音提示：{toast}")
+        return
     raise RuntimeError(f"消息没能发出去：{last_error}")
 
 
@@ -400,6 +524,8 @@ def do_user_task(username, cookies, targets, message_template="", unique_id=""):
         context.set_default_timeout(8000)
         page = context.new_page()
         page.on("response", _make_info_handler(user_id_dict))
+        send_records = []
+        page.on("response", _make_send_handler(send_records))
 
         retry_operation(
             "打开抖音网页聊天页面",
@@ -427,6 +553,7 @@ def do_user_task(username, cookies, targets, message_template="", unique_id=""):
         logger.debug(f"账号 {username} 开始发送消息")
         sent = []
         failed = []
+        blocked = ""
         for target_symbol, friend_name in scroll_and_select_user(
             page, username, targets, user_id_dict, item_loc, list_loc, scope
         ):
@@ -434,18 +561,27 @@ def do_user_task(username, cookies, targets, message_template="", unique_id=""):
             message = build_message(message_template)
             logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
             try:
-                _send_chat_message(page, message)
+                _send_chat_message(page, message, send_records)
             except Exception as exc:
                 failed.append(friend_name)
                 logger.error(f"账号 {username} 给好友 {friend_name} 发送失败：{exc}")
+                if _looks_blocked(exc):
+                    blocked = str(exc)
+                    logger.error("账号 %s 疑似被抖音限制，停止本次发送：%s", username, blocked)
+                    break
                 continue
             sent.append(friend_name)
             logger.info(f"账号 {username} 给好友 {friend_name} 发送成功")
-            time.sleep(0.5)
+            time.sleep(_send_gap())
 
         logger.info("账号 %s 发送结果 成功=%s 失败=%s", username, len(sent), len(failed))
         if failed:
             logger.warning("账号 %s 以下好友没发出去: %s", username, failed)
+        if blocked:
+            _dump_chat_debug(page, username)
+            raise RuntimeError(
+                f"账号 {username} 被抖音限制，成功 {len(sent)} 个后中断：{blocked}"
+            )
         if not sent:
             _dump_chat_debug(page, username)
             raise RuntimeError(
