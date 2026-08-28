@@ -287,9 +287,27 @@
           <div class="cards admin-only hidden dash-admin-cards">
             <article class="card" id="localVersionCard"><label>本地版本</label><strong id="localVersion">-</strong></article>
             <article class="card" id="remoteVersionCard"><label>GitHub 版本</label><strong id="remoteVersion">-</strong></article>
-            <article class="card" id="accountCountCard">
-              <label>全部账号数量</label>
+          </div>
+          <div class="cards admin-only hidden dash-admin-stats">
+            <article class="card card-click" id="accountCountCard" onclick="return navTo(event, 'accounts')">
+              <label>当前账号数量</label>
               <strong id="accountCount">-</strong>
+              <div class="card-sub">全站抖音账号</div>
+            </article>
+            <article class="card card-click" id="userCountCard" onclick="return navTo(event, 'users')">
+              <label>当前用户数量</label>
+              <strong id="userCount">-</strong>
+              <div class="card-sub">控制台注册用户</div>
+            </article>
+            <article class="card card-click" id="cardCountCard" onclick="return navTo(event, 'cards')">
+              <label>卡密数量</label>
+              <strong id="cardCount">-</strong>
+              <div class="card-sub" id="cardCountSub">未使用 -</div>
+            </article>
+            <article class="card card-empty" id="adminSlotCard">
+              <label>待定</label>
+              <strong>—</strong>
+              <div class="card-sub">这里先留空</div>
             </article>
           </div>
           <div class="dash-body">
@@ -1136,6 +1154,15 @@
       }
       if ($("accountCount")) {
         $("accountCount").textContent = data.total_accounts == null ? "-" : String(data.total_accounts);
+      }
+      if ($("userCount")) {
+        $("userCount").textContent = data.total_users == null ? "-" : String(data.total_users);
+      }
+      if ($("cardCount")) {
+        $("cardCount").textContent = data.total_cards == null ? "-" : String(data.total_cards);
+      }
+      if ($("cardCountSub")) {
+        $("cardCountSub").textContent = data.unused_cards == null ? "未使用 -" : `未使用 ${data.unused_cards}`;
       }
       setBusy(data.running, data.run_message || "空闲", data.running_ids || []);
       if (typeof data.allow_self_unbind === "boolean") allowSelfUnbind = data.allow_self_unbind;

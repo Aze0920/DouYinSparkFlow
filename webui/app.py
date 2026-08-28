@@ -70,6 +70,7 @@ from webui.cards import (
     create_cards,
     delete_card,
     list_public_cards,
+    load_cards,
     public_card,
 )
 from webui.invite import (
@@ -1333,6 +1334,10 @@ def status(request: Request):
         payload["env_file"] = str(env_path())
         payload["is_git_repo"] = (ROOT / ".git").exists()
         payload["total_accounts"] = len(accounts)
+        payload["total_users"] = len(load_users())
+        cards = load_cards()
+        payload["total_cards"] = len(cards)
+        payload["unused_cards"] = sum(1 for card in cards if not str(card.get("used_by") or "").strip())
     return payload
 
 

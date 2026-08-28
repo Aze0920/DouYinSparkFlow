@@ -123,6 +123,33 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn(".page-bar-num.is-current", CSS)
         self.assertNotIn('class="pager hidden"', INDEX)
 
+    def test_dashboard_admin_stat_cards(self):
+        self.assertIn("dash-admin-stats", INDEX)
+        self.assertIn(".dash-admin-stats", CSS)
+        # 整块挂 admin-only，普通用户看不到这些全站统计
+        start = INDEX.find('class="cards admin-only hidden dash-admin-stats"')
+        self.assertGreaterEqual(start, 0)
+        block = INDEX[start:INDEX.find("dash-body", start)]
+        for element_id in ('id="accountCount"', 'id="userCount"', 'id="cardCount"', 'id="adminSlotCard"'):
+            self.assertIn(element_id, block)
+        self.assertIn("当前账号数量", block)
+        self.assertIn("当前用户数量", block)
+        self.assertIn("卡密数量", block)
+        self.assertIn("card-empty", block)
+        self.assertIn(".card-empty", CSS)
+
+    def test_status_reports_admin_only_totals(self):
+        start = APP_PY.find('payload["total_accounts"]')
+        self.assertGreaterEqual(start, 0)
+        chunk = APP_PY[start:start + 400]
+        self.assertIn('payload["total_users"] = len(load_users())', chunk)
+        self.assertIn('payload["total_cards"]', chunk)
+        self.assertIn('payload["unused_cards"]', chunk)
+        # 必须留在 _is_admin 分支里
+        guard = APP_PY.rfind("if _is_admin(user):", 0, start)
+        self.assertGreaterEqual(guard, 0)
+        self.assertNotIn("return payload", APP_PY[guard:start])
+
     def test_create_forms_sit_on_one_row(self):
         self.assertIn("form-row form-row-6", INDEX)
         self.assertIn("form-row form-row-5", INDEX)
