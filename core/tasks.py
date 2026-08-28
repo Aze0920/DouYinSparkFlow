@@ -323,19 +323,69 @@ def scroll_and_select_user(page, username, targets, user_id_dict, item_loc, list
                 break
 
 
+def _editor_target(page, chat_input):
+    """定位真正可编辑的元素。命中的往往是外层容器，Enter 打在容器上不会发送。"""
+    try:
+        inner = chat_input.first.locator("[contenteditable='true']")
+        if _locator_count(inner) > 0:
+            return inner.first
+    except Exception:
+        pass
+    try:
+        if (chat_input.first.get_attribute("contenteditable") or "") == "true":
+            return chat_input.first
+    except Exception:
+        pass
+    loc, _, _ = _find_locator(page, ["[contenteditable='true']"])
+    if loc is not None:
+        return loc.first
+    return chat_input.first
+
+
+def _editor_text(editor) -> str:
+    try:
+        return (editor.evaluate("el => el.innerText || el.textContent || ''") or "").strip()
+    except Exception:
+        return ""
+
+
+def _type_message(page, editor, lines):
+    editor.click()
+    try:
+        editor.evaluate("el => el.focus && el.focus()")
+    except Exception:
+        pass
+    page.keyboard.press("Control+A")
+    page.keyboard.press("Delete")
+    for index, line in enumerate(lines):
+        if line:
+            page.keyboard.insert_text(line)
+        if index != len(lines) - 1:
+            page.keyboard.press("Shift+Enter")
+
+
 def _send_chat_message(page, message: str):
     chat_input, _, selector = _wait_locator(page, CHAT_EDITOR_SELECTORS, timeout_ms=15000)
     if chat_input is None:
         raise RuntimeError("找不到聊天输入框，会话可能没打开")
     logger.debug("使用输入框 selector=%s", selector)
-    chat_input.first.click()
+    editor = _editor_target(page, chat_input)
     lines = message.split("\\n")
-    for index, line in enumerate(lines):
-        if line:
-            page.keyboard.insert_text(line)
-        if index != len(lines) - 1:
-            chat_input.first.press("Shift+Enter")
-    chat_input.first.press("Enter")
+    last_error = "未知原因"
+    for attempt in range(2):
+        _type_message(page, editor, lines)
+        if not _editor_text(editor):
+            last_error = "文字没有进入输入框"
+            logger.warning("输入框没收到文字，第 %s 次重试", attempt + 1)
+            continue
+        page.keyboard.press("Enter")
+        for _ in range(20):
+            time.sleep(0.15)
+            if not _editor_text(editor):
+                return
+        last_error = "回车后输入框内容没有被清空"
+        logger.warning("消息可能没发出去，第 %s 次重试", attempt + 1)
+    raise RuntimeError(f"消息没能发出去：{last_error}")
 
 
 def do_user_task(username, cookies, targets, message_template="", unique_id=""):
@@ -375,15 +425,32 @@ def do_user_task(username, cookies, targets, message_template="", unique_id=""):
             save_state(context, unique_id)
 
         logger.debug(f"账号 {username} 开始发送消息")
+        sent = []
+        failed = []
         for target_symbol, friend_name in scroll_and_select_user(
             page, username, targets, user_id_dict, item_loc, list_loc, scope
         ):
             logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
             message = build_message(message_template)
-            _send_chat_message(page, message)
             logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
-            logger.debug(f"账号 {username} 给好友 {friend_name} 发送消息完成")
+            try:
+                _send_chat_message(page, message)
+            except Exception as exc:
+                failed.append(friend_name)
+                logger.error(f"账号 {username} 给好友 {friend_name} 发送失败：{exc}")
+                continue
+            sent.append(friend_name)
+            logger.info(f"账号 {username} 给好友 {friend_name} 发送成功")
             time.sleep(0.5)
+
+        logger.info("账号 %s 发送结果 成功=%s 失败=%s", username, len(sent), len(failed))
+        if failed:
+            logger.warning("账号 %s 以下好友没发出去: %s", username, failed)
+        if not sent:
+            _dump_chat_debug(page, username)
+            raise RuntimeError(
+                f"账号 {username} 一条消息都没发出去，聊天输入框可能已经改版，已保存截图到 logs/chat-debug-*.png"
+            )
     finally:
         if context:
             try:
