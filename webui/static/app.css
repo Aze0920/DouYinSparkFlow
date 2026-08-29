@@ -980,7 +980,6 @@ body.spark-locked .spark-action {
   font-size: 12px;
   line-height: 1.7;
 }
-.settings-px-url { grid-column: span 2; }
 @media (max-width: 560px) {
   .region-selects { grid-template-columns: 1fr; }
 }

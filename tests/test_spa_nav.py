@@ -129,19 +129,25 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("await loadRegions();", INDEX)
 
     def test_proxy_settings_block(self):
-        for el in ("pxEnabled", "pxApiUrl", "pxProtocol", "pxMinute", "pxRetries", "pxStatus"):
+        """只让用户填密钥，账号靠「获取账号」拉下拉，其余参数不暴露。"""
+        for el in ("pxEnabled", "pxApiKey", "pxPhone", "pxStatus"):
             self.assertIn(f'id="{el}"', INDEX)
         self.assertIn("function fillProxySettings", INDEX)
         self.assertIn("function saveProxySettings", INDEX)
         self.assertIn("function testProxySettings", INDEX)
+        self.assertIn("function loadProxyAccounts", INDEX)
+        self.assertIn("/api/settings/proxy/accounts", INDEX)
         self.assertIn("settings-if-px", INDEX)
         self.assertIn("await saveProxySettings(true);", INDEX)
+        # 协议/时长/重试都由后端定死，不该再出现在界面上
+        for gone in ("pxProtocol", "pxMinute", "pxRetries"):
+            self.assertNotIn(f'id="{gone}"', INDEX)
 
-    def test_masked_proxy_url_is_not_resubmitted_as_real(self):
-        """回显的是打码链接，原样提交会把真密钥冲掉，所以要判等后置空。"""
+    def test_masked_proxy_key_is_not_resubmitted_as_real(self):
+        """回显的是打码密钥，原样提交会把真密钥冲掉，所以要判等后置空。"""
         start = INDEX.find("async function saveProxySettings")
         self.assertGreaterEqual(start, 0)
-        self.assertIn("window.__proxyMasked", INDEX[start:start + 900])
+        self.assertIn("window.__proxyMaskedKey", INDEX[start:start + 900])
 
     def test_cards_and_users_have_search_boxes(self):
         for input_id, clear_id in (("cardSearch", "cardSearchClear"), ("userSearch", "userSearchClear")):

@@ -22,26 +22,23 @@ PROXY_FILE = ROOT / "config" / "proxy.json"
 logger = setup_logger("app", "DEBUG")
 
 IP_PORT = re.compile(r"\b(\d{1,3}(?:\.\d{1,3}){3}):(\d{1,5})\b")
-PROTOCOLS = ("http", "socks5")
-MAX_RETRIES = 5
+DEFAULT_BASE_URL = "https://ba.cd/ip/extract.php"
 FETCH_TIMEOUT = 30
+
+# 下面几个不给用户填：单账号任务一分多钟就跑完，10 分钟留足余量；
+# 协议固定 http；失败重试 3 次后回退直连。
+PROTOCOL = "http"
+MINUTE = 10
+RETRIES = 3
 
 
 def default_proxy() -> dict:
     return {
         "enabled": False,
-        "api_url": "",
-        "protocol": "http",
-        "minute": 10,
-        "retries": 3,
+        "api_key": "",
+        "phone": "",
+        "base_url": DEFAULT_BASE_URL,
     }
-
-
-def _clamp_int(value, low: int, high: int, fallback: int) -> int:
-    try:
-        return max(low, min(high, int(value)))
-    except (TypeError, ValueError):
-        return fallback
 
 
 def load_proxy() -> dict:
@@ -54,12 +51,9 @@ def load_proxy() -> dict:
         except Exception:
             logger.exception("读取代理配置失败")
     data["enabled"] = bool(data.get("enabled"))
-    data["api_url"] = str(data.get("api_url") or "").strip()
-    data["protocol"] = str(data.get("protocol") or "http").strip().lower()
-    if data["protocol"] not in PROTOCOLS:
-        data["protocol"] = "http"
-    data["minute"] = _clamp_int(data.get("minute"), 1, 120, 10)
-    data["retries"] = _clamp_int(data.get("retries"), 1, MAX_RETRIES, 3)
+    data["api_key"] = str(data.get("api_key") or "").strip()
+    data["phone"] = str(data.get("phone") or "").strip()
+    data["base_url"] = str(data.get("base_url") or "").strip() or DEFAULT_BASE_URL
     return data
 
 
@@ -68,54 +62,45 @@ def save_proxy(payload: dict) -> dict:
     payload = payload or {}
     if "enabled" in payload:
         data["enabled"] = bool(payload.get("enabled"))
-    # 前端拿到的是打码链接，留空表示不改动，避免把已存的密钥覆盖成星号
-    incoming_url = str(payload.get("api_url") or "").strip()
-    if incoming_url and "***" not in incoming_url:
-        data["api_url"] = incoming_url
-    if "protocol" in payload:
-        proto = str(payload.get("protocol") or "").strip().lower()
-        data["protocol"] = proto if proto in PROTOCOLS else "http"
-    if "minute" in payload:
-        data["minute"] = _clamp_int(payload.get("minute"), 1, 120, 10)
-    if "retries" in payload:
-        data["retries"] = _clamp_int(payload.get("retries"), 1, MAX_RETRIES, 3)
+    # 前端回显的是打码密钥，原样提交回来要当成「没改」，否则真密钥会被星号冲掉
+    key = str(payload.get("api_key") or "").strip()
+    if key and "*" not in key:
+        data["api_key"] = key
+    if "phone" in payload:
+        data["phone"] = re.sub(r"\D", "", str(payload.get("phone") or ""))[:20]
+    if payload.get("base_url"):
+        data["base_url"] = str(payload.get("base_url")).strip()
     PROXY_FILE.parent.mkdir(parents=True, exist_ok=True)
     PROXY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     return data
 
 
-def mask_url(url: str) -> str:
-    """把链接里的 key / phone 打码后再回前端，密钥不必往浏览器送第二趟。"""
-    text = str(url or "").strip()
+def mask_key(key: str) -> str:
+    text = str(key or "").strip()
     if not text:
         return ""
-    try:
-        parts = urlparse(text)
-        query = []
-        for key, value in parse_qsl(parts.query, keep_blank_values=True):
-            if key.lower() in {"key", "phone", "secret", "pwd"} and value:
-                value = value[:3] + "***" + value[-2:] if len(value) > 6 else "***"
-            query.append((key, value))
-        # safe="*" 不能省：默认会把星号转义成 %2A，save_proxy 就认不出这是打码链接了
-        return urlunparse(parts._replace(query=urlencode(query, safe="*")))
-    except Exception:
+    if len(text) <= 6:
         return "***"
+    return text[:3] + "***" + text[-3:]
 
 
 def public_proxy(data: dict | None = None) -> dict:
     data = data or load_proxy()
-    out = dict(data)
-    out["api_url_set"] = bool(data.get("api_url"))
-    out["api_url"] = mask_url(data.get("api_url"))
-    return out
+    return {
+        "enabled": bool(data.get("enabled")),
+        "api_key": mask_key(data.get("api_key")),
+        "api_key_set": bool(data.get("api_key")),
+        "phone": str(data.get("phone") or ""),
+        "ready": bool(data.get("api_key") and data.get("phone")),
+    }
 
 
-def build_url(api_url: str, area: str, minute: int) -> str:
-    """在用户配的链接上覆盖 area / minute，其余参数（key、phone 等）原样保留。"""
-    parts = urlparse(str(api_url or "").strip())
-    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k not in {"area", "minute", "province", "city"}]
-    query.append(("area", area))
-    query.append(("minute", str(minute)))
+def build_url(cfg: dict, **params) -> str:
+    """按配置拼提取链接：域名和密钥来自配置，其余参数由调用方给。"""
+    parts = urlparse(str(cfg.get("base_url") or DEFAULT_BASE_URL).strip())
+    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k not in params and k != "key"]
+    query.append(("key", str(cfg.get("api_key") or "")))
+    query.extend((k, str(v)) for k, v in params.items() if v not in (None, ""))
     return urlunparse(parts._replace(query=urlencode(query)))
 
 
@@ -162,33 +147,64 @@ def _failure_reason(text: str) -> str:
     return raw[:160]
 
 
+def list_accounts(cfg: dict | None = None) -> list[dict]:
+    """拉套餐账号列表，给设置页的下拉用。密钥不对会直接抛出，让用户看到原因。"""
+    cfg = cfg or load_proxy()
+    if not cfg.get("api_key"):
+        raise ValueError("请先填写 API 密钥")
+    resp = httpx.get(build_url(cfg, action="accounts"), timeout=FETCH_TIMEOUT, follow_redirects=True)
+    try:
+        data = json.loads(resp.text)
+    except (json.JSONDecodeError, TypeError):
+        raise ValueError(f"接口没有返回 JSON（HTTP {resp.status_code}），请检查接口地址是否正确")
+    if not isinstance(data, dict):
+        raise ValueError(f"接口返回格式不对（HTTP {resp.status_code}）")
+    if str(data.get("code")) != "0":
+        raise ValueError(str(data.get("message") or f"获取账号失败（HTTP {resp.status_code}）"))
+    out = []
+    for item in data.get("accounts") or []:
+        if not isinstance(item, dict):
+            continue
+        phone = str(item.get("phone") or "").strip()
+        if not phone:
+            continue
+        out.append(
+            {
+                "phone": phone,
+                "name": str(item.get("name") or "").strip(),
+                "balance": str(item.get("balance") or "").strip(),
+                "ready": bool(item.get("ready")),
+            }
+        )
+    return out
+
+
 def fetch_proxy(area: str, cfg: dict | None = None) -> str | None:
     """返回可直接交给 Playwright 的 server 串，失败返回 None 由调用方走直连。"""
     cfg = cfg or load_proxy()
-    if not cfg.get("enabled") or not cfg.get("api_url"):
+    if not cfg.get("enabled") or not cfg.get("api_key") or not cfg.get("phone"):
         return None
     code = normalize_area(area)
     if not code:
         logger.debug("账号没有设置地区，跳过代理直接直连")
         return None
 
-    url = build_url(cfg["api_url"], code, cfg["minute"])
-    retries = _clamp_int(cfg.get("retries"), 1, MAX_RETRIES, 3)
-    for attempt in range(1, retries + 1):
+    url = build_url(cfg, phone=cfg["phone"], area=code, minute=MINUTE)
+    for attempt in range(1, RETRIES + 1):
         try:
             resp = httpx.get(url, timeout=FETCH_TIMEOUT, follow_redirects=True)
             hit = parse_extract(resp.text)
             if hit:
-                server = f"{cfg['protocol']}://{hit}"
+                server = f"{PROTOCOL}://{hit}"
                 logger.info("已提取代理 IP %s 地区=%s 第%s次", hit, area_label(code), attempt)
                 return server
             logger.warning(
                 "提取代理失败（第%s/%s次）地区=%s HTTP=%s %s",
-                attempt, retries, area_label(code), resp.status_code, _failure_reason(resp.text),
+                attempt, RETRIES, area_label(code), resp.status_code, _failure_reason(resp.text),
             )
         except Exception as exc:
-            logger.warning("提取代理异常（第%s/%s次）地区=%s %s", attempt, retries, area_label(code), exc)
-        if attempt < retries:
+            logger.warning("提取代理异常（第%s/%s次）地区=%s %s", attempt, RETRIES, area_label(code), exc)
+        if attempt < RETRIES:
             time.sleep(2)
-    logger.error("提取代理连续 %s 次失败，本次回退直连 地区=%s", retries, area_label(code))
+    logger.error("提取代理连续 %s 次失败，本次回退直连 地区=%s", RETRIES, area_label(code))
     return None

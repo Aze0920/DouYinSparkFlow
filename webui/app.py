@@ -18,6 +18,7 @@ from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui import keepalive
 from webui.origin import public_origin, split_host_port
 from webui.proxy import fetch_proxy, load_proxy, public_proxy, save_proxy
+from webui.proxy import list_accounts as list_proxy_accounts_api
 from webui.regions import area_label, normalize_area, region_tree
 from webui.legal_docs import (
     PRIVACY_HTML,
@@ -1191,25 +1192,41 @@ def save_proxy_settings(request: Request, payload: dict | None = None):
     admin = require_admin(request)
     data = save_proxy(payload or {})
     logger.info(
-        "已保存代理设置 admin=%s enabled=%s protocol=%s minute=%s",
-        admin.get("username"), data.get("enabled"), data.get("protocol"), data.get("minute"),
+        "已保存代理设置 admin=%s enabled=%s phone=%s",
+        admin.get("username"), data.get("enabled"), data.get("phone") or "-",
     )
     return {"ok": True, **public_proxy(data)}
+
+
+@app.post("/api/settings/proxy/accounts")
+def list_proxy_accounts(request: Request):
+    require_admin(request)
+    try:
+        accounts = list_proxy_accounts_api()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        logger.exception("获取代理账号失败")
+        raise HTTPException(status_code=400, detail=f"连接接口失败：{exc}")
+    logger.info("已获取代理套餐账号 count=%s", len(accounts))
+    return {"ok": True, "accounts": accounts}
 
 
 @app.post("/api/settings/proxy/test")
 def test_proxy_settings(request: Request, payload: dict | None = None):
     require_admin(request)
     cfg = load_proxy()
-    if not cfg.get("api_url"):
-        raise HTTPException(status_code=400, detail="请先填写提取 API 链接并保存")
+    if not cfg.get("api_key"):
+        raise HTTPException(status_code=400, detail="请先填写 API 密钥")
+    if not cfg.get("phone"):
+        raise HTTPException(status_code=400, detail="请先点「获取账号」并选择一个套餐账号")
     area = normalize_area((payload or {}).get("area")) or "110100"
     # 测试要能在没开总开关时也跑通，否则用户没法先验证再启用
     started = time.time()
     server = fetch_proxy(area, {**cfg, "enabled": True})
     cost = round(time.time() - started, 1)
     if not server:
-        raise HTTPException(status_code=400, detail=f"提取失败（耗时 {cost}s），请检查密钥、套餐余额，以及本机 IP 是否已加白名单")
+        raise HTTPException(status_code=400, detail=f"提取失败（耗时 {cost}s），请检查套餐余额，以及本机公网 IP 是否已加白名单")
     logger.info("代理提取测试成功 area=%s server=%s", area, server)
     return {"ok": True, "server": server, "area": area, "area_label": area_label(area), "seconds": cost}
 
