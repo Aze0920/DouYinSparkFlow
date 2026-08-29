@@ -255,10 +255,12 @@ def _dump_chat_debug(page, username: str):
     try:
         safe = "".join(ch for ch in username if ch.isalnum() or ch in ("_", "-")) or "account"
         path = Path(LOG_FILE).parent / f"chat-debug-{safe}.png"
-        page.screenshot(path=str(path), full_page=False)
+        # 走代理时页面慢，screenshot 默认会「等字体加载完」，动不动就超时。
+        # 这只是张排障截图，给足时间、加载不出字体也无所谓，别为它甩堆栈。
+        page.screenshot(path=str(path), full_page=False, timeout=20000)
         logger.warning("账号 %s 已保存页面截图 %s", username, path)
-    except Exception:
-        logger.debug("账号 %s 保存截图失败", username, exc_info=True)
+    except Exception as exc:
+        logger.debug("账号 %s 保存截图失败（%s）", username, type(exc).__name__)
 
 
 def _scroll_list(scope, list_loc, item_loc) -> bool:
@@ -585,7 +587,10 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             logger.exception("账号 %s 用代理建上下文失败，改走直连", username)
             context = make_context(browser, storage_state=state, cookies=cookies)
         context.set_default_navigation_timeout(config["browserTimeout"])
-        context.set_default_timeout(8000)
+        # 走代理时私信这个重型 IM 应用每一步都更慢，默认超时也得放宽，
+        # 否则找输入框、读文字、截图动不动就先超时了。
+        slow = bool(proxy)
+        context.set_default_timeout(12000 if slow else 8000)
         page = context.new_page()
         page.on("response", _make_info_handler(user_id_dict))
         send_records = []
@@ -603,12 +608,16 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
         )
         # commit 只保证开始接收文档，给页面一点时间把内容渲染出来，
         # 否则下面这句在空 body 上判断，登录墙会认不出来
-        time.sleep(2.5)
+        time.sleep(4 if slow else 2.5)
         if _looks_like_login(page):
             _dump_chat_debug(page, username)
             raise RuntimeError(f"账号 {username} 打开私信页失败：页面在要求登录，请点「检测」或重新登录后再续火花")
 
-        item_loc, scope, item_sel = _wait_locator(page, CONVERSATION_ITEM_SELECTORS, timeout_ms=15000)
+        # 会话列表是抖音私信里最重的一块，走代理时渲染很慢。检测那边给到 25 秒才判「没列表」，
+        # 这边只给 15 秒就会出现「检测说正常、续火花却打不开列表」。代理下放宽到 40 秒对齐。
+        item_loc, scope, item_sel = _wait_locator(
+            page, CONVERSATION_ITEM_SELECTORS, timeout_ms=40000 if slow else 15000
+        )
         list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
         if item_loc is None:
             _dump_chat_debug(page, username)
@@ -622,7 +631,7 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
         try:
             page.wait_for_selector(
                 ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
-                timeout=5000,
+                timeout=9000 if slow else 5000,
             )
         except Exception:
             pass

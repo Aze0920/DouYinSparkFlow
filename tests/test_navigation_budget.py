@@ -67,6 +67,24 @@ class ChatNavigationTests(unittest.TestCase):
             self.assertIn("if proxy else", source, f"{rel} 的等待时长没有区分代理和直连")
 
 
+class TaskListBudgetTests(unittest.TestCase):
+    """续火花要真的等到好友列表出来，代理下的预算必须和检测那边一样宽。
+
+    线上出过「检测说正常、续火花却打不开会话列表」：检测给会话列表 25 秒，
+    续火花只给 15 秒，慢代理下就差这一截。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = (ROOT / "core" / "tasks.py").read_text(encoding="utf-8")
+
+    def test_conversation_list_wait_is_proxy_aware_and_generous(self):
+        self.assertIn("40000 if slow else 15000", self.source)
+
+    def test_task_knows_whether_it_is_behind_a_proxy(self):
+        self.assertIn("slow = bool(proxy)", self.source)
+
+
 class ProbeNoiseTests(unittest.TestCase):
     """已经处理好的超时不该甩一大段 traceback，用户会以为程序崩了。"""
 
