@@ -429,23 +429,38 @@ def _has_session(context) -> bool:
 
 
 def _page_signals(page) -> dict[str, Any]:
+    # 每一处读取都各自 try 兜住：代理没连通时页面会落到 chrome-error:// 这种「不透明源」，
+    # 上面读 localStorage 会直接抛 SecurityError。以前等 domcontentloaded 时导航失败会先报错、
+    # 走不到这里；改等 commit 后会真的停在错误页，所以这里必须自己扛住，别再把一屏堆栈刷出来。
     try:
         return page.evaluate(
             """() => {
-              const text = (document.body && document.body.innerText) || "";
+              let text = "";
+              try { text = (document.body && document.body.innerText) || ""; } catch (e) {}
+              let hasUser = "", loginStatus = "";
+              try { hasUser = localStorage.getItem("HasUserLogin") || ""; } catch (e) {}
+              try { loginStatus = localStorage.getItem("LOGIN_STATUS") || ""; } catch (e) {}
+              let hasChat = false;
+              try {
+                hasChat = !!(document.querySelector("[class*='conversation']") || document.querySelector("[class*='Conversation']"));
+              } catch (e) {}
+              let href = "";
+              try { href = location.href || ""; } catch (e) {}
               return {
-                href: location.href,
-                hasUser: localStorage.getItem("HasUserLogin") || "",
-                loginStatus: localStorage.getItem("LOGIN_STATUS") || "",
+                href,
+                hasUser,
+                loginStatus,
                 hasScan: text.includes("扫码登录"),
                 hasEnjoy: text.includes("登录后免费畅享") || text.includes("打开「抖音APP」"),
                 hasVerify: text.includes("身份验证") && (text.includes("为保障账号安全") || text.includes("确保为本人操作")),
-                hasChat: !!(document.querySelector("[class*='conversation']") || document.querySelector("[class*='Conversation']")),
+                hasChat,
+                blank: !text && (!href || href === "about:blank" || href.startsWith("chrome-error")),
               };
             }"""
         ) or {}
-    except Exception:
-        logger.debug("读取页面登录信号失败", exc_info=True)
+    except Exception as exc:
+        # JS 里已经逐个兜住了，走到这基本是页面正忙/正导航，打一行就够，别甩堆栈
+        logger.debug("读取页面登录信号失败（%s）", type(exc).__name__)
         return {}
 
 
@@ -453,12 +468,22 @@ def wait_chat_access(page, timeout_s: float = 12) -> str:
     """等私信页出现会话列表，或确认其实在扫码登录。返回 chat / login / empty。"""
     deadline = time.time() + max(timeout_s, 1)
     last = "empty"
+    blank_streak = 0
     while time.time() < deadline:
         signals = _page_signals(page)
         if signals.get("hasScan") or signals.get("hasEnjoy"):
             return "login"
         if signals.get("hasChat"):
             return "chat"
+        # 页面是空的错误页（代理没连通，落到 chrome-error/about:blank）：
+        # 再怎么等也不会长出会话列表，连着几轮都这样就别耗满超时了。
+        if signals.get("blank"):
+            blank_streak += 1
+            if blank_streak >= 3:
+                logger.debug("页面是空错误页，八成没连上，提前收手")
+                return last
+        else:
+            blank_streak = 0
         last = "empty"
         time.sleep(0.4)
     signals = _page_signals(page)
