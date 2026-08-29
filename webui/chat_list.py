@@ -531,6 +531,62 @@ def _collect_dom(page) -> list[dict]:
     return rows
 
 
+def update_spark_snapshot(account_id: str, rows: list[dict]) -> int:
+    """把这次扫到的火花天数写回会话快照，让续火花任务顺手刷新天数。
+
+    这里是新读数直接覆盖旧值，不能像 merge_conversations 那样取较大的：
+    火花断了会从头数起，取最大值的话旧天数就永远赖着不走了。
+    """
+    account_id = str(account_id or "").strip()
+    if not account_id:
+        return 0
+    fresh: dict[str, dict] = {}
+    for row in rows or []:
+        name = str((row or {}).get("name") or "").strip()
+        days = (row or {}).get("spark_days")
+        if name and is_plausible_spark(days):
+            fresh[name] = {"days": int(days), "kind": (row or {}).get("kind") or "friend"}
+    if not fresh:
+        return 0
+    cached = load_chats(account_id) or {}
+    items = [row for row in (cached.get("items") or []) if isinstance(row, dict)]
+    hit = set()
+    for item in items:
+        name = str(item.get("name") or "").strip()
+        got = fresh.get(name)
+        if got:
+            item["spark_days"] = got["days"]
+            hit.add(name)
+    for name, got in fresh.items():
+        if name not in hit:
+            items.append({"name": name, "kind": got["kind"], "spark_days": got["days"], "avatar": ""})
+    save_chats(account_id, items, str(cached.get("self_avatar") or ""))
+    return len(fresh)
+
+
+def fresh_spark_days(account: dict) -> dict:
+    """账号上存的天数停在选好友那天，续火花每跑一次会把新天数写进快照，所以以快照为准。
+
+    这样账号列表一打开就是最新天数，不用先点一次「选择好友和群聊」。
+    """
+    saved = account.get("target_sparks") if isinstance(account.get("target_sparks"), dict) else {}
+    merged = dict(saved or {})
+    account_id = str(account.get("unique_id") or "").strip()
+    if not account_id:
+        return merged
+    try:
+        cached = load_chats(account_id) or {}
+    except Exception:
+        return merged
+    for row in cached.get("items") or []:
+        if not isinstance(row, dict):
+            continue
+        name = str(row.get("name") or "").strip()
+        if name and is_plausible_spark(row.get("spark_days")):
+            merged[name] = int(row["spark_days"])
+    return merged
+
+
 def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force: bool = False) -> dict[str, Any]:
     account_id = str(unique_id or "").strip()
     if account_id and not force:

@@ -541,6 +541,37 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
     proxy = _account_proxy(username, region)
     playwright, browser = get_browser()
     context = None
+    spark_seen: dict[str, dict] = {}
+    spark_error = []
+
+    def harvest_sparks(page):
+        """顺手记一次当前视口的火花天数。列表本来就要滚，这是白拿的数据，绝不能让它影响发送。"""
+        try:
+            from webui.chat_list import _collect_dom
+
+            for row in _collect_dom(page) or []:
+                name = str((row or {}).get("name") or "").strip()
+                if name and (row or {}).get("spark_days"):
+                    spark_seen[name] = row
+        except Exception as exc:
+            # 每个好友都会扫一次，出错只记第一次，不然 DEBUG 日志会被刷屏
+            if not spark_error:
+                spark_error.append(str(exc))
+
+    def save_sparks():
+        if not unique_id:
+            return
+        if not spark_seen:
+            logger.info("账号 %s 这次没读到火花天数%s", username, f"：{spark_error[0]}" if spark_error else "")
+            return
+        try:
+            from webui.chat_list import update_spark_snapshot
+
+            n = update_spark_snapshot(unique_id, list(spark_seen.values()))
+            logger.info("账号 %s 已刷新 %s 个会话的火花天数", username, n)
+        except Exception:
+            logger.exception("账号 %s 刷新火花天数失败", username)
+
     try:
         from webui.session_store import load_state_path, save_state
 
@@ -581,6 +612,15 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
         logger.info("账号 %s 已找到会话列表 item=%s list=%s", username, item_sel, list_sel or "父级滚动")
         if unique_id:
             save_state(context, unique_id)
+        # 火焰图标是懒加载的，等一下再扫，否则列表刚出来时天数还没渲染出来
+        try:
+            page.wait_for_selector(
+                ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
+                timeout=5000,
+            )
+        except Exception:
+            pass
+        harvest_sparks(page)
 
         logger.debug(f"账号 {username} 开始发送消息")
         sent = []
@@ -589,6 +629,8 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
         for target_symbol, friend_name in scroll_and_select_user(
             page, username, targets, user_id_dict, item_loc, list_loc, scope
         ):
+            # 找好友的过程本身就在滚列表，每滚到一个人就把当前视口的天数一起收了
+            harvest_sparks(page)
             logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
             message = build_message(message_template)
             logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
@@ -606,6 +648,7 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             logger.info(f"账号 {username} 给好友 {friend_name} 发送成功")
             time.sleep(_send_gap())
 
+        harvest_sparks(page)
         logger.info("账号 %s 发送结果 成功=%s 失败=%s", username, len(sent), len(failed))
         if failed:
             logger.warning("账号 %s 以下好友没发出去: %s", username, failed)
@@ -620,6 +663,8 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                 f"账号 {username} 一条消息都没发出去，聊天输入框可能已经改版，已保存截图到 logs/chat-debug-*.png"
             )
     finally:
+        # 放在 finally 里：中途被限流或报错也要把已经扫到的天数留下来，它不依赖页面还开着
+        save_sparks()
         if context:
             try:
                 context.close()

@@ -31,7 +31,7 @@ from webui.legal_docs import (
 )
 from webui.envfile import account_cron, cookie_key, default_cron, env_path, load_env, parse_accounts, read_tasks, write_env
 from webui.cookie_probe import parse_cookie_payload, probe_cookies
-from webui.chat_list import clean_avatar_url, list_conversations
+from webui.chat_list import clean_avatar_url, fresh_spark_days, list_conversations
 from webui.qr_login import (
     cancel_qr_login,
     choose_verify_method,
@@ -1621,6 +1621,7 @@ def get_config(request: Request):
             {
                 **item,
                 "owner": owner,
+                "target_sparks": fresh_spark_days(item),
                 "wxpusher_bound": bool(str((owner_user or {}).get("wxpusher_uid") or "").strip()),
             }
         )

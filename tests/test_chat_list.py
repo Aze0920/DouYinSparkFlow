@@ -1,7 +1,12 @@
+import tempfile
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
+from webui import session_store as store
 from webui.chat_list import (
     clean_avatar_url,
+    fresh_spark_days,
     harvest_api_conversations,
     is_plausible_spark,
     merge_conversations,
@@ -10,6 +15,7 @@ from webui.chat_list import (
     spark_from_streak_html,
     spark_from_streak_text,
     spark_from_title_row,
+    update_spark_snapshot,
 )
 
 
@@ -241,6 +247,95 @@ class ChatListTests(unittest.TestCase):
         by_name = {item["name"]: item for item in rows}
         self.assertEqual(by_name["郑州阿杰电脑的粉丝1群"]["kind"], "group")
         self.assertIsNone(by_name["郑州阿杰电脑的粉丝1群"]["spark_days"])
+
+
+class SparkSnapshotTests(unittest.TestCase):
+    """续火花任务跑完要把新天数写回快照，账号列表才不会一直空着。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = patch.object(store, "SESSION_DIR", Path(self.tmp.name))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def rows(self):
+        return (store.load_chats("acc1") or {}).get("items") or []
+
+    def test_fills_in_days_for_an_account_that_never_had_any(self):
+        """挂了好几天却一直不显示天数的号，就是快照里从来没写进过火花。"""
+        store.save_chats("acc1", [{"name": "Darling", "kind": "friend", "spark_days": None, "avatar": "u"}])
+        self.assertEqual(update_spark_snapshot("acc1", [{"name": "Darling", "spark_days": 12}]), 1)
+        row = self.rows()[0]
+        self.assertEqual(row["spark_days"], 12)
+        self.assertEqual(row["avatar"], "u", "刷新天数不该把头像冲掉")
+
+    def test_lower_reading_overwrites_stale_high_value(self):
+        """火花断了会从头数起，取较大值的话旧天数就永远赖着不走。"""
+        store.save_chats("acc1", [{"name": "帅帅", "kind": "friend", "spark_days": 84}])
+        update_spark_snapshot("acc1", [{"name": "帅帅", "spark_days": 1}])
+        self.assertEqual(self.rows()[0]["spark_days"], 1)
+
+    def test_keeps_rows_it_did_not_see_this_run(self):
+        store.save_chats(
+            "acc1",
+            [
+                {"name": "帅帅", "kind": "friend", "spark_days": 84},
+                {"name": "凯凯", "kind": "friend", "spark_days": 112},
+            ],
+            "https://me.png",
+        )
+        update_spark_snapshot("acc1", [{"name": "帅帅", "spark_days": 85}])
+        by_name = {row["name"]: row for row in self.rows()}
+        self.assertEqual(by_name["帅帅"]["spark_days"], 85)
+        self.assertEqual(by_name["凯凯"]["spark_days"], 112, "这次没扫到的人要保持原样")
+        self.assertEqual((store.load_chats("acc1") or {}).get("self_avatar"), "https://me.png")
+
+    def test_appends_names_missing_from_snapshot(self):
+        store.save_chats("acc1", [{"name": "帅帅", "kind": "friend", "spark_days": 84}])
+        update_spark_snapshot("acc1", [{"name": "新朋友", "kind": "group", "spark_days": 3}])
+        by_name = {row["name"]: row for row in self.rows()}
+        self.assertEqual(by_name["新朋友"]["spark_days"], 3)
+        self.assertEqual(by_name["新朋友"]["kind"], "group")
+
+    def test_junk_readings_never_clear_existing_days(self):
+        store.save_chats("acc1", [{"name": "帅帅", "kind": "friend", "spark_days": 84}])
+        junk = [
+            {"name": "帅帅", "spark_days": None},
+            {"name": "", "spark_days": 5},
+            {"name": "小明", "spark_days": 2025},
+            {"name": "小红", "spark_days": "abc"},
+        ]
+        self.assertEqual(update_spark_snapshot("acc1", junk), 0)
+        self.assertEqual(self.rows()[0]["spark_days"], 84, "没读到就别动，不能把已有天数抹空")
+
+    def test_no_account_id_is_a_noop(self):
+        self.assertEqual(update_spark_snapshot("", [{"name": "帅帅", "spark_days": 9}]), 0)
+
+    def test_account_list_prefers_snapshot_over_saved_days(self):
+        store.save_chats("acc1", [{"name": "帅帅", "kind": "friend", "spark_days": 85}])
+        got = fresh_spark_days({"unique_id": "acc1", "target_sparks": {"帅帅": 84, "凯凯": 112}})
+        self.assertEqual(got, {"帅帅": 85, "凯凯": 112}, "快照里没有的人要保留账号上存的天数")
+
+    def test_account_list_falls_back_when_no_snapshot(self):
+        self.assertEqual(
+            fresh_spark_days({"unique_id": "nope", "target_sparks": {"帅帅": 84}}),
+            {"帅帅": 84},
+        )
+        self.assertEqual(fresh_spark_days({"target_sparks": {"帅帅": 84}}), {"帅帅": 84})
+
+    def test_account_list_ignores_rows_without_a_real_spark(self):
+        store.save_chats(
+            "acc1",
+            [
+                {"name": "帅帅", "kind": "friend", "spark_days": None},
+                {"name": "小明", "kind": "friend", "spark_days": 2025},
+            ],
+        )
+        self.assertEqual(
+            fresh_spark_days({"unique_id": "acc1", "target_sparks": {"帅帅": 84}}),
+            {"帅帅": 84},
+        )
 
 
 if __name__ == "__main__":

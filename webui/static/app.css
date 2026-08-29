@@ -959,15 +959,7 @@ body.spark-locked .spark-action {
 .target-box { display: grid; gap: 8px; }
 .target-label { color: var(--muted); font-size: 13px; }
 .region-box { display: grid; gap: 8px; }
-.region-label {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 13px;
-}
-.region-hint { font-size: 12px; font-style: normal; opacity: .75; }
+.region-label { color: var(--muted); font-size: 13px; }
 .region-selects {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

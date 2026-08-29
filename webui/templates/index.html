@@ -1343,9 +1343,7 @@
       const opts = (rows, current) =>
         rows.map((r) => `<option value="${escapeAttr(r.code)}"${r.code === current ? " selected" : ""}>${escapeHtml(r.name)}</option>`).join("");
       return `<div class="region-box">
-        <span class="region-label">上网地区
-          <em class="region-hint">这个号平时在哪上网就选哪，选错会被当成异地登录；不选=不用代理</em>
-        </span>
+        <span class="region-label">上网地区</span>
         <div class="region-selects">
           <select class="region-province spark-action" onchange="onProvinceChange(${index})" ${dis}>
             <option value="">不设置（直连）</option>
