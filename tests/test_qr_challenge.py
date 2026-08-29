@@ -51,21 +51,27 @@ class Ctx:
 
 
 class Page:
-    """跑一次 goto 就当挑战通过，种上 cookie。"""
+    """跑一次 goto 就当挑战通过，在 www.douyin.com 上种下挑战 cookie。"""
 
     def __init__(self, solves=True):
         self.solves = solves
         self.gotos = []
-        self._cookies = [{"name": "ttwid"}]
+        self._cookies = [{"name": "ttwid", "value": "t", "domain": ".douyin.com"}]
+        self.added = []
         self.context = self
 
     def cookies(self):
-        return list(self._cookies)
+        return [dict(c) for c in self._cookies]
+
+    def add_cookies(self, cookies):
+        self.added.extend(cookies)
+        self._cookies.extend(cookies)
 
     def goto(self, url, **kwargs):
         self.gotos.append(url)
         if self.solves and "get_qrcode" in url:
-            self._cookies.append({"name": "gfkadpd"})
+            # 线上是被重定向到 www.douyin.com 之后才跑的 JS，cookie 就种在 www 上
+            self._cookies.append({"name": "gfkadpd", "value": "10006,31827", "domain": "www.douyin.com"})
 
     def wait_for_timeout(self, ms):
         pass
@@ -140,19 +146,50 @@ class TimeoutBudgetTests(unittest.TestCase):
         self.assertEqual(ctx.calls[0][1]["timeout"], qr.API_PROXY)
 
 
-class WorkerGuardTests(unittest.TestCase):
-    """首页打不开就得当场收手，不能带着一条坏 IP 继续往下跑将近一分钟。"""
+class ChallengeCookieTests(unittest.TestCase):
+    """挑战 cookie 种在 www.douyin.com 上，sso.douyin.com 收不到就白跑一趟。"""
+
+    def test_copies_the_cookie_to_the_shared_domain(self):
+        page = Page()
+        page._cookies.append({"name": "gfkadpd", "value": "10006,31827", "domain": "www.douyin.com"})
+        self.assertEqual(qr._share_challenge_cookies(page), ["gfkadpd"])
+        copied = page.added[0]
+        self.assertEqual(copied["domain"], ".douyin.com")
+        self.assertEqual(copied["value"], "10006,31827")
+
+    def test_leaves_already_shared_cookies_alone(self):
+        page = Page()
+        page._cookies.append({"name": "gfkadpd", "value": "x", "domain": ".douyin.com"})
+        self.assertEqual(qr._share_challenge_cookies(page), [])
+        self.assertEqual(page.added, [])
+
+    def test_ignores_unrelated_cookies(self):
+        page = Page()
+        page._cookies.append({"name": "ttwid", "value": "x", "domain": "www.douyin.com"})
+        self.assertEqual(qr._share_challenge_cookies(page), [])
+
+    def test_solving_shares_the_cookie(self):
+        page = Page(solves=True)
+        self.assertTrue(qr._solve_challenge(page, "fp123"))
+        self.assertEqual([c["domain"] for c in page.added], [".douyin.com"])
+
+
+class HomepageIsNotFatalTests(unittest.TestCase):
+    """首页超时不能中止扫码。
+
+    线上实测：首页 25 秒超时之后，照样从私信页拿到了二维码并进入等待扫码。
+    之前在这里加 return 会把本来能成的流程直接掐掉。
+    """
 
     @classmethod
     def setUpClass(cls):
         cls.source = (ROOT / "webui" / "qr_login.py").read_text(encoding="utf-8")
 
-    def test_aborts_when_the_proxy_cannot_open_douyin(self):
-        start = self.source.index('logger.exception("打开抖音首页失败")')
-        block = self.source[start:start + 700]
-        self.assertIn("if lease:", block)
-        self.assertIn("return", block)
-        self.assertIn("刷新二维码", block, "要告诉用户点刷新会换一条新 IP")
+    def test_does_not_abort_on_homepage_timeout(self):
+        start = self.source.index("打开抖音首页超时")
+        block = self.source[start:start + 400]
+        self.assertNotIn("return", block, "首页超时只该记日志，不能中止整个扫码")
+        self.assertIn("_request_qr(context, fp, page)", block, "记完日志要继续往下取码")
 
 
 if __name__ == "__main__":

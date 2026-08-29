@@ -34,10 +34,11 @@ MINUTE = 10
 RETRIES = 3
 # 提前这么多秒收手。IP 是掐着点失效的，等真到点再停，最后那几步已经在断网里跑了。
 LEASE_GRACE = 40
-# 探活：必须打抖音自己的地址。池子里的 IP 能连通用网站、访问抖音却慢到超时是常事，
-# 拿别的站点探活等于没探——浏览器起来了才发现打不开首页，一次就白等半分钟。
-PROBE_URL = "https://www.douyin.com/favicon.ico"
-PROBE_TIMEOUT = 6
+# 探活：打抖音自己的地址才有意义（能连通用网站、访问抖音却超时是常事）。
+# 但只能走 http：https 要多一次 TLS 握手，这台机器直连抖音握手就要好几秒，
+# 用 https 探活会把好 IP 全判死。这里只要证明「这条 IP 转得到抖音」就够了。
+PROBE_URL = "http://www.douyin.com/favicon.ico"
+PROBE_TIMEOUT = 10
 
 # 多账号是并发跑的，会同一秒一起来提取，供应商那边按调用频率直接拒。
 # 串着来、两次之间留点间隔，比一起挤反而更快都拿到 IP。
@@ -72,6 +73,7 @@ def _reachable(server: str, timeout: float = PROBE_TIMEOUT) -> bool:
         return False
     try:
         resp = httpx.get(PROBE_URL, proxy=server, timeout=timeout, follow_redirects=False)
+        # 3xx 一样算通：收到抖音的回应就说明这条 IP 在转发，跳不跳转不关我们的事
         if resp.status_code >= 500:
             logger.warning("代理 %s 探活返回 HTTP %s", server, resp.status_code)
             return False
@@ -335,6 +337,10 @@ def fetch_proxy(area: str, cfg: dict | None = None, reasons: list | None = None)
     url = build_url(cfg, phone=cfg["phone"], area=code, minute=MINUTE)
     healed = False
     last_reason = ""
+    # 探活没过、但确实提取到的第一条 IP。探活是「优选」不是「否决」：
+    # 它自己也可能误判（超时太紧、只测 http），真全都没过时，
+    # 带着一条本地区的 IP 去试也比从机房 IP 出去强 —— 设了地区就不该走直连。
+    fallback = ""
     for attempt in range(1, RETRIES + 1):
         try:
             resp = _throttled_get(url)
@@ -344,8 +350,9 @@ def fetch_proxy(area: str, cfg: dict | None = None, reasons: list | None = None)
                 if _reachable(server):
                     logger.info("已提取代理 IP %s 地区=%s 第%s次", hit, area_label(code), attempt)
                     return server
-                last_reason = f"提取到 {hit}，但这条 IP 连不上"
-                logger.warning("代理 IP %s 是死的，换一条（第%s/%s次）", hit, attempt, RETRIES)
+                fallback = fallback or server
+                last_reason = f"提取到 {hit}，但探活没通过"
+                logger.warning("代理 IP %s 探活没过，换一条（第%s/%s次）", hit, attempt, RETRIES)
             else:
                 last_reason = _failure_reason(resp.text)
                 logger.warning(
@@ -366,6 +373,12 @@ def fetch_proxy(area: str, cfg: dict | None = None, reasons: list | None = None)
             logger.warning("提取代理异常（第%s/%s次）地区=%s %s", attempt, RETRIES, area_label(code), exc)
         if attempt < RETRIES:
             time.sleep(2)
+    if fallback:
+        logger.warning(
+            "%s 条 IP 都没通过探活，仍按地区要求使用 %s（探活比真实访问更严，可能是误判）",
+            RETRIES, fallback,
+        )
+        return fallback
     logger.error("提取代理连续 %s 次失败，本次回退直连 地区=%s %s", RETRIES, area_label(code), last_reason)
     if reasons is not None and last_reason:
         reasons.append(last_reason)

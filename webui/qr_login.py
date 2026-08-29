@@ -1847,6 +1847,38 @@ def _is_challenge_page(body: str) -> bool:
     return "<!doctype html" in head or "<html" in head
 
 
+CHALLENGE_COOKIES = ("gfkadpd",)
+
+
+def _share_challenge_cookies(context) -> list[str]:
+    """把挑战 cookie 摊到 .douyin.com 顶级域上。
+
+    挑战页会把请求重定向到 www.douyin.com 再跑 JS，cookie 就种在 www 上；
+    而挑战是 sso.douyin.com 出的，它收不到 www 的 host-only cookie，
+    于是接口继续返回挑战页 —— 光把 JS 跑一遍并不够，还得让子域都能带上。
+    """
+    shared = []
+    for cookie in context.cookies():
+        name = str(cookie.get("name") or "")
+        if name not in CHALLENGE_COOKIES:
+            continue
+        if str(cookie.get("domain") or "").lstrip(".") == "douyin.com":
+            continue
+        try:
+            context.add_cookies([{
+                "name": name,
+                "value": str(cookie.get("value") or ""),
+                "domain": ".douyin.com",
+                "path": "/",
+                "secure": True,
+                "sameSite": "None",
+            }])
+            shared.append(name)
+        except Exception:
+            logger.debug("摊开挑战 cookie 失败 name=%s", name, exc_info=True)
+    return shared
+
+
 def _solve_challenge(page, fp: str) -> bool:
     """让真页面去把挑战跑一遍。
 
@@ -1854,12 +1886,14 @@ def _solve_challenge(page, fp: str) -> bool:
     重试多少次都是同一张 HTML，这正是「拿不到二维码」的直接原因。
     """
     query = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in _sso_params(fp).items())
-    before = {c.get("name") for c in page.context.cookies()}
+    context = page.context
+    before = {c.get("name") for c in context.cookies()}
     try:
         page.goto(f"{SSO}/get_qrcode/?{query}", wait_until="domcontentloaded", timeout=_TIMEOUTS["nav"])
         page.wait_for_timeout(1500)
-        fresh = {c.get("name") for c in page.context.cookies()} - before
-        logger.info("已在页面里跑过风控挑战，新增 cookie=%s", sorted(fresh) or "无")
+        fresh = {c.get("name") for c in context.cookies()} - before
+        shared = _share_challenge_cookies(context)
+        logger.info("已在页面里跑过风控挑战，新增 cookie=%s 摊到顶级域=%s", sorted(fresh) or "无", shared or "无")
         return bool(fresh)
     except Exception:
         logger.warning("跑风控挑战页失败", exc_info=True)
@@ -2102,16 +2136,10 @@ def _worker(replace_index: int, region: str = ""):
             page.goto(HOME, wait_until="domcontentloaded", timeout=_TIMEOUTS["nav"])
             logger.info("已打开抖音首页 url=%s", page.url)
         except Exception:
-            logger.exception("打开抖音首页失败")
-            if lease:
-                # 首页都打不开，后面取码、回退开私信页会一路跟着超时，
-                # 白等将近一分钟最后还是拿不到码。这里当场收手，让用户换条 IP 重来。
-                _set(
-                    status="error",
-                    message=f"这条代理 IP 打不开抖音（等了 {_TIMEOUTS['nav'] // 1000} 秒）。请点「刷新二维码」，会换一条新 IP 重试",
-                )
-                logger.error("代理 %s 打不开抖音首页，本次扫码中止", lease.server)
-                return
+            # 首页是个很重的 SPA，慢到超时是常事，直连也一样。
+            # 实测首页超时之后照样能从私信页拿到二维码，所以这里只记一笔，
+            # 绝不能因为它失败就中止 —— 那会把本来能成的流程掐掉。
+            logger.warning("打开抖音首页超时，不影响后面取码，继续", exc_info=True)
 
         token, api_png, api_jump = _request_qr(context, fp, page)
         if not token and not api_png and not api_jump:

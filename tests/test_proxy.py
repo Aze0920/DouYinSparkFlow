@@ -360,18 +360,40 @@ class LiveProbeTests(unittest.TestCase):
             with patch.object(proxy_mod.httpx, "get", side_effect=[ok, good]):
                 self.assertEqual(fetch_proxy("130100", self.cfg), "http://5.6.7.8:9000")
 
-    def test_all_dead_falls_back_to_direct(self):
-        ok = FakeResponse('{"code":0,"extract":{"ok":true,"data":"1.2.3.4:20000"}}')
+    def test_all_probes_failing_still_uses_an_ip(self):
+        """探活只是优选，不是否决。
+
+        线上出过一次：三条 IP 全被探活判死（其实是探活自己太严），
+        结果整个扫码回退直连 —— 设了地区却从机房 IP 出去，正是要避免的事。
+        """
+        first = FakeResponse('{"code":0,"extract":{"ok":true,"data":"1.2.3.4:20000"}}')
+        later = FakeResponse('{"code":0,"extract":{"ok":true,"data":"5.6.7.8:9000"}}')
         with patch.object(proxy_mod, "_reachable", return_value=False):
-            with patch.object(proxy_mod.httpx, "get", return_value=ok):
+            with patch.object(proxy_mod.httpx, "get", side_effect=[first, later, later]):
+                self.assertEqual(fetch_proxy("130100", self.cfg), "http://1.2.3.4:20000")
+
+    def test_direct_only_when_nothing_was_extracted(self):
+        bad = FakeResponse('{"code":-1,"message":"余额不足"}')
+        with patch.object(proxy_mod, "_reachable", return_value=False):
+            with patch.object(proxy_mod.httpx, "get", return_value=bad):
                 reasons = []
                 self.assertIsNone(fetch_proxy("130100", self.cfg, reasons=reasons))
-        self.assertIn("1.2.3.4:20000", reasons[0])
+        self.assertIn("余额不足", reasons[0])
 
     def test_probe_goes_through_the_proxy(self):
         with patch.object(proxy_mod.httpx, "get", return_value=FakeResponse("ok")) as get:
             self.assertTrue(proxy_mod._reachable("http://1.2.3.4:20000"))
         self.assertEqual(get.call_args.kwargs["proxy"], "http://1.2.3.4:20000")
+
+    def test_probe_avoids_tls(self):
+        """https 探活要多做一次 TLS 握手，这台机器直连抖音握手就要好几秒，
+        用 https 会把好 IP 全判死 —— 线上就是这么全军覆没的。"""
+        self.assertTrue(proxy_mod.PROBE_URL.startswith("http://"))
+        self.assertGreaterEqual(proxy_mod.PROBE_TIMEOUT, 10)
+
+    def test_probe_accepts_redirects(self):
+        with patch.object(proxy_mod.httpx, "get", return_value=FakeResponse("", 301)):
+            self.assertTrue(proxy_mod._reachable("http://1.2.3.4:20000"), "3xx 说明这条 IP 转发是通的")
 
     def test_probe_fails_closed_on_error(self):
         with patch.object(proxy_mod.httpx, "get", side_effect=OSError("boom")):
