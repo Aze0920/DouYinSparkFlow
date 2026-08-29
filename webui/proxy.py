@@ -34,8 +34,9 @@ MINUTE = 10
 RETRIES = 3
 # 提前这么多秒收手。IP 是掐着点失效的，等真到点再停，最后那几步已经在断网里跑了。
 LEASE_GRACE = 40
-# 探活：拿一个小而快的国内地址走一趟代理，确认这条 IP 真能转发流量。
-PROBE_URL = "http://www.baidu.com/favicon.ico"
+# 探活：必须打抖音自己的地址。池子里的 IP 能连通用网站、访问抖音却慢到超时是常事，
+# 拿别的站点探活等于没探——浏览器起来了才发现打不开首页，一次就白等半分钟。
+PROBE_URL = "https://www.douyin.com/favicon.ico"
 PROBE_TIMEOUT = 6
 
 # 多账号是并发跑的，会同一秒一起来提取，供应商那边按调用频率直接拒。

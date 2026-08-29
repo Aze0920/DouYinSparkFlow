@@ -20,6 +20,17 @@ logger = setup_logger("app", "DEBUG")
 SSO = "https://sso.douyin.com"
 HOME = "https://www.douyin.com"
 CHAT = "https://www.douyin.com/chat"
+
+# 走住宅代理时每一跳都比直连慢，直连够用的超时在代理下会一路超时。
+# 同一时刻只有一个扫码会话（_lock 保证），所以这里用一份全局预算就够。
+_TIMEOUTS = {"nav": 25000, "api": 20000}
+NAV_DIRECT, NAV_PROXY = 25000, 45000
+API_DIRECT, API_PROXY = 20000, 35000
+
+
+def _use_timeouts(via_proxy: bool) -> None:
+    _TIMEOUTS["nav"] = NAV_PROXY if via_proxy else NAV_DIRECT
+    _TIMEOUTS["api"] = API_PROXY if via_proxy else API_DIRECT
 DEBUG_SHOT = Path(__file__).resolve().parent.parent / "logs" / "qr-debug.png"
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -1609,7 +1620,7 @@ def _http_get(context, url: str, params: dict | None = None):
         "headers": {"Referer": HOME + "/", "User-Agent": UA},
     }
     try:
-        return context.request.get(url, timeout=20000, **kwargs)
+        return context.request.get(url, timeout=_TIMEOUTS["api"], **kwargs)
     except TypeError:
         return context.request.get(url, **kwargs)
 
@@ -1826,7 +1837,41 @@ def _open_login_panel(page):
     logger.warning("没有找到可点击的登录入口")
 
 
-def _request_qr(context, fp: str) -> tuple[str, str, str]:
+def _is_challenge_page(body: str) -> bool:
+    """SSO 没给 JSON，而是给了一张风控挑战页。
+
+    那是一段混淆 JS，跑起来会种一个 cookie，种上之后同一个接口才肯返回 JSON。
+    换 IP（尤其是刚提取的住宅 IP）之后最容易撞上它。
+    """
+    head = (body or "")[:2000].lower()
+    return "<!doctype html" in head or "<html" in head
+
+
+def _solve_challenge(page, fp: str) -> bool:
+    """让真页面去把挑战跑一遍。
+
+    context.request 不执行 JS，所以挑战页在那条路上永远过不去——
+    重试多少次都是同一张 HTML，这正是「拿不到二维码」的直接原因。
+    """
+    query = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in _sso_params(fp).items())
+    before = {c.get("name") for c in page.context.cookies()}
+    try:
+        page.goto(f"{SSO}/get_qrcode/?{query}", wait_until="domcontentloaded", timeout=_TIMEOUTS["nav"])
+        page.wait_for_timeout(1500)
+        fresh = {c.get("name") for c in page.context.cookies()} - before
+        logger.info("已在页面里跑过风控挑战，新增 cookie=%s", sorted(fresh) or "无")
+        return bool(fresh)
+    except Exception:
+        logger.warning("跑风控挑战页失败", exc_info=True)
+        return False
+    finally:
+        try:
+            page.goto(HOME, wait_until="domcontentloaded", timeout=_TIMEOUTS["nav"])
+        except Exception:
+            logger.debug("挑战后回首页失败", exc_info=True)
+
+
+def _request_qr(context, fp: str, page=None, retried: bool = False) -> tuple[str, str, str]:
     try:
         resp = _http_get(context, SSO + "/get_qrcode/", _sso_params(fp))
         status = getattr(resp, "status", "?")
@@ -1839,6 +1884,10 @@ def _request_qr(context, fp: str) -> tuple[str, str, str]:
         try:
             payload = resp.json()
         except Exception:
+            if page is not None and not retried and _is_challenge_page(body):
+                logger.warning("get_qrcode 撞上风控挑战页，先在页面里过一遍再重试")
+                if _solve_challenge(page, fp):
+                    return _request_qr(context, fp, page, retried=True)
             logger.warning("get_qrcode 返回非 JSON: %s", (body or "")[:500])
             return "", "", ""
     except Exception:
@@ -2026,6 +2075,7 @@ def _worker(replace_index: int, region: str = ""):
         )
         logger.info("扫码线程启动 replace_index=%s", replace_index)
         lease = _login_proxy(region)
+        _use_timeouts(bool(lease))
         logger.info("正在启动浏览器")
         playwright, browser = get_browser()
         logger.info("浏览器已启动")
@@ -2049,12 +2099,21 @@ def _worker(replace_index: int, region: str = ""):
         except Exception:
             logger.warning("写入 s_v_web_id cookie 失败", exc_info=True)
         try:
-            page.goto(HOME, wait_until="domcontentloaded", timeout=25000)
+            page.goto(HOME, wait_until="domcontentloaded", timeout=_TIMEOUTS["nav"])
             logger.info("已打开抖音首页 url=%s", page.url)
         except Exception:
             logger.exception("打开抖音首页失败")
+            if lease:
+                # 首页都打不开，后面取码、回退开私信页会一路跟着超时，
+                # 白等将近一分钟最后还是拿不到码。这里当场收手，让用户换条 IP 重来。
+                _set(
+                    status="error",
+                    message=f"这条代理 IP 打不开抖音（等了 {_TIMEOUTS['nav'] // 1000} 秒）。请点「刷新二维码」，会换一条新 IP 重试",
+                )
+                logger.error("代理 %s 打不开抖音首页，本次扫码中止", lease.server)
+                return
 
-        token, api_png, api_jump = _request_qr(context, fp)
+        token, api_png, api_jump = _request_qr(context, fp, page)
         if not token and not api_png and not api_jump:
             token, api_png, api_jump = _fetch_qr_in_page(page, fp)
         token = token or str(sniff.get("token") or "")
