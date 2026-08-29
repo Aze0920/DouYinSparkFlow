@@ -144,17 +144,19 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
         profile = extract_profile(page, context, allow_stop=False)
         chat_reachable = True
         try:
-            # 走代理每一跳都更慢，直连够用的超时在代理下会一路超时
-            page.goto(CHAT, wait_until="domcontentloaded", timeout=45000 if proxy else 25000)
-        except Exception:
+            # 只等 commit（响应头到了就算），不等 domcontentloaded。
+            # 私信页是个很重的 IM 应用，等它把同步脚本全跑完，走代理时 45 秒都不够；
+            # 而我们真正要看的是「会话列表元素出没出来」，那件事交给下面的轮询更准也更快。
+            page.goto(CHAT, wait_until="commit", timeout=30000 if proxy else 20000)
+        except Exception as exc:
             chat_reachable = False
-            logger.warning("打开私信页超时，这次没法顺带验证私信功能", exc_info=True)
-        chat_state = wait_chat_access(page, timeout_s=12)
+            logger.warning("打开私信页超时（%s），这次没法顺带验证私信功能，不影响登录态判断", type(exc).__name__)
+        chat_state = wait_chat_access(page, timeout_s=25 if proxy else 12)
         signals = _page_signals(page)
         if not signals:
             try:
-                page.goto(HOME + "/", wait_until="domcontentloaded", timeout=15000)
-                time.sleep(0.6)
+                page.goto(HOME + "/", wait_until="commit", timeout=20000)
+                time.sleep(1.5)
                 signals = _page_signals(page)
             except Exception:
                 signals = {}

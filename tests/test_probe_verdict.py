@@ -102,7 +102,11 @@ class ProxyTimeoutTests(unittest.TestCase):
         cls.source = (ROOT / "webui" / "cookie_probe.py").read_text(encoding="utf-8")
 
     def test_chat_navigation_gets_longer_budget_behind_a_proxy(self):
-        self.assertIn("45000 if proxy else 25000", self.source)
+        self.assertIn("30000 if proxy else 20000", self.source)
+
+    def test_element_wait_also_gets_longer_behind_a_proxy(self):
+        """走代理时会话列表渲染得慢，等元素的时间也要跟着放宽。"""
+        self.assertIn("timeout_s=25 if proxy else 12", self.source)
 
 
 if __name__ == "__main__":

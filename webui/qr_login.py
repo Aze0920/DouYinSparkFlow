@@ -1795,8 +1795,10 @@ def _extract_qr_url(page) -> str:
 
 def _wait_chat_qr(page) -> str:
     logger.info("打开抖音私信页 %s", CHAT)
-    page.goto(CHAT, wait_until="domcontentloaded", timeout=60000)
-    logger.info("私信页已打开 url=%s title=%s", page.url, page.title())
+    # 同样只等 commit：二维码是页面自己异步请求回来的，
+    # 等不等得到 domcontentloaded 都不影响，下面本来就要轮询取图。
+    page.goto(CHAT, wait_until="commit", timeout=_TIMEOUTS["nav"])
+    logger.info("私信页已打开 url=%s", page.url)
     try:
         page.wait_for_selector("text=扫码登录", timeout=12000)
         logger.info("已出现扫码登录弹窗")

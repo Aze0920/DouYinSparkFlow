@@ -597,8 +597,13 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             retries=config["taskRetryTimes"],
             delay=2,
             url="https://www.douyin.com/chat",
+            # 默认是等 load（连图片都要加载完），私信页这么重的应用走代理根本等不到。
+            # 只等响应头，真正要等的会话列表下面有 _wait_locator 专门盯着。
+            wait_until="commit",
         )
-        time.sleep(0.8)
+        # commit 只保证开始接收文档，给页面一点时间把内容渲染出来，
+        # 否则下面这句在空 body 上判断，登录墙会认不出来
+        time.sleep(2.5)
         if _looks_like_login(page):
             _dump_chat_debug(page, username)
             raise RuntimeError(f"账号 {username} 打开私信页失败：页面在要求登录，请点「检测」或重新登录后再续火花")

@@ -652,8 +652,10 @@ def list_conversations(
 
         page = context.new_page()
         page.on("response", on_response)
-        page.goto(CHAT, wait_until="domcontentloaded", timeout=25000)
-        chat_state = wait_chat_access(page, timeout_s=15)
+        # 只等响应头。等 domcontentloaded 的话，私信页这么重的应用走代理常常直接超时，
+        # 而超时会把整个「选好友」流程掀掉；真正要等的会话列表由 wait_chat_access 盯着。
+        page.goto(CHAT, wait_until="commit", timeout=30000 if proxy else 20000)
+        chat_state = wait_chat_access(page, timeout_s=25 if proxy else 15)
         if chat_state == "login" or _looks_like_login(page):
             if account_id:
                 clear_browser_state(account_id)
