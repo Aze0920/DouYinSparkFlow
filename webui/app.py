@@ -1223,10 +1223,12 @@ def test_proxy_settings(request: Request, payload: dict | None = None):
     area = normalize_area((payload or {}).get("area")) or "110100"
     # 测试要能在没开总开关时也跑通，否则用户没法先验证再启用
     started = time.time()
-    server = fetch_proxy(area, {**cfg, "enabled": True})
+    reasons: list[str] = []
+    server = fetch_proxy(area, {**cfg, "enabled": True}, reasons=reasons)
     cost = round(time.time() - started, 1)
     if not server:
-        raise HTTPException(status_code=400, detail=f"提取失败（耗时 {cost}s），请检查套餐余额，以及本机公网 IP 是否已加白名单")
+        why = reasons[0] if reasons else "请检查套餐余额，以及本机公网 IP 是否已加白名单"
+        raise HTTPException(status_code=400, detail=f"提取失败（耗时 {cost}s）：{why}")
     logger.info("代理提取测试成功 area=%s server=%s", area, server)
     return {"ok": True, "server": server, "area": area, "area_label": area_label(area), "seconds": cost}
 

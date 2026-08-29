@@ -18,6 +18,7 @@ from webui.proxy import (
     parse_extract,
     public_proxy,
     save_proxy,
+    whitelist_ip_from_error,
 )
 from webui.regions import area_label, normalize_area, region_tree
 
@@ -200,6 +201,61 @@ class FakeResponse:
     def __init__(self, text, status=200):
         self.text = text
         self.status_code = status
+
+
+# 线上实际返回的报文：HTTP 200，但 extract 里是「没加白」
+NOT_WHITELISTED = FakeResponse(
+    '{"code":0,"extract":{"ok":true,"data":"请先将223.254.142.111加入到白名单再进行提取"}}'
+)
+
+
+class WhitelistTests(unittest.TestCase):
+    def test_extracts_ip_from_real_error_message(self):
+        self.assertEqual(
+            whitelist_ip_from_error("请先将223.254.142.111加入到白名单再进行提取"),
+            "223.254.142.111",
+        )
+
+    def test_ignores_unrelated_messages_with_ips(self):
+        """别把提取成功返回的代理 IP 误当成要加白的 IP。"""
+        self.assertEqual(whitelist_ip_from_error("1.2.3.4:20000"), "")
+        self.assertEqual(whitelist_ip_from_error("余额不足"), "")
+        self.assertEqual(whitelist_ip_from_error(""), "")
+
+    def test_rejects_malformed_ip(self):
+        self.assertEqual(whitelist_ip_from_error("请把 999.1.1.1 加入白名单"), "")
+
+    def test_fetch_adds_whitelist_then_succeeds(self):
+        """报「没加白」时应自动加白并立刻重试，不再需要人工去后台点。"""
+        cfg = {"enabled": True, "api_key": "K", "phone": "138", "base_url": DEFAULT_BASE_URL}
+        ok = FakeResponse('{"code":0,"extract":{"ok":true,"data":"1.2.3.4:20000"}}')
+        added = FakeResponse('{"code":0,"whitelist":{"ip":"223.254.142.111","ok":true}}')
+        with patch.object(proxy_mod.time, "sleep"):
+            with patch.object(proxy_mod.httpx, "get", side_effect=[NOT_WHITELISTED, added, ok]) as get:
+                self.assertEqual(fetch_proxy("130100", cfg), "http://1.2.3.4:20000")
+        urls = [c[0][0] for c in get.call_args_list]
+        self.assertIn("ip=223.254.142.111", urls[1])
+        self.assertIn("whitelist=1", urls[1])
+        self.assertIn("extract=0", urls[1], "加白那一步不该真去提取，白费一次额度")
+
+    def test_only_tries_whitelist_once(self):
+        cfg = {"enabled": True, "api_key": "K", "phone": "138", "base_url": DEFAULT_BASE_URL}
+        failed_add = FakeResponse('{"code":-1,"message":"加白失败"}')
+        with patch.object(proxy_mod.time, "sleep"):
+            with patch.object(proxy_mod.httpx, "get", return_value=NOT_WHITELISTED) as get:
+                reasons = []
+                self.assertIsNone(fetch_proxy("130100", cfg, reasons=reasons))
+        adds = [c[0][0] for c in get.call_args_list if "extract=0" in c[0][0]]
+        self.assertEqual(len(adds), 1, "加白只该试一次，不能每轮都刷")
+        self.assertIn("223.254.142.111", reasons[0])
+
+    def test_reasons_carries_real_message_to_caller(self):
+        cfg = {"enabled": True, "api_key": "K", "phone": "138", "base_url": DEFAULT_BASE_URL}
+        with patch.object(proxy_mod.time, "sleep"):
+            with patch.object(proxy_mod.httpx, "get", return_value=FakeResponse('{"code":-1,"message":"余额不足"}')):
+                reasons = []
+                self.assertIsNone(fetch_proxy("130100", cfg, reasons=reasons))
+        self.assertEqual(reasons, ["余额不足"])
 
 
 class FetchProxyTests(unittest.TestCase):

@@ -133,6 +133,42 @@ def parse_extract(text: str) -> str:
     return f"{m.group(1)}:{port}"
 
 
+def whitelist_ip_from_error(text: str) -> str:
+    """从「请先将 x.x.x.x 加入到白名单再进行提取」里取出要加白的 IP。
+
+    接口默认只加白「调用方来源 IP」，但品赞校验的是真正发起提取那一跳的来源，
+    两者不一致时就得拿它报的这个 IP 显式加一次白。
+    """
+    raw = str(text or "")
+    if "白名单" not in raw:
+        return ""
+    m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", raw)
+    if not m:
+        return ""
+    ip = m.group(1)
+    return ip if all(0 <= int(p) <= 255 for p in ip.split(".")) else ""
+
+
+def add_whitelist(cfg: dict, ip: str) -> bool:
+    """只加白、不提取（extract=0），给自愈重试用。"""
+    if not ip:
+        return False
+    url = build_url(cfg, phone=cfg.get("phone"), ip=ip, whitelist=1, extract=0)
+    try:
+        resp = httpx.get(url, timeout=FETCH_TIMEOUT, follow_redirects=True)
+        data = json.loads(resp.text) if resp.text.strip().startswith("{") else {}
+        wl = data.get("whitelist") if isinstance(data, dict) else None
+        ok = bool(wl.get("ok")) if isinstance(wl, dict) else str(data.get("code")) == "0"
+        if ok:
+            logger.info("已把 %s 加入代理白名单", ip)
+        else:
+            logger.warning("把 %s 加白失败：%s", ip, _failure_reason(resp.text))
+        return ok
+    except Exception as exc:
+        logger.warning("把 %s 加白异常：%s", ip, exc)
+        return False
+
+
 def _failure_reason(text: str) -> str:
     raw = str(text or "").strip()
     if raw.startswith("{"):
@@ -179,8 +215,11 @@ def list_accounts(cfg: dict | None = None) -> list[dict]:
     return out
 
 
-def fetch_proxy(area: str, cfg: dict | None = None) -> str | None:
-    """返回可直接交给 Playwright 的 server 串，失败返回 None 由调用方走直连。"""
+def fetch_proxy(area: str, cfg: dict | None = None, reasons: list | None = None) -> str | None:
+    """返回可直接交给 Playwright 的 server 串，失败返回 None 由调用方走直连。
+
+    传入 reasons 时会把最后一次失败原因塞进去，方便设置页把真实原因显示给用户。
+    """
     cfg = cfg or load_proxy()
     if not cfg.get("enabled") or not cfg.get("api_key") or not cfg.get("phone"):
         return None
@@ -190,6 +229,8 @@ def fetch_proxy(area: str, cfg: dict | None = None) -> str | None:
         return None
 
     url = build_url(cfg, phone=cfg["phone"], area=code, minute=MINUTE)
+    healed = False
+    last_reason = ""
     for attempt in range(1, RETRIES + 1):
         try:
             resp = httpx.get(url, timeout=FETCH_TIMEOUT, follow_redirects=True)
@@ -198,13 +239,24 @@ def fetch_proxy(area: str, cfg: dict | None = None) -> str | None:
                 server = f"{PROTOCOL}://{hit}"
                 logger.info("已提取代理 IP %s 地区=%s 第%s次", hit, area_label(code), attempt)
                 return server
+            last_reason = _failure_reason(resp.text)
             logger.warning(
                 "提取代理失败（第%s/%s次）地区=%s HTTP=%s %s",
-                attempt, RETRIES, area_label(code), resp.status_code, _failure_reason(resp.text),
+                attempt, RETRIES, area_label(code), resp.status_code, last_reason,
             )
+            # 报的是「某某 IP 没加白」就照它说的加一次，然后立刻重试，不必等下一轮
+            if not healed:
+                need = whitelist_ip_from_error(resp.text)
+                if need:
+                    healed = True
+                    if add_whitelist(cfg, need):
+                        continue
         except Exception as exc:
+            last_reason = str(exc)
             logger.warning("提取代理异常（第%s/%s次）地区=%s %s", attempt, RETRIES, area_label(code), exc)
         if attempt < RETRIES:
             time.sleep(2)
-    logger.error("提取代理连续 %s 次失败，本次回退直连 地区=%s", RETRIES, area_label(code))
+    logger.error("提取代理连续 %s 次失败，本次回退直连 地区=%s %s", RETRIES, area_label(code), last_reason)
+    if reasons is not None and last_reason:
+        reasons.append(last_reason)
     return None
