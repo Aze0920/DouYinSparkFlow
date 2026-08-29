@@ -128,6 +128,25 @@ class SpaNavTests(unittest.TestCase):
         # 地区表必须先加载，否则下拉渲染成空的
         self.assertIn("await loadRegions();", INDEX)
 
+    def test_add_account_picks_region_before_login(self):
+        """先选地区再选登录方式：登录这一步本身就得从当地 IP 出去。"""
+        for el in ("addProvince", "addCity", "addQrBtn", "addAppBtn", "addCkBtn", "addRegionHint"):
+            self.assertIn(f'id="{el}"', INDEX)
+        self.assertIn("function fillAddRegion", INDEX)
+        self.assertIn("function onAddProvinceChange", INDEX)
+        self.assertIn("function addRegion", INDEX)
+        self.assertIn("function syncAddRegionLock", INDEX)
+        self.assertIn(".add-region", CSS)
+
+    def test_new_account_cannot_login_without_region(self):
+        self.assertIn('toast("请先选择上网地区", "err")', INDEX)
+        self.assertIn('["addQrBtn", "addAppBtn", "addCkBtn"]', INDEX)
+
+    def test_chosen_region_reaches_backend_before_the_browser_opens(self):
+        # 扫码和导入 CK 两条路都要带上地区，否则那次登录就从机房 IP 出去了
+        self.assertEqual(INDEX.count('region: window.__addRegion || ""'), 3)
+        self.assertIn("normalize_area(payload.get(\"region\"))", APP_PY)
+
     def test_proxy_settings_block(self):
         """只让用户填密钥，账号靠「获取账号」拉下拉，其余参数不暴露。"""
         for el in ("pxEnabled", "pxApiKey", "pxPhone", "pxStatus"):

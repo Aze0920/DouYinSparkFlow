@@ -522,15 +522,15 @@ def _account_proxy(username: str, region: str):
     if not str(region or "").strip():
         return None
     try:
-        from webui.proxy import fetch_proxy
+        from webui.proxy import lease_proxy
         from webui.regions import area_label
 
-        server = fetch_proxy(region)
-        if server:
-            logger.info("账号 %s 使用代理 %s（%s）", username, server, area_label(region))
+        lease = lease_proxy(region)
+        if lease:
+            logger.info("账号 %s 使用代理 %s（%s）", username, lease.server, area_label(region))
         else:
             logger.warning("账号 %s 没能拿到代理 IP，本次走直连", username)
-        return server
+        return lease
     except Exception:
         logger.exception("账号 %s 提取代理出错，本次走直连", username)
         return None
@@ -538,7 +538,8 @@ def _account_proxy(username: str, region: str):
 
 def do_user_task(username, cookies, targets, message_template="", unique_id="", region=""):
     user_id_dict = {}
-    proxy = _account_proxy(username, region)
+    lease = _account_proxy(username, region)
+    proxy = lease.server if lease else None
     playwright, browser = get_browser()
     context = None
     spark_seen: dict[str, dict] = {}
@@ -629,6 +630,13 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
         for target_symbol, friend_name in scroll_and_select_user(
             page, username, targets, user_id_dict, item_loc, list_loc, scope
         ):
+            # 代理到点就收手，剩下的好友留给下次。硬撑只会在断网里空转，已发出去的还得算数
+            if lease and lease.expired():
+                logger.warning(
+                    "账号 %s 代理已用满 %s 分钟，本次发到第 %s 个为止，剩下的等下次",
+                    username, lease.minutes, len(sent),
+                )
+                break
             # 找好友的过程本身就在滚列表，每滚到一个人就把当前视口的天数一起收了
             harvest_sparks(page)
             logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
@@ -670,6 +678,9 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                 context.close()
             except Exception:
                 pass
+        # 上下文关掉才算真的不再用这条 IP，所以登记要排在关闭之后
+        if lease:
+            lease.release(f"账号 {username}")
         try:
             browser.close()
         except Exception:

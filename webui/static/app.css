@@ -966,6 +966,8 @@ body.spark-locked .spark-action {
   gap: 10px;
 }
 .region-selects select { margin: 0; }
+.add-region { margin: 4px 0 14px; text-align: left; }
+.add-region-hint { margin: 2px 0 0; font-size: 12px; line-height: 1.6; }
 .settings-note {
   grid-column: 1 / -1;
   margin: 0;

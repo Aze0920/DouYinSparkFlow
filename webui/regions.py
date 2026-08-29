@@ -548,6 +548,23 @@ def normalize_area(code) -> str:
     return text if text in _NAMES else ""
 
 
+def region_of(tasks, unique_id) -> str:
+    """从账号列表里取这个号的上网地区。
+
+    凡是拿账号 Cookie 开浏览器的入口（续火花、检测、选好友、保活）都得按它取代理，
+    漏掉任何一个，那次访问就会从机房 IP 出去，正好是异地登录。
+    """
+    uid = str(unique_id or "").strip()
+    if not uid:
+        return ""
+    for task in tasks or []:
+        if not isinstance(task, dict):
+            continue
+        if str(task.get("unique_id") or "").strip() == uid:
+            return normalize_area(task.get("region"))
+    return ""
+
+
 def area_label(code) -> str:
     """给界面和日志用的可读名字，例如「河北省 · 石家庄市」。"""
     text = normalize_area(code)

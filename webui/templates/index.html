@@ -58,11 +58,23 @@
   <div id="addAccountModal" class="modal-mask hidden">
     <div class="modal-card">
       <h3 id="addAccountTitle">添加账号</h3>
-      <p class="sub">扫码登录、手机打开抖音，或粘贴 Cookie JSON。登录后会自动抓取昵称和抖音号。</p>
+      <p class="sub">先选这个号平时上网的地区，登录过程就会从当地 IP 出去，再挑一种登录方式。</p>
+      <div class="region-box add-region">
+        <span class="region-label">上网地区</span>
+        <div class="region-selects">
+          <select id="addProvince" class="region-province" onchange="onAddProvinceChange()">
+            <option value="">请选择省份</option>
+          </select>
+          <select id="addCity" class="region-city">
+            <option value="">全省随机</option>
+          </select>
+        </div>
+        <p class="sub add-region-hint" id="addRegionHint">选错会被当成异地登录。IP 有 10 分钟有效期，请选好后尽快完成登录。</p>
+      </div>
       <div class="choice-stack">
-        <button class="btn-primary" type="button" onclick="chooseAddAccount('qr')">扫码登录</button>
-        <button class="btn-ghost" type="button" onclick="chooseAddAccount('app')">打开抖音 App（仅手机）</button>
-        <button class="btn-ghost" type="button" onclick="chooseAddAccount('ck')">粘贴 Cookie JSON</button>
+        <button class="btn-primary" type="button" id="addQrBtn" onclick="chooseAddAccount('qr')">扫码登录</button>
+        <button class="btn-ghost" type="button" id="addAppBtn" onclick="chooseAddAccount('app')">打开抖音 App（仅手机）</button>
+        <button class="btn-ghost" type="button" id="addCkBtn" onclick="chooseAddAccount('ck')">粘贴 Cookie JSON</button>
       </div>
       <div class="modal-actions">
         <button class="btn-ghost" type="button" onclick="closeAddAccount()">取消</button>
@@ -2162,6 +2174,8 @@
         cookie_source: data.cookie_source || "qr",
         cookie_status: "ok",
         avatar: data.avatar || "",
+        // 登录前选的地区，登录成功就跟着账号存下来
+        region: window.__addRegion || "",
       };
       const idx = Number(data.replace_index);
       if (Number.isInteger(idx) && idx >= 0 && idx < window.__accounts.length) {
@@ -2263,9 +2277,15 @@
       resetLiveCard();
       $("qrModal").classList.remove("hidden");
       try {
+        // 地区要在开浏览器之前送到，登录这一步本身就得从当地 IP 出去
+        const relogin = (window.__accounts || [])[index] || {};
         await api("/api/douyin/login/start", {
           method: "POST",
-          body: JSON.stringify({ replace_index: index }),
+          body: JSON.stringify({
+            replace_index: index,
+            unique_id: relogin.unique_id || "",
+            region: window.__addRegion || "",
+          }),
         });
         await pollQrLogin();
         qrTimer = setInterval(pollQrLogin, 1000);
@@ -2292,20 +2312,70 @@
         toast("当前卡密最多添加 " + ((current && current.max_accounts) || 1) + " 个账号", "err");
         return;
       }
+      const isNew = window.__addReplaceIndex < 0;
       if ($("addAccountTitle")) {
-        $("addAccountTitle").textContent = window.__addReplaceIndex >= 0 ? "更新登录" : "添加账号";
+        $("addAccountTitle").textContent = isNew ? "添加账号" : "更新登录";
       }
+      // 老号带出它自己的地区；新号必须先选，否则这次登录就从机房 IP 出去了
+      const known = isNew ? "" : ((window.__accounts || [])[window.__addReplaceIndex] || {}).region || "";
+      fillAddRegion(known);
       $("addAccountModal").classList.remove("hidden");
+    }
+    function fillAddRegion(region) {
+      const list = window.__regions || [];
+      const province = provinceOf(region);
+      const pcode = province ? province.code : "";
+      const p = $("addProvince");
+      const c = $("addCity");
+      if (!p || !c) return;
+      p.innerHTML = `<option value="">请选择省份</option>` +
+        list.map((r) => `<option value="${escapeAttr(r.code)}"${r.code === pcode ? " selected" : ""}>${escapeHtml(r.name)}</option>`).join("");
+      onAddProvinceChange();
+      if (region && region !== pcode) c.value = region;
+    }
+    function onAddProvinceChange() {
+      const p = $("addProvince");
+      const c = $("addCity");
+      if (!p || !c) return;
+      const cities = (provinceOf(p.value) || {}).cities || [];
+      c.innerHTML = `<option value="">全省随机</option>` +
+        cities.map((x) => `<option value="${escapeAttr(x.code)}">${escapeHtml(x.name)}</option>`).join("");
+      c.value = "";
+      syncAddRegionLock();
+    }
+    function addRegion() {
+      const p = $("addProvince");
+      const c = $("addCity");
+      if (!p) return "";
+      return (c && c.value) || p.value || "";
+    }
+    function syncAddRegionLock() {
+      // 新号没选地区就不让往下走；老号本来可能就没设，不强求
+      const need = window.__addReplaceIndex < 0 && !addRegion();
+      ["addQrBtn", "addAppBtn", "addCkBtn"].forEach((id) => {
+        if ($(id)) $(id).disabled = need;
+      });
+      if ($("addRegionHint")) {
+        $("addRegionHint").textContent = need
+          ? "请先选省份，选好才能开始登录。"
+          : "选错会被当成异地登录。IP 有 10 分钟有效期，请选好后尽快完成登录。";
+      }
     }
     function closeAddAccount() {
       $("addAccountModal").classList.add("hidden");
     }
     function chooseAddAccount(kind) {
       const idx = Number.isInteger(window.__addReplaceIndex) ? window.__addReplaceIndex : -1;
+      if (idx < 0 && !addRegion()) {
+        toast("请先选择上网地区", "err");
+        return;
+      }
       if (kind === "app" && !isPhoneClient()) {
         notice("请用手机打开", "「打开抖音 App」只能在手机浏览器里跳转到抖音。电脑请用扫码；请用手机打开本站后再点这个按钮。");
         return;
       }
+      // 记下来：登录时要按它取代理，登录成功后还要写进账号
+      window.__addRegion = addRegion();
       closeAddAccount();
       if (kind === "ck") {
         $("ckJson").value = "";
@@ -2336,12 +2406,18 @@
         btn.textContent = "正在抓取资料…";
       }
       try {
+        const ckIdx = Number.isInteger(window.__addReplaceIndex) ? window.__addReplaceIndex : -1;
+        const ckTarget = (window.__accounts || [])[ckIdx] || {};
         const data = await api("/api/account/import-cookie", {
           method: "POST",
-          body: JSON.stringify({ cookies: raw }),
+          body: JSON.stringify({
+            cookies: raw,
+            unique_id: ckTarget.unique_id || "",
+            region: window.__addRegion || "",
+          }),
         });
         qrApplying = false;
-        qrReplaceIndex = Number.isInteger(window.__addReplaceIndex) ? window.__addReplaceIndex : -1;
+        qrReplaceIndex = ckIdx;
         await applyQrSuccess({
           username: data.username,
           unique_id: data.unique_id,

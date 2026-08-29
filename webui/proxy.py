@@ -30,6 +30,59 @@ FETCH_TIMEOUT = 30
 PROTOCOL = "http"
 MINUTE = 10
 RETRIES = 3
+# 提前这么多秒收手。IP 是掐着点失效的，等真到点再停，最后那几步已经在断网里跑了。
+LEASE_GRACE = 40
+
+
+class ProxyExpired(RuntimeError):
+    """代理 IP 用满时长了。"""
+
+
+class ProxyLease:
+    """一条限时代理 IP，连同它的到期时间。
+
+    接口没有「释放」这个动作，IP 到点自己失效，所以只能由我们主动收手：
+    一条过期的 IP 不是变慢，是彻底没网，抖音那边看到的就是操作做到一半断了。
+    """
+
+    def __init__(self, server: str, minutes: int = MINUTE, grace: int = LEASE_GRACE):
+        self.server = server
+        self.minutes = minutes
+        self.started = time.time()
+        self.deadline = self.started + max(30, minutes * 60 - grace)
+
+    def used(self) -> float:
+        return time.time() - self.started
+
+    def remaining(self) -> float:
+        return self.deadline - time.time()
+
+    def expired(self) -> bool:
+        return self.remaining() <= 0
+
+    def check(self, what: str = "") -> None:
+        """在循环里调用。到点就抛出，让调用方顺着已有的错误处理收拾场面。"""
+        if self.expired():
+            raise ProxyExpired(
+                f"代理 IP {self.server} 已用满 {self.minutes} 分钟，{what or '本次操作'}中断"
+            )
+
+    def release(self, what: str = "") -> None:
+        """用完立刻登记一笔。IP 收不回来，但浏览器上下文必须当场关掉，别再往这条 IP 上发请求。"""
+        logger.info(
+            "用完代理 %s 耗时 %.0f 秒（额度 %s 分钟）%s",
+            self.server, self.used(), self.minutes, what,
+        )
+
+
+def lease_proxy(area: str, cfg: dict | None = None, reasons: list | None = None) -> ProxyLease | None:
+    """取一条 IP 并带上它的有效期。返回 None 表示这次走直连。"""
+    server = fetch_proxy(area, cfg, reasons)
+    if not server:
+        return None
+    lease = ProxyLease(server)
+    logger.info("代理 %s 有效期 %s 分钟，%.0f 秒后必须收手", server, MINUTE, lease.remaining())
+    return lease
 
 
 def default_proxy() -> dict:

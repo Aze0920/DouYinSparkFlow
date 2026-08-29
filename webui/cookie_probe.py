@@ -119,16 +119,17 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
     playwright = None
     browser = None
     context = None
+    lease = None
     try:
         logger.info("开始检测 Cookie 共 %s 条 unique_id=%s", len(cookies), unique_id or "-")
-        proxy = None
         if str(region or "").strip():
             try:
-                from webui.proxy import fetch_proxy
+                from webui.proxy import lease_proxy
 
-                proxy = fetch_proxy(region)
+                lease = lease_proxy(region)
             except Exception:
                 logger.exception("检测 Cookie 时提取代理失败，改走直连")
+        proxy = lease.server if lease else None
         playwright, browser = get_browser()
         state = load_state_path(unique_id)
         try:
@@ -218,4 +219,7 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
                 playwright.stop()
         except Exception:
             pass
+        # 浏览器全关掉才算真的不再用这条 IP
+        if lease:
+            lease.release(f"检测 {unique_id or '-'}")
         _probe_lock.release()

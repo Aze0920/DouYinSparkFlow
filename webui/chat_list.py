@@ -587,7 +587,9 @@ def fresh_spark_days(account: dict) -> dict:
     return merged
 
 
-def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force: bool = False) -> dict[str, Any]:
+def list_conversations(
+    cookies: list[dict[str, Any]], unique_id: str = "", force: bool = False, region: str = ""
+) -> dict[str, Any]:
     account_id = str(unique_id or "").strip()
     if account_id and not force:
         cached = load_chats(account_id)
@@ -606,6 +608,7 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
     playwright = None
     browser = None
     context = None
+    lease = None
     api_rows: list[dict] = []
     try:
         from core.browser import make_context
@@ -619,8 +622,23 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
             _wait_locator,
         )
 
+        if str(region or "").strip():
+            try:
+                from webui.proxy import lease_proxy
+
+                lease = lease_proxy(region)
+            except Exception:
+                logger.exception("读会话列表时提取代理失败，改走直连")
+        proxy = lease.server if lease else None
         playwright, browser = get_browser()
-        context = make_context(browser, storage_state=load_state_path(account_id), cookies=cookies)
+        state = load_state_path(account_id)
+        try:
+            context = make_context(browser, storage_state=state, cookies=cookies, proxy=proxy)
+        except Exception:
+            if not proxy:
+                raise
+            logger.exception("用代理建上下文失败，改走直连")
+            context = make_context(browser, storage_state=state, cookies=cookies)
 
         def on_response(response):
             url = str(getattr(response, "url", "") or "")
@@ -686,6 +704,10 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
         seen_dom = _collect_dom(page)
         stagnant = 0
         for _ in range(28):
+            # 代理到点就别再滚了，已经扫到的照常返回
+            if lease and lease.expired():
+                logger.warning("代理已用满 %s 分钟，会话列表滚到这儿为止", lease.minutes)
+                break
             before = {(row.get("name"), row.get("spark_days")) for row in seen_dom}
             moved = False
             try:
@@ -803,4 +825,7 @@ def list_conversations(cookies: list[dict[str, Any]], unique_id: str = "", force
                 playwright.stop()
         except Exception:
             pass
+        # 浏览器全关掉才算真的不再用这条 IP
+        if lease:
+            lease.release(f"选好友 {account_id or '-'}")
         _probe_lock.release()

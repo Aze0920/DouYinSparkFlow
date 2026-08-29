@@ -19,7 +19,7 @@ from webui import keepalive
 from webui.origin import public_origin, split_host_port
 from webui.proxy import fetch_proxy, load_proxy, public_proxy, save_proxy
 from webui.proxy import list_accounts as list_proxy_accounts_api
-from webui.regions import area_label, normalize_area, region_tree
+from webui.regions import area_label, normalize_area, region_of, region_tree
 from webui.legal_docs import (
     PRIVACY_HTML,
     PRIVACY_LEAD,
@@ -1780,7 +1780,7 @@ def check_account_cookie(request: Request, payload: dict | None = None):
         cookies = parse_cookie_payload(raw)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    result = probe_cookies(cookies, unique_id=unique_id)
+    result = probe_cookies(cookies, unique_id=unique_id, region=region_of(read_tasks(env), unique_id))
     if not result.get("ok"):
         raise HTTPException(
             status_code=409 if "稍后再试" in (result.get("message") or "") else 500,
@@ -1865,6 +1865,7 @@ def list_account_conversations(request: Request, payload: dict | None = None):
         cookies,
         unique_id=unique_id,
         force=bool(payload.get("force")),
+        region=region_of(read_tasks(env), unique_id),
     )
     if not result.get("ok"):
         raise HTTPException(
@@ -1919,7 +1920,9 @@ def import_account_cookie(request: Request, payload: dict | None = None):
         cookies = parse_cookie_payload(payload.get("cookies"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    result = probe_cookies(cookies)
+    # 新号在导入前就选好了地区，所以以本次选择为准；没传才回退到账号存的
+    region = normalize_area(payload.get("region")) or region_of(read_tasks(load_env()), payload.get("unique_id"))
+    result = probe_cookies(cookies, region=region)
     if not result.get("ok"):
         raise HTTPException(
             status_code=409 if "稍后再试" in (result.get("message") or "") else 500,
@@ -2087,8 +2090,13 @@ def douyin_login_start(request: Request, payload: dict | None = None):
     except (TypeError, ValueError):
         replace_index = -1
     user = current_user(request) or {}
-    logger.info("开始抖音扫码登录 user=%s replace_index=%s", user.get("username"), replace_index)
-    return {"ok": True, **start_qr_login(replace_index)}
+    # 新号在登录前就选好了地区，所以以本次选择为准；没传才回退到账号存的
+    region = normalize_area(payload.get("region")) or region_of(read_tasks(load_env()), payload.get("unique_id"))
+    logger.info(
+        "开始抖音扫码登录 user=%s replace_index=%s 地区=%s",
+        user.get("username"), replace_index, area_label(region) or "未设置（直连）",
+    )
+    return {"ok": True, **start_qr_login(replace_index, region=region)}
 
 
 @app.get("/api/douyin/login/status")

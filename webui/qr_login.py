@@ -1957,9 +1957,43 @@ def _finish_login(page, context, redirect_url: str | None):
     return _has_session(context)
 
 
-def _worker(replace_index: int):
+def _login_proxy(region: str):
+    """设了地区的号，登录也要从那个地区出去，否则这次登录本身就是异地登录。"""
+    if not str(region or "").strip():
+        return None
+    try:
+        from webui.proxy import lease_proxy
+        from webui.regions import area_label
+
+        lease = lease_proxy(region)
+        if lease:
+            logger.info("扫码登录使用代理 %s（%s）", lease.server, area_label(region))
+        else:
+            logger.warning("扫码登录没能拿到代理 IP，本次走直连 地区=%s", area_label(region))
+        return lease
+    except Exception:
+        logger.exception("扫码登录提取代理出错，本次走直连")
+        return None
+
+
+def _login_context(browser, proxy=None):
+    kwargs = {"user_agent": UA, "locale": "zh-CN", "viewport": {"width": 1280, "height": 860}}
+    if proxy:
+        kwargs["proxy"] = {"server": str(proxy)} if isinstance(proxy, str) else dict(proxy)
+    try:
+        return browser.new_context(**kwargs)
+    except Exception:
+        if not proxy:
+            raise
+        logger.exception("扫码登录用代理建上下文失败，改走直连")
+        kwargs.pop("proxy", None)
+        return browser.new_context(**kwargs)
+
+
+def _worker(replace_index: int, region: str = ""):
     playwright = None
     browser = None
+    lease = None
     try:
         _set(
             status="loading",
@@ -1991,14 +2025,11 @@ def _worker(replace_index: int):
             live_h=0,
         )
         logger.info("扫码线程启动 replace_index=%s", replace_index)
+        lease = _login_proxy(region)
         logger.info("正在启动浏览器")
         playwright, browser = get_browser()
         logger.info("浏览器已启动")
-        context = browser.new_context(
-            user_agent=UA,
-            locale="zh-CN",
-            viewport={"width": 1280, "height": 860},
-        )
+        context = _login_context(browser, lease.server if lease else None)
         context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
         context.add_init_script(
             "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"
@@ -2074,6 +2105,10 @@ def _worker(replace_index: int):
         )
 
         deadline = time.time() + 180
+        # 用户可能对着二维码发呆，但 IP 到点就断网，宁可提前收掉让他重来
+        if lease and lease.deadline < deadline:
+            deadline = lease.deadline
+            logger.info("等待扫码的时间按代理有效期缩到 %.0f 秒", deadline - time.time())
         last_shot = 0
         last_cookie_log = 0
         last_live = 0
@@ -2293,6 +2328,10 @@ def _worker(replace_index: int):
             if _stop.is_set():
                 _set(status="idle", message="", qr_base64="")
                 return
+            if lease and lease.expired():
+                logger.warning("代理已用满 %s 分钟，收掉这次扫码", lease.minutes)
+                _set(status="expired", message=f"代理 IP 只有 {lease.minutes} 分钟有效期，已超时。请重新点登录，会换一条新 IP")
+                return
             _set(status="expired", message="身份验证超时，请刷新二维码重试" if _status() == "verify" else "等待扫码超时，请刷新二维码")
             return
 
@@ -2370,11 +2409,14 @@ def _worker(replace_index: int):
                 playwright.stop()
         except Exception:
             pass
+        # 浏览器关掉才算真的不再用这条 IP
+        if lease:
+            lease.release("扫码登录")
 
 
-def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
+def start_qr_login(replace_index: int = -1, region: str = "") -> dict[str, Any]:
     global _thread
-    logger.info("准备启动扫码会话 replace_index=%s", replace_index)
+    logger.info("准备启动扫码会话 replace_index=%s 地区=%s", replace_index, region or "未设置（直连）")
     _stop.set()
     if _thread and _thread.is_alive():
         logger.info("等待上一次扫码浏览器退出")
@@ -2412,7 +2454,7 @@ def start_qr_login(replace_index: int = -1) -> dict[str, Any]:
         live_w=0,
         live_h=0,
     )
-    _thread = threading.Thread(target=_worker, args=(replace_index,), daemon=True)
+    _thread = threading.Thread(target=_worker, args=(replace_index, region), daemon=True)
     _thread.start()
     return snapshot()
 
