@@ -958,6 +958,32 @@ body.spark-locked .spark-action {
 .dy-avatar.hidden, .dy-avatar-fallback.hidden { display: none; }
 .target-box { display: grid; gap: 8px; }
 .target-label { color: var(--muted); font-size: 13px; }
+.region-box { display: grid; gap: 8px; }
+.region-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.region-hint { font-size: 12px; font-style: normal; opacity: .75; }
+.region-selects {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.region-selects select { margin: 0; }
+.settings-note {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.settings-px-url { grid-column: span 2; }
+@media (max-width: 560px) {
+  .region-selects { grid-template-columns: 1fr; }
+}
 .target-friend-list {
   display: grid;
   gap: 6px;

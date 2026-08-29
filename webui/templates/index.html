@@ -596,6 +596,22 @@
               <label>同时处理账号数<input id="maxTaskThreads" type="number" min="1" max="32" value="10" /></label>
             </div>
             <div class="settings-row">
+              <label class="check-line"><input id="pxEnabled" type="checkbox" onchange="syncSettingsVisibility()" /> 启用住宅代理 IP <span class="ck-status" id="pxStatus">未配置</span></label>
+              <label class="settings-if-px settings-px-url">提取 API 链接<input id="pxApiUrl" placeholder="https://域名/extract.php?key=密钥&phone=手机号" autocomplete="off" /></label>
+              <label class="settings-if-px">协议
+                <select id="pxProtocol">
+                  <option value="http">HTTP</option>
+                  <option value="socks5">SOCKS5</option>
+                </select>
+              </label>
+              <label class="settings-if-px">时长（分钟）<input id="pxMinute" type="number" min="1" max="120" value="10" /></label>
+              <label class="settings-if-px">失败重试<input id="pxRetries" type="number" min="1" max="5" value="3" /></label>
+              <button class="btn-ghost settings-row-btn settings-if-px" type="button" onclick="testProxySettings()">测试提取</button>
+            </div>
+            <div class="settings-row settings-if-px">
+              <p class="sub settings-note">只给设置了「上网地区」的账号用代理，没设地区的一律直连。地区要和这个号平时上网的城市一致，否则抖音会当成异地登录。续火花跑完 11-13 小时后会自动做一次登录态保活。</p>
+            </div>
+            <div class="settings-row">
               <label class="check-line"><input id="wpEnabled" type="checkbox" onchange="syncSettingsVisibility()" /> 启用 WxPusher <span class="ck-status" id="wpStatus">未配置</span></label>
               <label class="settings-if-wp">appToken<input id="wpAppToken" placeholder="AT_ 开头" autocomplete="off" /></label>
               <label class="check-line settings-if-wp"><input id="wpAllowUnbind" type="checkbox" checked /> 允许用户自行解绑微信</label>
@@ -1312,6 +1328,67 @@
       const el = node && node.querySelector(".targets-json");
       if (el) el.value = JSON.stringify(names || []);
     }
+    function provinceOf(code) {
+      const list = window.__regions || [];
+      for (const p of list) {
+        if (p.code === code) return p;
+        if ((p.cities || []).some((c) => c.code === code)) return p;
+      }
+      return null;
+    }
+    function regionFieldHtml(region, index, operate) {
+      const list = window.__regions || [];
+      const province = provinceOf(region);
+      const pcode = province ? province.code : "";
+      const cities = province ? province.cities || [] : [];
+      const dis = operate ? "" : "disabled";
+      const opts = (rows, current) =>
+        rows.map((r) => `<option value="${escapeAttr(r.code)}"${r.code === current ? " selected" : ""}>${escapeHtml(r.name)}</option>`).join("");
+      return `<div class="region-box">
+        <span class="region-label">上网地区
+          <em class="region-hint">这个号平时在哪上网就选哪，选错会被当成异地登录；不选=不用代理</em>
+        </span>
+        <div class="region-selects">
+          <select class="region-province spark-action" onchange="onProvinceChange(${index})" ${dis}>
+            <option value="">不设置（直连）</option>
+            ${opts(list, pcode)}
+          </select>
+          <select class="region-city spark-action" ${dis}>
+            <option value="">全省随机</option>
+            ${opts(cities, region === pcode ? "" : region)}
+          </select>
+        </div>
+        <input type="hidden" class="region-code" value="${escapeAttr(region)}" />
+      </div>`;
+    }
+    function onProvinceChange(index) {
+      const node = accountNode(index);
+      if (!node) return;
+      const pcode = node.querySelector(".region-province").value;
+      const province = provinceOf(pcode);
+      const city = node.querySelector(".region-city");
+      const cities = province ? province.cities || [] : [];
+      city.innerHTML = `<option value="">全省随机</option>` +
+        cities.map((c) => `<option value="${escapeAttr(c.code)}">${escapeHtml(c.name)}</option>`).join("");
+      city.value = "";
+    }
+    function readRegion(node) {
+      const p = node.querySelector(".region-province");
+      const c = node.querySelector(".region-city");
+      if (!p) return (node.querySelector(".region-code") && node.querySelector(".region-code").value) || "";
+      // 选了市就用市码（更精确），只选省就用省码走全省随机
+      return (c && c.value) || p.value || "";
+    }
+    async function loadRegions() {
+      if (window.__regions) return window.__regions;
+      try {
+        const data = await api("/api/regions");
+        window.__regions = data.provinces || [];
+      } catch (e) {
+        window.__regions = [];
+      }
+      return window.__regions;
+    }
     function accountCard(data, index) {
       const name = data.username || "抖音账号";
       const uid = data.unique_id || "";
@@ -1347,6 +1424,7 @@
         <label>每天发送时间
           <input class="cron-time spark-action" type="time" name="cron-${index}-${escapeAttr(uid)}" autocomplete="off" value="${escapeAttr(cron)}" ${operate ? "" : "disabled"} />
         </label>
+        ${regionFieldHtml(data.region || "", index, operate)}
         <div class="target-box">
           <span class="target-label">目标好友</span>
           <div class="target-friend-list">${targetListHtml(data.targets || [], uid, index, operate, data)}</div>
@@ -1422,6 +1500,8 @@
       renderDashboard();
     }
     async function loadConfig() {
+      // 地区表要先到位，否则账号卡片上的省市下拉会渲染成空的
+      await loadRegions();
       const cfg = await api("/api/config");
       if ($("maxTaskThreads")) $("maxTaskThreads").value = String(cfg.max_task_threads || 10);
       window.__defaultCron = "09:00";
@@ -1452,6 +1532,7 @@
         targets: readTargetsJson(node),
         cron_hour: t.hour,
         cron_minute: t.minute,
+        region: readRegion(node),
         message_template: (node.querySelector(".message-template") && node.querySelector(".message-template").value) || "",
         cookie_source: (node.querySelector(".cookie-source") && node.querySelector(".cookie-source").value) || "",
         cookie_status: (node.querySelector(".cookie-status") && node.querySelector(".cookie-status").value) || "",
@@ -2363,6 +2444,7 @@
         await saveInviteSettings(true);
         await saveConfig(true, false);
         await saveNotifySettings(true);
+        await saveProxySettings(true);
         toast("设置已保存");
       } catch (err) {
         toast(err.message, "err");
@@ -2373,6 +2455,8 @@
       const wpOn = !!( $("wpEnabled") && $("wpEnabled").checked );
       const nxOn = !!( $("nxEnabled") && $("nxEnabled").checked );
       const wxOn = !!( $("wxEnabled") && $("wxEnabled").checked );
+      const pxOn = !!( $("pxEnabled") && $("pxEnabled").checked );
+      document.querySelectorAll(".settings-if-px").forEach((el) => el.classList.toggle("hidden", !pxOn));
       document.querySelectorAll(".settings-if-invite").forEach((el) => el.classList.toggle("hidden", !inviteOn));
       document.querySelectorAll(".settings-if-wp").forEach((el) => el.classList.toggle("hidden", !wpOn));
       document.querySelectorAll(".settings-if-nx").forEach((el) => el.classList.toggle("hidden", !nxOn));
@@ -2951,6 +3035,54 @@
         const invite = await api("/api/settings/invite");
         fillInviteSettings(invite);
       } catch (e) {}
+      try {
+        fillProxySettings(await api("/api/settings/proxy"));
+      } catch (e) {}
+    }
+    function fillProxySettings(data) {
+      data = data || {};
+      if ($("pxEnabled")) $("pxEnabled").checked = !!data.enabled;
+      if ($("pxApiUrl")) $("pxApiUrl").value = data.api_url || "";
+      if ($("pxProtocol")) $("pxProtocol").value = data.protocol === "socks5" ? "socks5" : "http";
+      if ($("pxMinute")) $("pxMinute").value = String(data.minute || 10);
+      if ($("pxRetries")) $("pxRetries").value = String(data.retries || 3);
+      if ($("pxStatus")) {
+        const ready = !!data.api_url_set;
+        $("pxStatus").textContent = ready ? (data.enabled ? "已启用" : "已配置未启用") : "未配置";
+        $("pxStatus").className = "ck-status " + (ready && data.enabled ? "ck-ok" : "ck-unknown");
+      }
+      window.__proxyMasked = data.api_url || "";
+      syncSettingsVisibility();
+    }
+    async function saveProxySettings(silent) {
+      const typed = ($("pxApiUrl") && $("pxApiUrl").value.trim()) || "";
+      const data = await api("/api/settings/proxy", {
+        method: "POST",
+        body: JSON.stringify({
+          enabled: !!($("pxEnabled") && $("pxEnabled").checked),
+          // 没改过就回传的是打码链接，后端认出后会保留原密钥
+          api_url: typed === window.__proxyMasked ? "" : typed,
+          protocol: ($("pxProtocol") && $("pxProtocol").value) || "http",
+          minute: parseQuotaNumber($("pxMinute"), 10),
+          retries: parseQuotaNumber($("pxRetries"), 3),
+        }),
+      });
+      fillProxySettings(data);
+      if (!silent) toast("代理设置已保存");
+      return data;
+    }
+    async function testProxySettings() {
+      try {
+        await saveProxySettings(true);
+        toast("正在提取 IP，请稍候…");
+        const data = await api("/api/settings/proxy/test", {
+          method: "POST",
+          body: JSON.stringify({ area: "110100" }),
+        });
+        toast(`提取成功：${data.server}（${data.area_label}，${data.seconds}s）`);
+      } catch (err) {
+        toast(err.message, "err");
+      }
     }
     function fillInviteSettings(data) {
       if ($("inviteAdminEnabled")) $("inviteAdminEnabled").checked = data.enabled !== false;

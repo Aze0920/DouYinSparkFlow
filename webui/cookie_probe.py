@@ -112,7 +112,7 @@ def parse_cookie_payload(raw: Any) -> list[dict[str, Any]]:
     return rows
 
 
-def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "") -> dict[str, Any]:
+def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: str = "") -> dict[str, Any]:
     if not _probe_lock.acquire(blocking=False):
         return {"ok": False, "valid": False, "message": "正在检测另一个账号，请稍后再试"}
 
@@ -121,8 +121,23 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "") -> dict[st
     context = None
     try:
         logger.info("开始检测 Cookie 共 %s 条 unique_id=%s", len(cookies), unique_id or "-")
+        proxy = None
+        if str(region or "").strip():
+            try:
+                from webui.proxy import fetch_proxy
+
+                proxy = fetch_proxy(region)
+            except Exception:
+                logger.exception("检测 Cookie 时提取代理失败，改走直连")
         playwright, browser = get_browser()
-        context = make_context(browser, storage_state=load_state_path(unique_id), cookies=cookies)
+        state = load_state_path(unique_id)
+        try:
+            context = make_context(browser, storage_state=state, cookies=cookies, proxy=proxy)
+        except Exception:
+            if not proxy:
+                raise
+            logger.exception("用代理建上下文失败，改走直连")
+            context = make_context(browser, storage_state=state, cookies=cookies)
 
         page = context.new_page()
         profile = extract_profile(page, context, allow_stop=False)

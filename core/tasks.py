@@ -517,14 +517,41 @@ def _send_chat_message(page, message: str, send_records=None):
         raise RuntimeError("消息可能没发出去：回车后输入框内容没有被清空")
 
 
-def do_user_task(username, cookies, targets, message_template="", unique_id=""):
+def _account_proxy(username: str, region: str):
+    """没设地区的账号返回 None 走直连，绝不用全国随机 IP 顶替。"""
+    if not str(region or "").strip():
+        return None
+    try:
+        from webui.proxy import fetch_proxy
+        from webui.regions import area_label
+
+        server = fetch_proxy(region)
+        if server:
+            logger.info("账号 %s 使用代理 %s（%s）", username, server, area_label(region))
+        else:
+            logger.warning("账号 %s 没能拿到代理 IP，本次走直连", username)
+        return server
+    except Exception:
+        logger.exception("账号 %s 提取代理出错，本次走直连", username)
+        return None
+
+
+def do_user_task(username, cookies, targets, message_template="", unique_id="", region=""):
     user_id_dict = {}
+    proxy = _account_proxy(username, region)
     playwright, browser = get_browser()
     context = None
     try:
         from webui.session_store import load_state_path, save_state
 
-        context = make_context(browser, storage_state=load_state_path(unique_id), cookies=cookies)
+        state = load_state_path(unique_id)
+        try:
+            context = make_context(browser, storage_state=state, cookies=cookies, proxy=proxy)
+        except Exception:
+            if not proxy:
+                raise
+            logger.exception("账号 %s 用代理建上下文失败，改走直连", username)
+            context = make_context(browser, storage_state=state, cookies=cookies)
         context.set_default_navigation_timeout(config["browserTimeout"])
         context.set_default_timeout(8000)
         page = context.new_page()
@@ -625,6 +652,7 @@ def _run_one_account(user: dict):
         user["targets"],
         user.get("messageTemplate") or "",
         unique_id=str(user.get("unique_id") or ""),
+        region=str(user.get("region") or ""),
     )
     logger.info(f"账号 {username} 任务完成")
 

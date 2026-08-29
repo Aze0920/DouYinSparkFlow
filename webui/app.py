@@ -15,7 +15,10 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
+from webui import keepalive
 from webui.origin import public_origin, split_host_port
+from webui.proxy import fetch_proxy, load_proxy, public_proxy, save_proxy
+from webui.regions import area_label, normalize_area, region_tree
 from webui.legal_docs import (
     PRIVACY_HTML,
     PRIVACY_LEAD,
@@ -353,6 +356,75 @@ def _notify_account_owners(kind: str, title: str, unique_ids=None, extra: str = 
         notify_event(kind, title, body, usernames=[owner], rows=rows)
 
 
+_keepalive_busy = threading.Lock()
+
+
+def _run_keepalive(uid: str) -> None:
+    """带着现有 Cookie 轻量访问一次，让抖音重新签发 sessionid 并存回快照。"""
+    acc = None
+    for item in parse_accounts(load_env()):
+        if str(item.get("unique_id") or "").strip() == uid:
+            acc = item
+            break
+    if acc is None:
+        keepalive.forget(uid)
+        return
+    if not acc.get("cookies_set"):
+        keepalive.mark_checked(uid, False, "账号没有 Cookie")
+        return
+    env = load_env()
+    try:
+        cookies = json.loads(env.get(cookie_key(uid), "") or "[]")
+    except json.JSONDecodeError:
+        keepalive.mark_checked(uid, False, "Cookie 解析失败")
+        return
+    if not cookies:
+        keepalive.mark_checked(uid, False, "账号没有 Cookie")
+        return
+
+    name = str(acc.get("username") or uid)
+    region = str(acc.get("region") or "").strip()
+    logger.info("开始保活账号 %s unique_id=%s 地区=%s", name, uid, area_label(region) or "未设置（直连）")
+    result = probe_cookies(cookies, uid, region)
+    if not result.get("ok") and "正在检测" in str(result.get("message") or ""):
+        logger.info("保活让位给正在进行的检测，稍后重试 unique_id=%s", uid)
+        return
+    ok = bool(result.get("valid"))
+    message = str(result.get("message") or "")
+    keepalive.mark_checked(uid, ok, message)
+    if ok:
+        logger.info("保活成功 账号=%s", name)
+        return
+    logger.warning("保活发现登录态失效 账号=%s %s", name, message)
+    _notify_account_owners("cookie_offline", "抖音登录已失效", [uid], extra="请重新扫码登录，否则续火花会停")
+
+
+def _tick_keepalive() -> None:
+    if _run_state["running"] or _keepalive_busy.locked():
+        return
+    live = [
+        str(acc.get("unique_id") or "").strip()
+        for acc in parse_accounts(load_env())
+        if str(acc.get("unique_id") or "").strip() and acc.get("cookies_set")
+    ]
+    keepalive.ensure_scheduled(live)
+    alive = set(live)
+    due = [uid for uid in keepalive.due_ids() if uid in alive]
+    if not due:
+        return
+
+    def worker():
+        # 一轮只做一个，保活要开浏览器，不能把定时循环拖住
+        with _keepalive_busy:
+            try:
+                _run_keepalive(due[0])
+            except Exception:
+                logger.exception("保活执行失败 unique_id=%s", due[0])
+                keepalive.mark_checked(due[0], False, "保活执行异常")
+
+    threading.Thread(target=worker, daemon=True, name="spark-keepalive").start()
+
+
 def _filter_accounts(user: dict | None, accounts: list) -> list:
     if _is_admin(user):
         return accounts
@@ -378,13 +450,21 @@ def _save_spark_stats(data: dict) -> None:
 def _record_spark_run(unique_ids, ok: bool) -> None:
     wanted = {str(item).strip() for item in (unique_ids or []) if str(item).strip()}
     owners: set[str] = set()
+    ran_ids: list[str] = []
     for acc in parse_accounts(load_env()):
         uid = str(acc.get("unique_id") or "").strip()
         if wanted and uid not in wanted:
             continue
+        if uid:
+            ran_ids.append(uid)
         owner = _account_owner(acc)
         if owner:
             owners.add(owner)
+    # 保活从续火花跑完开始计时，成败都要排，失败的账号更需要复查登录态
+    try:
+        keepalive.schedule_after_task(ran_ids)
+    except Exception:
+        logger.exception("安排保活失败")
     if not owners:
         return
     day = _now_local().strftime("%Y-%m-%d")
@@ -1094,6 +1174,46 @@ def recharge(request: Request, payload: dict | None = None):
     return {"ok": True, "user": public_user(saved)}
 
 
+@app.get("/api/regions")
+def get_regions(request: Request):
+    require_spark(request)
+    return {"ok": True, "provinces": region_tree()}
+
+
+@app.get("/api/settings/proxy")
+def get_proxy_settings(request: Request):
+    require_admin(request)
+    return {"ok": True, **public_proxy()}
+
+
+@app.post("/api/settings/proxy")
+def save_proxy_settings(request: Request, payload: dict | None = None):
+    admin = require_admin(request)
+    data = save_proxy(payload or {})
+    logger.info(
+        "已保存代理设置 admin=%s enabled=%s protocol=%s minute=%s",
+        admin.get("username"), data.get("enabled"), data.get("protocol"), data.get("minute"),
+    )
+    return {"ok": True, **public_proxy(data)}
+
+
+@app.post("/api/settings/proxy/test")
+def test_proxy_settings(request: Request, payload: dict | None = None):
+    require_admin(request)
+    cfg = load_proxy()
+    if not cfg.get("api_url"):
+        raise HTTPException(status_code=400, detail="请先填写提取 API 链接并保存")
+    area = normalize_area((payload or {}).get("area")) or "110100"
+    # 测试要能在没开总开关时也跑通，否则用户没法先验证再启用
+    started = time.time()
+    server = fetch_proxy(area, {**cfg, "enabled": True})
+    cost = round(time.time() - started, 1)
+    if not server:
+        raise HTTPException(status_code=400, detail=f"提取失败（耗时 {cost}s），请检查密钥、套餐余额，以及本机 IP 是否已加白名单")
+    logger.info("代理提取测试成功 area=%s server=%s", area, server)
+    return {"ok": True, "server": server, "area": area, "area_label": area_label(area), "seconds": cost}
+
+
 @app.get("/api/settings/notify")
 def get_notify_settings(request: Request):
     require_admin(request)
@@ -1392,6 +1512,12 @@ def _task_from_account(account: dict, env: dict, existing: dict | None = None) -
         row["message_template"] = str(account.get("message_template") or "").strip()
     elif str(existing.get("message_template") or "").strip():
         row["message_template"] = str(existing.get("message_template") or "").strip()
+    # 非法地区码一律归零：宁可直连，也不能拿它去换一个异地 IP。
+    # 传了 region 就总是写入（含空串），否则合并 existing 时清空操作会被旧值盖回来
+    if "region" in account:
+        row["region"] = normalize_area(account.get("region"))
+    elif str(existing.get("region") or "").strip():
+        row["region"] = str(existing.get("region") or "").strip()
     if source:
         row["cookie_source"] = source
     if status:
@@ -1822,6 +1948,10 @@ def _scheduler_loop():
             tick_expire_reminders()
         except Exception:
             logger.exception("到期提醒失败")
+        try:
+            _tick_keepalive()
+        except Exception:
+            logger.exception("登录态保活失败")
         try:
             if time.time() - _sched_boot < 50:
                 continue

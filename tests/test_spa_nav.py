@@ -115,6 +115,34 @@ class SpaNavTests(unittest.TestCase):
         self.assertIn("function renderUsers", INDEX)
         self.assertIn("USERS_PER_PAGE)", INDEX)
 
+    def test_account_card_has_province_city_selects(self):
+        self.assertIn("function regionFieldHtml", INDEX)
+        self.assertIn("function onProvinceChange", INDEX)
+        self.assertIn("function readRegion", INDEX)
+        self.assertIn("region-province", INDEX)
+        self.assertIn("region-city", INDEX)
+        self.assertIn("不设置（直连）", INDEX)
+        self.assertIn("全省随机", INDEX)
+        self.assertIn("region: readRegion(node)", INDEX)
+        self.assertIn(".region-selects", CSS)
+        # 地区表必须先加载，否则下拉渲染成空的
+        self.assertIn("await loadRegions();", INDEX)
+
+    def test_proxy_settings_block(self):
+        for el in ("pxEnabled", "pxApiUrl", "pxProtocol", "pxMinute", "pxRetries", "pxStatus"):
+            self.assertIn(f'id="{el}"', INDEX)
+        self.assertIn("function fillProxySettings", INDEX)
+        self.assertIn("function saveProxySettings", INDEX)
+        self.assertIn("function testProxySettings", INDEX)
+        self.assertIn("settings-if-px", INDEX)
+        self.assertIn("await saveProxySettings(true);", INDEX)
+
+    def test_masked_proxy_url_is_not_resubmitted_as_real(self):
+        """回显的是打码链接，原样提交会把真密钥冲掉，所以要判等后置空。"""
+        start = INDEX.find("async function saveProxySettings")
+        self.assertGreaterEqual(start, 0)
+        self.assertIn("window.__proxyMasked", INDEX[start:start + 900])
+
     def test_cards_and_users_have_search_boxes(self):
         for input_id, clear_id in (("cardSearch", "cardSearchClear"), ("userSearch", "userSearchClear")):
             self.assertIn(f'id="{input_id}"', INDEX)

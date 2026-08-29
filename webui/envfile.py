@@ -184,6 +184,7 @@ def parse_accounts(env: dict) -> list:
                 "cron_hour": hour,
                 "cron_minute": minute,
                 "message_template": account_message_template(task, env),
+                "region": str(task.get("region") or "").strip(),
                 "cookie_source": str(task.get("cookie_source") or "").strip(),
                 "cookie_status": str(task.get("cookie_status") or "").strip(),
                 "owner": str(task.get("owner") or "").strip(),

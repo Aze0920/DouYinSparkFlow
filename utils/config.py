@@ -127,6 +127,7 @@ def get_userData():
                 "username": username,
                 "cookies": sanitize_cookies(cookies),
                 "targets": [norm(t) for t in task.get("targets", [])],
+                "region": str(task.get("region") or "").strip(),
                 "cron_hour": task.get("cron_hour"),
                 "cron_minute": task.get("cron_minute"),
                 "messageTemplate": str(task.get("message_template") or "").strip()

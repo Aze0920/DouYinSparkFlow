@@ -54,7 +54,7 @@ def get_browser(retried=False):
         raise
 
 
-def make_context(browser, storage_state=None, cookies=None):
+def make_context(browser, storage_state=None, cookies=None, proxy=None):
     kwargs = {
         "user_agent": BROWSER_UA,
         "locale": "zh-CN",
@@ -62,6 +62,8 @@ def make_context(browser, storage_state=None, cookies=None):
     }
     if storage_state:
         kwargs["storage_state"] = str(storage_state)
+    if proxy:
+        kwargs["proxy"] = {"server": str(proxy)} if isinstance(proxy, str) else dict(proxy)
     try:
         context = browser.new_context(**kwargs)
     except Exception:
