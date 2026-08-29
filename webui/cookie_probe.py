@@ -124,9 +124,11 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
         logger.info("开始检测 Cookie 共 %s 条 unique_id=%s", len(cookies), unique_id or "-")
         if str(region or "").strip():
             try:
-                from webui.proxy import lease_proxy
+                from webui.proxy import lease_proxy, proxy_enabled
 
-                lease = lease_proxy(region)
+                # 总开关关掉就当没设地区：直连检测，不取 IP、不探活
+                if proxy_enabled():
+                    lease = lease_proxy(region)
             except Exception:
                 logger.exception("检测 Cookie 时提取代理失败，改走直连")
         proxy = lease.server if lease else None

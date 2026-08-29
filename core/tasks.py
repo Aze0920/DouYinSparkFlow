@@ -519,9 +519,22 @@ def _send_chat_message(page, message: str, send_records=None):
         raise RuntimeError("消息可能没发出去：回车后输入框内容没有被清空")
 
 
-def _account_proxy(username: str, region: str):
-    """没设地区的账号返回 None 走直连，绝不用全国随机 IP 顶替。"""
+def _proxy_off(region: str) -> bool:
+    """总开关关掉、或这个账号没设地区 —— 都当作纯直连，一点 IP 逻辑都不碰。"""
     if not str(region or "").strip():
+        return True
+    try:
+        from webui.proxy import proxy_enabled
+
+        return not proxy_enabled()
+    except Exception:
+        logger.exception("读取代理开关失败，保险起见按直连处理")
+        return True
+
+
+def _account_proxy(username: str, region: str):
+    """没开代理总开关、或没设地区的账号返回 None 走直连，绝不用全国随机 IP 顶替。"""
+    if _proxy_off(region):
         return None
     try:
         from webui.proxy import lease_proxy
@@ -546,8 +559,8 @@ class _ChatListUnavailable(RuntimeError):
 
 
 def _proxy_ip_tries(region: str) -> int:
-    """设了地区才走代理，代理 IP 质量参差，允许换几条重试；直连没得换，只试一次。"""
-    if not str(region or "").strip():
+    """开了代理才有「换 IP 重试」这回事；总开关关掉或直连，只试一次。"""
+    if _proxy_off(region):
         return 1
     try:
         raw = int(config.get("proxyIpTries") or 3)
@@ -744,7 +757,7 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                 if lease:
                     lease.release(f"账号 {username}（第 {ip_try} 条 IP）")
         # 几条都打不开：这才是真失败，给出带排障截图的最终错误
-        if str(region or "").strip():
+        if tries > 1:
             raise RuntimeError(
                 f"账号 {username} 连换 {tries} 条代理 IP 都打不开会话列表。"
                 f"多半是这批住宅 IP 太慢，稍后重试或换个地区；已截图到 logs/chat-debug-*.png"

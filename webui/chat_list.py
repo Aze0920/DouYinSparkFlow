@@ -624,9 +624,11 @@ def list_conversations(
 
         if str(region or "").strip():
             try:
-                from webui.proxy import lease_proxy
+                from webui.proxy import lease_proxy, proxy_enabled
 
-                lease = lease_proxy(region)
+                # 总开关关掉就当没设地区：直连读列表，不取 IP、不探活
+                if proxy_enabled():
+                    lease = lease_proxy(region)
             except Exception:
                 logger.exception("读会话列表时提取代理失败，改走直连")
         proxy = lease.server if lease else None

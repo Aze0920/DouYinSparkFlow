@@ -2113,11 +2113,17 @@ def _finish_login(page, context, redirect_url: str | None):
 
 
 def _login_proxy(region: str):
-    """设了地区的号，登录也要从那个地区出去，否则这次登录本身就是异地登录。"""
+    """设了地区的号，登录也要从那个地区出去，否则这次登录本身就是异地登录。
+
+    但住宅代理总开关关掉时，一律直连——不取 IP、不探活。
+    """
     if not str(region or "").strip():
         return None
     try:
-        from webui.proxy import lease_proxy
+        from webui.proxy import lease_proxy, proxy_enabled
+
+        if not proxy_enabled():
+            return None
         from webui.regions import area_label
 
         lease = lease_proxy(region)

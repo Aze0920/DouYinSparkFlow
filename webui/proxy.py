@@ -159,6 +159,16 @@ def load_proxy() -> dict:
     return data
 
 
+def proxy_enabled(cfg: dict | None = None) -> bool:
+    """住宅代理总开关。关掉、或没配 API 密钥/账号，就当整套 IP 功能都不存在。
+
+    这是唯一的判据：所有「按地区取 IP」的入口都先问它，为 False 就一律走直连、
+    不取 IP、不探活、不重试换 IP，地区字段直接忽略。
+    """
+    cfg = cfg or load_proxy()
+    return bool(cfg.get("enabled") and cfg.get("api_key") and cfg.get("phone"))
+
+
 def save_proxy(payload: dict) -> dict:
     data = load_proxy()
     payload = payload or {}

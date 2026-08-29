@@ -59,9 +59,10 @@ class EntryPointProxyTests(unittest.TestCase):
         return probe_mod.probe_cookies([{"name": "sessionid", "value": "x"}], "a1", region)
 
     def test_picker_uses_the_account_region(self):
-        with patch("webui.proxy.lease_proxy", return_value=ProxyLease("http://1.2.3.4:9000")) as rent:
-            with patch.object(chat_list_mod, "get_browser", side_effect=RuntimeError("stop")):
-                self.call_picker(HENAN_XINXIANG)
+        with patch("webui.proxy.proxy_enabled", return_value=True):
+            with patch("webui.proxy.lease_proxy", return_value=ProxyLease("http://1.2.3.4:9000")) as rent:
+                with patch.object(chat_list_mod, "get_browser", side_effect=RuntimeError("stop")):
+                    self.call_picker(HENAN_XINXIANG)
         self.assertEqual(rent.call_args.args[0], HENAN_XINXIANG)
 
     def test_picker_stays_direct_without_region(self):
@@ -72,9 +73,10 @@ class EntryPointProxyTests(unittest.TestCase):
 
     def test_cookie_check_uses_the_account_region(self):
         """「检测」按钮以前完全不传地区，是这次报障的原点。"""
-        with patch("webui.proxy.lease_proxy", return_value=ProxyLease("http://1.2.3.4:9000")) as rent:
-            with patch.object(probe_mod, "get_browser", side_effect=RuntimeError("stop")):
-                self.call_probe(HENAN_XINXIANG)
+        with patch("webui.proxy.proxy_enabled", return_value=True):
+            with patch("webui.proxy.lease_proxy", return_value=ProxyLease("http://1.2.3.4:9000")) as rent:
+                with patch.object(probe_mod, "get_browser", side_effect=RuntimeError("stop")):
+                    self.call_probe(HENAN_XINXIANG)
         self.assertEqual(rent.call_args.args[0], HENAN_XINXIANG)
 
     def test_cookie_check_stays_direct_without_region(self):
@@ -83,13 +85,29 @@ class EntryPointProxyTests(unittest.TestCase):
                 self.call_probe("")
         rent.assert_not_called()
 
+    def test_picker_stays_direct_when_switch_off(self):
+        """总开关关掉：哪怕账号设了地区，也不能去租 IP。"""
+        with patch("webui.proxy.proxy_enabled", return_value=False):
+            with patch("webui.proxy.lease_proxy") as rent:
+                with patch.object(chat_list_mod, "get_browser", side_effect=RuntimeError("stop")):
+                    self.call_picker(HENAN_XINXIANG)
+        rent.assert_not_called()
+
+    def test_cookie_check_stays_direct_when_switch_off(self):
+        with patch("webui.proxy.proxy_enabled", return_value=False):
+            with patch("webui.proxy.lease_proxy") as rent:
+                with patch.object(probe_mod, "get_browser", side_effect=RuntimeError("stop")):
+                    self.call_probe(HENAN_XINXIANG)
+        rent.assert_not_called()
+
 
 class QrLoginProxyTests(unittest.TestCase):
     """重新登录一个已有账号，也必须从它自己的地区出去。"""
 
     def test_extracts_proxy_for_the_region(self):
-        with patch("webui.proxy.lease_proxy", return_value=ProxyLease("http://1.2.3.4:9000")) as rent:
-            self.assertEqual(qr_mod._login_proxy(HENAN_XINXIANG).server, "http://1.2.3.4:9000")
+        with patch("webui.proxy.proxy_enabled", return_value=True):
+            with patch("webui.proxy.lease_proxy", return_value=ProxyLease("http://1.2.3.4:9000")) as rent:
+                self.assertEqual(qr_mod._login_proxy(HENAN_XINXIANG).server, "http://1.2.3.4:9000")
         self.assertEqual(rent.call_args.args[0], HENAN_XINXIANG)
 
     def test_new_account_without_region_stays_direct(self):
@@ -98,10 +116,11 @@ class QrLoginProxyTests(unittest.TestCase):
         rent.assert_not_called()
 
     def test_extract_failure_falls_back_to_direct(self):
-        with patch("webui.proxy.lease_proxy", side_effect=RuntimeError("boom")):
-            self.assertIsNone(qr_mod._login_proxy(HENAN_XINXIANG))
-        with patch("webui.proxy.lease_proxy", return_value=None):
-            self.assertIsNone(qr_mod._login_proxy(HENAN_XINXIANG))
+        with patch("webui.proxy.proxy_enabled", return_value=True):
+            with patch("webui.proxy.lease_proxy", side_effect=RuntimeError("boom")):
+                self.assertIsNone(qr_mod._login_proxy(HENAN_XINXIANG))
+            with patch("webui.proxy.lease_proxy", return_value=None):
+                self.assertIsNone(qr_mod._login_proxy(HENAN_XINXIANG))
 
     def test_context_gets_the_proxy(self):
         browser = unittest.mock.MagicMock()

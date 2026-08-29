@@ -93,6 +93,8 @@ def run_task(*, region, leases, wait_results, login_wall=False, friends=()):
         patch.object(tasks, "get_browser", return_value=(FakePW(), FakeBrowser())),
         patch.object(tasks, "make_context", return_value=FakeContext()),
         patch.object(tasks, "_account_proxy", side_effect=fake_account_proxy),
+        # 代理总开关：这几个用例都假设它开着，别去读机器上真实的 proxy.json
+        patch("webui.proxy.proxy_enabled", return_value=True),
         patch.object(tasks, "retry_operation", return_value=None),
         patch.object(tasks, "_looks_like_login", return_value=login_wall),
         patch.object(tasks, "_wait_locator", side_effect=fake_wait_locator),
