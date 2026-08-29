@@ -7,6 +7,8 @@ logs/
 usersData.json
 .env
 config/.env
+config/.env.bak
+*.tmp
 config/users.json
 config/cards.json
 config/notify.json

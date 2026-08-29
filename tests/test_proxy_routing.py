@@ -209,5 +209,33 @@ class CallSiteTests(unittest.TestCase):
                 )
 
 
+class BrowserExclusionTests(unittest.TestCase):
+    """同一时刻只许开一个浏览器。两个一起开会互相抢资源，
+    碰上同一个账号还会两边一起写同一份快照，把登录态写坏。"""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.source = (Path(__file__).resolve().parent.parent / "webui" / "app.py").read_text(encoding="utf-8")
+
+    def block(self, marker: str) -> str:
+        start = self.source.index(marker)
+        return self.source[start:self.source.index("\n\n", start)]
+
+    def test_keepalive_stands_down_for_tasks_and_qr(self):
+        guard = self.block("def _tick_keepalive()")
+        self.assertIn('_run_state["running"]', guard)
+        self.assertIn("_keepalive_busy.locked()", guard)
+        self.assertIn("qr_busy()", guard, "扫码窗口开着时保活也必须让位，否则会同时开两个浏览器")
+
+    def test_every_browser_entry_stands_down_for_keepalive(self):
+        """保活是后台偷偷开的浏览器，前台各入口都得知道它在跑。"""
+        for marker in ("def _deny_if_browser_busy()", "def run_now(", "def douyin_login_start("):
+            self.assertIn(
+                "_keepalive_busy.locked()",
+                self.block(marker),
+                f"{marker} 没有避让保活，两个浏览器会同时写同一份快照",
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

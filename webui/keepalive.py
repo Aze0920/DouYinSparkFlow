@@ -14,6 +14,7 @@ import time
 from pathlib import Path
 
 from utils.logger import setup_logger
+from webui import safe_io
 
 ROOT = Path(__file__).resolve().parent.parent
 STATE_FILE = ROOT / "data" / "keepalive.json"
@@ -36,8 +37,7 @@ def _load() -> dict:
 
 
 def _save(data: dict) -> None:
-    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    safe_io.write_json(STATE_FILE, data)
 
 
 def _clean_ids(unique_ids) -> list[str]:

@@ -8,6 +8,8 @@ import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from webui import safe_io
+
 ROOT = Path(__file__).resolve().parent.parent
 USERS_FILE = ROOT / "config" / "users.json"
 AUTH_SECRET_FILE = ROOT / "config" / "auth_secret"
@@ -44,7 +46,7 @@ def _get_secret() -> str:
             _secret_holder["value"] = stored
             return stored
     secret = secrets.token_hex(32)
-    AUTH_SECRET_FILE.write_text(secret + "\n", encoding="utf-8")
+    safe_io.write_text(AUTH_SECRET_FILE, secret + "\n")
     try:
         os.chmod(AUTH_SECRET_FILE, 0o600)
     except OSError:
@@ -244,7 +246,7 @@ def load_users() -> list:
     USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
     if not USERS_FILE.is_file():
         data = _default_users()
-        USERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        safe_io.write_json(USERS_FILE, data)
         return data["users"]
     try:
         data = json.loads(USERS_FILE.read_text(encoding="utf-8"))
@@ -269,8 +271,7 @@ def load_users() -> list:
 
 
 def save_users(users: list) -> None:
-    USERS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    USERS_FILE.write_text(json.dumps({"users": users}, ensure_ascii=False, indent=2), encoding="utf-8")
+    safe_io.write_json(USERS_FILE, {"users": users})
 
 
 def find_user(username: str):

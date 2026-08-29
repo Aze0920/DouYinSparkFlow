@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 
 from utils.logger import setup_logger
+from webui import safe_io
 from webui.users import (
     extend_user,
     find_user,
@@ -66,7 +67,7 @@ def save_invite(data: dict) -> dict:
         "codes": dict((data or {}).get("codes") or {}),
         "records": list((data or {}).get("records") or []),
     }
-    INVITE_FILE.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    safe_io.write_json(INVITE_FILE, payload)
     return payload
 
 

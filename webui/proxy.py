@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 import time
 from pathlib import Path
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
@@ -15,6 +16,7 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 import httpx
 
 from utils.logger import setup_logger
+from webui import safe_io
 from webui.regions import area_label, normalize_area
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,6 +34,50 @@ MINUTE = 10
 RETRIES = 3
 # 提前这么多秒收手。IP 是掐着点失效的，等真到点再停，最后那几步已经在断网里跑了。
 LEASE_GRACE = 40
+# 探活：拿一个小而快的国内地址走一趟代理，确认这条 IP 真能转发流量。
+PROBE_URL = "http://www.baidu.com/favicon.ico"
+PROBE_TIMEOUT = 6
+
+# 多账号是并发跑的，会同一秒一起来提取，供应商那边按调用频率直接拒。
+# 串着来、两次之间留点间隔，比一起挤反而更快都拿到 IP。
+_extract_lock = threading.Lock()
+_EXTRACT_GAP = 1.5
+_last_extract = 0.0
+
+
+def _throttled_get(url: str):
+    global _last_extract
+    with _extract_lock:
+        wait = _EXTRACT_GAP - (time.time() - _last_extract)
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            return httpx.get(url, timeout=FETCH_TIMEOUT, follow_redirects=True)
+        finally:
+            _last_extract = time.time()
+
+
+def _reachable(server: str, timeout: float = PROBE_TIMEOUT) -> bool:
+    """先确认这条 IP 真能代理流量，再交给浏览器。
+
+    池子里给的 IP 有一定概率已经死了。死 IP 不会让 Playwright 回退直连，
+    只会在打开页面时一路超时，白开一次浏览器还耽误整轮任务。
+
+    这里必须真发一个走代理的请求：只测 TCP 端口通不通没用——
+    机器上挂着 TUN 模式的透明代理时，连不存在的 IP 也会秒连成功。
+    """
+    parts = urlparse(server)
+    if not parts.hostname or not parts.port:
+        return False
+    try:
+        resp = httpx.get(PROBE_URL, proxy=server, timeout=timeout, follow_redirects=False)
+        if resp.status_code >= 500:
+            logger.warning("代理 %s 探活返回 HTTP %s", server, resp.status_code)
+            return False
+        return True
+    except Exception as exc:
+        logger.warning("代理 %s 探活失败：%s", server, exc)
+        return False
 
 
 class ProxyExpired(RuntimeError):
@@ -123,8 +169,7 @@ def save_proxy(payload: dict) -> dict:
         data["phone"] = re.sub(r"\D", "", str(payload.get("phone") or ""))[:20]
     if payload.get("base_url"):
         data["base_url"] = str(payload.get("base_url")).strip()
-    PROXY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PROXY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    safe_io.write_json(PROXY_FILE, data)
     return data
 
 
@@ -291,26 +336,30 @@ def fetch_proxy(area: str, cfg: dict | None = None, reasons: list | None = None)
     last_reason = ""
     for attempt in range(1, RETRIES + 1):
         try:
-            resp = httpx.get(url, timeout=FETCH_TIMEOUT, follow_redirects=True)
+            resp = _throttled_get(url)
             hit = parse_extract(resp.text)
             if hit:
                 server = f"{PROTOCOL}://{hit}"
-                logger.info("已提取代理 IP %s 地区=%s 第%s次", hit, area_label(code), attempt)
-                return server
-            last_reason = _failure_reason(resp.text)
-            logger.warning(
-                "提取代理失败（第%s/%s次）地区=%s HTTP=%s %s",
-                attempt, RETRIES, area_label(code), resp.status_code, last_reason,
-            )
-            # 报的是「某某 IP 没加白」就照它说的加一次，然后立刻重试，不必等下一轮
-            if not healed:
-                need = whitelist_ip_from_error(resp.text)
-                if need:
-                    healed = True
-                    if add_whitelist(cfg, need):
-                        continue
-                elif "白名单" in last_reason:
-                    logger.warning("接口说要加白，但没能从回复里认出 IP：%s", last_reason)
+                if _reachable(server):
+                    logger.info("已提取代理 IP %s 地区=%s 第%s次", hit, area_label(code), attempt)
+                    return server
+                last_reason = f"提取到 {hit}，但这条 IP 连不上"
+                logger.warning("代理 IP %s 是死的，换一条（第%s/%s次）", hit, attempt, RETRIES)
+            else:
+                last_reason = _failure_reason(resp.text)
+                logger.warning(
+                    "提取代理失败（第%s/%s次）地区=%s HTTP=%s %s",
+                    attempt, RETRIES, area_label(code), resp.status_code, last_reason,
+                )
+                # 报的是「某某 IP 没加白」就照它说的加一次，然后立刻重试，不必等下一轮
+                if not healed:
+                    need = whitelist_ip_from_error(resp.text)
+                    if need:
+                        healed = True
+                        if add_whitelist(cfg, need):
+                            continue
+                    elif "白名单" in last_reason:
+                        logger.warning("接口说要加白，但没能从回复里认出 IP：%s", last_reason)
         except Exception as exc:
             last_reason = str(exc)
             logger.warning("提取代理异常（第%s/%s次）地区=%s %s", attempt, RETRIES, area_label(code), exc)

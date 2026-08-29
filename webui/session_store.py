@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from utils.logger import setup_logger
+from webui import safe_io
 
 logger = setup_logger("app", "DEBUG")
 
@@ -46,12 +47,23 @@ def save_state(context, unique_id: str) -> bool:
     if not sid or context is None:
         return False
     SESSION_DIR.mkdir(parents=True, exist_ok=True)
+    final = state_path(unique_id)
+    # 快照就是这个号的登录态。直接往正式文件上写，中途出错就把能用的登录态换成半个文件，
+    # 账号当场变成掉线。先写临时文件，写全了再顶上去。
+    tmp = final.with_name(final.name + ".writing")
     try:
-        context.storage_state(path=str(state_path(unique_id)))
+        context.storage_state(path=str(tmp))
+        if tmp.stat().st_size <= 40:
+            raise ValueError(f"快照内容太短（{tmp.stat().st_size} 字节），不覆盖旧快照")
+        safe_io.commit(tmp, final)
         logger.info("已保存账号快照 unique_id=%s", unique_id)
         return True
     except Exception:
-        logger.exception("保存账号快照失败 unique_id=%s", unique_id)
+        logger.exception("保存账号快照失败 unique_id=%s，保留上一份快照", unique_id)
+        try:
+            tmp.unlink()
+        except OSError:
+            pass
         return False
 
 
@@ -88,7 +100,8 @@ def save_chats(unique_id: str, items: list[dict], self_avatar: str = "") -> None
         "items": items or [],
         "self_avatar": str(self_avatar or ""),
     }
-    chats_path(unique_id).write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+    # 续火花线程在写，页面同时可能在读，非原子写会让读到的那次直接是坏 JSON
+    safe_io.write_json(chats_path(unique_id), payload, indent=None)
 
 
 def clear_browser_state(unique_id: str) -> None:

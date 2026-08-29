@@ -215,7 +215,17 @@ def php_json(msg: str) -> str:
 NOT_WHITELISTED = FakeResponse(php_json("请先将223.254.142.111加入到白名单再进行提取"))
 
 
-class WhitelistTests(unittest.TestCase):
+class LiveProbeMixin:
+    """提取成功后会真发一个走代理的探活请求，单测里不能真出网。"""
+
+    def setUp(self):
+        super().setUp()
+        alive = patch.object(proxy_mod, "_reachable", return_value=True)
+        alive.start()
+        self.addCleanup(alive.stop)
+
+
+class WhitelistTests(LiveProbeMixin, unittest.TestCase):
     def test_extracts_ip_from_escaped_json_payload(self):
         self.assertNotIn("白名单", NOT_WHITELISTED.text, "报文里的中文本就是转义的")
         self.assertEqual(whitelist_ip_from_error(NOT_WHITELISTED.text), "223.254.142.111")
@@ -268,8 +278,9 @@ class WhitelistTests(unittest.TestCase):
         self.assertEqual(reasons, ["余额不足"])
 
 
-class FetchProxyTests(unittest.TestCase):
+class FetchProxyTests(LiveProbeMixin, unittest.TestCase):
     def setUp(self):
+        super().setUp()
         self.cfg = {
             "enabled": True,
             "api_key": "K",
@@ -325,6 +336,52 @@ class FetchProxyTests(unittest.TestCase):
         with patch.object(proxy_mod.httpx, "get") as get:
             self.assertIsNone(fetch_proxy("130100", {**self.cfg, "enabled": False}))
             self.assertIsNone(fetch_proxy("130100", {**self.cfg, "api_key": ""}))
+        get.assert_not_called()
+
+
+class LiveProbeTests(unittest.TestCase):
+    """池子给的 IP 可能已经死了，死 IP 要当场换掉，不能等浏览器打开页面才发现。"""
+
+    def setUp(self):
+        self.cfg = {
+            "enabled": True,
+            "api_key": "K",
+            "phone": "13800000000",
+            "base_url": DEFAULT_BASE_URL,
+        }
+        sleep = patch.object(proxy_mod.time, "sleep")
+        sleep.start()
+        self.addCleanup(sleep.stop)
+
+    def test_dead_ip_is_discarded_and_retried(self):
+        ok = FakeResponse('{"code":0,"extract":{"ok":true,"data":"1.2.3.4:20000"}}')
+        good = FakeResponse('{"code":0,"extract":{"ok":true,"data":"5.6.7.8:9000"}}')
+        with patch.object(proxy_mod, "_reachable", side_effect=[False, True]):
+            with patch.object(proxy_mod.httpx, "get", side_effect=[ok, good]):
+                self.assertEqual(fetch_proxy("130100", self.cfg), "http://5.6.7.8:9000")
+
+    def test_all_dead_falls_back_to_direct(self):
+        ok = FakeResponse('{"code":0,"extract":{"ok":true,"data":"1.2.3.4:20000"}}')
+        with patch.object(proxy_mod, "_reachable", return_value=False):
+            with patch.object(proxy_mod.httpx, "get", return_value=ok):
+                reasons = []
+                self.assertIsNone(fetch_proxy("130100", self.cfg, reasons=reasons))
+        self.assertIn("1.2.3.4:20000", reasons[0])
+
+    def test_probe_goes_through_the_proxy(self):
+        with patch.object(proxy_mod.httpx, "get", return_value=FakeResponse("ok")) as get:
+            self.assertTrue(proxy_mod._reachable("http://1.2.3.4:20000"))
+        self.assertEqual(get.call_args.kwargs["proxy"], "http://1.2.3.4:20000")
+
+    def test_probe_fails_closed_on_error(self):
+        with patch.object(proxy_mod.httpx, "get", side_effect=OSError("boom")):
+            self.assertFalse(proxy_mod._reachable("http://1.2.3.4:20000"))
+        with patch.object(proxy_mod.httpx, "get", return_value=FakeResponse("", 502)):
+            self.assertFalse(proxy_mod._reachable("http://1.2.3.4:20000"))
+
+    def test_probe_rejects_malformed_server(self):
+        with patch.object(proxy_mod.httpx, "get") as get:
+            self.assertFalse(proxy_mod._reachable("http://1.2.3.4"))
         get.assert_not_called()
 
 

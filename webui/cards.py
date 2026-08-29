@@ -2,6 +2,7 @@ import json
 import secrets
 from pathlib import Path
 
+from webui import safe_io
 from webui.users import now_utc, parse_days, parse_iso, parse_max_accounts, to_iso
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -32,8 +33,7 @@ def load_cards() -> list:
 
 
 def save_cards(cards: list) -> None:
-    CARDS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    CARDS_FILE.write_text(json.dumps({"cards": cards}, ensure_ascii=False, indent=2), encoding="utf-8")
+    safe_io.write_json(CARDS_FILE, {"cards": cards})
 
 
 def _clamp_days(value) -> int:

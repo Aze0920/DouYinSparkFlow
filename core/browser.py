@@ -64,11 +64,23 @@ def make_context(browser, storage_state=None, cookies=None, proxy=None):
         kwargs["storage_state"] = str(storage_state)
     if proxy:
         kwargs["proxy"] = {"server": str(proxy)} if isinstance(proxy, str) else dict(proxy)
-    try:
-        context = browser.new_context(**kwargs)
-    except Exception:
-        kwargs.pop("storage_state", None)
-        context = browser.new_context(**kwargs)
+    # 建不起来就逐样往下让，但让的顺序很要紧：
+    # 先丢代理（大不了走直连），再丢快照（快照没了这个号就等于掉线，只能垫底）。
+    context = None
+    last = None
+    for drop in ((), ("proxy",), ("storage_state",), ("proxy", "storage_state")):
+        if set(drop) - set(kwargs):
+            continue  # 本来就没这一项，退让方案跟上一轮一模一样，别白试
+        attempt = {k: v for k, v in kwargs.items() if k not in drop}
+        try:
+            context = browser.new_context(**attempt)
+            if drop:
+                print(f"浏览器上下文建不起来，已放弃 {'、'.join(drop)} 重试成功")
+            break
+        except Exception as exc:
+            last = exc
+    if context is None:
+        raise last
     context.set_extra_http_headers({"Accept-Language": "zh-CN,zh;q=0.9"})
     context.add_init_script(
         "Object.defineProperty(navigator, 'webdriver', {get: () => undefined})"

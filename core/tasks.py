@@ -678,9 +678,6 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                 context.close()
             except Exception:
                 pass
-        # 上下文关掉才算真的不再用这条 IP，所以登记要排在关闭之后
-        if lease:
-            lease.release(f"账号 {username}")
         try:
             browser.close()
         except Exception:
@@ -689,6 +686,9 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             playwright.stop()
         except Exception:
             pass
+        # 浏览器全关掉才算真的不再往这条 IP 上发请求，所以登记排在最后
+        if lease:
+            lease.release(f"账号 {username}")
 
 
 def _max_task_threads(n_users: int) -> int:

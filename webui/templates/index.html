@@ -1380,19 +1380,27 @@
         cities.map((c) => `<option value="${escapeAttr(c.code)}">${escapeHtml(c.name)}</option>`).join("");
       city.value = "";
     }
+    function regionsReady() {
+      return !!(window.__regions && window.__regions.length);
+    }
     function readRegion(node) {
+      const hidden = node.querySelector(".region-code");
+      const saved = (hidden && hidden.value) || "";
       const p = node.querySelector(".region-province");
       const c = node.querySelector(".region-city");
-      if (!p) return (node.querySelector(".region-code") && node.querySelector(".region-code").value) || "";
+      // 地区表没拉下来时下拉是空的，那不是「用户选了直连」，是我们没东西给他选。
+      // 这时候必须守住原值，否则随便点一次保存就把代理悄悄关了。
+      if (!p || !regionsReady()) return saved;
       // 选了市就用市码（更精确），只选省就用省码走全省随机
       return (c && c.value) || p.value || "";
     }
     async function loadRegions() {
-      if (window.__regions) return window.__regions;
+      if (regionsReady()) return window.__regions;
       try {
         const data = await api("/api/regions");
         window.__regions = data.provinces || [];
       } catch (e) {
+        // 存成空数组会被当成「已加载但没有地区」，下次还得再试一次
         window.__regions = [];
       }
       return window.__regions;
@@ -2185,6 +2193,8 @@
         next.avatar = data.avatar || window.__accounts[idx].avatar || "";
         next.cron_hour = Number.isFinite(Number(window.__accounts[idx].cron_hour)) ? window.__accounts[idx].cron_hour : 9;
         next.cron_minute = Number.isFinite(Number(window.__accounts[idx].cron_minute)) ? window.__accounts[idx].cron_minute : 0;
+        // 重新登录时没重新选地区，就沿用这个号原来的，别把它的代理清掉
+        next.region = next.region || window.__accounts[idx].region || "";
         const oldId = window.__accounts[idx].unique_id;
         if (oldId && oldId !== uniqueId) delete window.__accountCookies[oldId];
         window.__accounts[idx] = next;
@@ -2196,6 +2206,7 @@
         next.avatar = data.avatar || window.__accounts[exist].avatar || "";
         next.cron_hour = Number.isFinite(Number(window.__accounts[exist].cron_hour)) ? window.__accounts[exist].cron_hour : 9;
         next.cron_minute = Number.isFinite(Number(window.__accounts[exist].cron_minute)) ? window.__accounts[exist].cron_minute : 0;
+        next.region = next.region || window.__accounts[exist].region || "";
         window.__accounts[exist] = next;
       } else {
         if (!canAddAccount()) {
@@ -2322,6 +2333,7 @@
       $("addAccountModal").classList.remove("hidden");
     }
     function fillAddRegion(region) {
+      window.__addRegionSaved = region || "";
       const list = window.__regions || [];
       const province = provinceOf(region);
       const pcode = province ? province.code : "";
@@ -2346,7 +2358,8 @@
     function addRegion() {
       const p = $("addProvince");
       const c = $("addCity");
-      if (!p) return "";
+      // 同上：地区表没加载出来时别把老号原有的地区当成被清空了
+      if (!p || !regionsReady()) return window.__addRegionSaved || "";
       return (c && c.value) || p.value || "";
     }
     function syncAddRegionLock() {

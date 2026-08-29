@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
-from webui import keepalive
+from webui import keepalive, safe_io
 from webui.origin import public_origin, split_host_port
 from webui.proxy import fetch_proxy, load_proxy, public_proxy, save_proxy
 from webui.proxy import list_accounts as list_proxy_accounts_api
@@ -29,7 +29,7 @@ from webui.legal_docs import (
     TERMS_TITLE,
     UPDATED as LEGAL_UPDATED,
 )
-from webui.envfile import account_cron, cookie_key, default_cron, env_path, load_env, parse_accounts, read_tasks, write_env
+from webui.envfile import account_cron, cookie_key, default_cron, env_lock, env_path, load_env, parse_accounts, read_tasks, write_env
 from webui.cookie_probe import parse_cookie_payload, probe_cookies
 from webui.chat_list import clean_avatar_url, fresh_spark_days, list_conversations
 from webui.qr_login import (
@@ -401,7 +401,9 @@ def _run_keepalive(uid: str) -> None:
 
 
 def _tick_keepalive() -> None:
-    if _run_state["running"] or _keepalive_busy.locked():
+    # 扫码窗口开着时也不能动：那边正开着浏览器等用户扫，
+    # 再起一个不但抢资源，碰上同一个号还会两边一起写同一份快照。
+    if _run_state["running"] or _keepalive_busy.locked() or qr_busy():
         return
     live = [
         str(acc.get("unique_id") or "").strip()
@@ -444,8 +446,7 @@ def _load_spark_stats() -> dict:
 
 
 def _save_spark_stats(data: dict) -> None:
-    STATS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    safe_io.write_json(STATS_FILE, data)
 
 
 def _record_spark_run(unique_ids, ok: bool) -> None:
@@ -1757,10 +1758,13 @@ def save_account(request: Request, payload: dict):
 
 
 def _deny_if_browser_busy():
+    """一次只许开一个浏览器：两个一起开会抢内存，同一个号还会同时写同一份快照。"""
     if _run_state["running"]:
         raise HTTPException(status_code=409, detail="续火花任务正在跑，请等它结束")
     if qr_busy():
         raise HTTPException(status_code=409, detail="正在扫码登录，请先关掉扫码窗口")
+    if _keepalive_busy.locked():
+        raise HTTPException(status_code=409, detail="正在做登录态保活，十几秒后再试")
 
 
 @app.post("/api/account/check")
@@ -1802,12 +1806,16 @@ def check_account_cookie(request: Request, payload: dict | None = None):
     else:
         result["cookie_status"] = "bad"
 
-    tasks = read_tasks(env)
-    old_status = ""
-    account_name = unique_id
-    owner_name = ""
-    for index, item in enumerate(tasks):
-        if str(item.get("unique_id") or "").strip() == unique_id:
+    # 检测要开浏览器，前面那十几秒里别人可能已经改过账号了。
+    # 拿开工前读到的 env 写回去，等于把这段时间的改动全部回滚，所以必须重新读一次。
+    with env_lock:
+        tasks = read_tasks(load_env())
+        old_status = ""
+        account_name = unique_id
+        owner_name = ""
+        for index, item in enumerate(tasks):
+            if str(item.get("unique_id") or "").strip() != unique_id:
+                continue
             old_status = str(item.get("cookie_status") or "").strip()
             account_name = str(item.get("username") or unique_id)
             owner_name = _account_owner(item)
@@ -2084,6 +2092,9 @@ def douyin_login_start(request: Request, payload: dict | None = None):
     if _run_state["running"]:
         logger.warning("扫码登录被拒绝：任务正在运行")
         raise HTTPException(status_code=409, detail="续火花任务正在跑，请等它结束后再扫码")
+    if _keepalive_busy.locked():
+        logger.warning("扫码登录被拒绝：保活正在跑")
+        raise HTTPException(status_code=409, detail="正在做登录态保活，十几秒后再点一次")
     payload = payload or {}
     try:
         replace_index = int(payload.get("replace_index", -1))
@@ -2145,6 +2156,9 @@ def run_now(request: Request, payload: dict | None = None):
     user = require_spark(request)
     if _run_state["running"]:
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
+    # 保活也开着浏览器。碰上同一个号，两边会同时往同一份快照里写，登录态直接写坏
+    if _keepalive_busy.locked():
+        raise HTTPException(status_code=409, detail="正在做登录态保活，十几秒后再点一次")
     if not _run_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
     payload = payload or {}

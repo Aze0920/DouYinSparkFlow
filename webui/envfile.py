@@ -2,11 +2,17 @@ import json
 import os
 import re
 import shutil
+import threading
 from pathlib import Path
 
 from dotenv import dotenv_values
 
+from webui import safe_io
+
 ROOT = Path(__file__).resolve().parent.parent
+# 定时线程、保活线程和多个 HTTP 请求都会改这份配置，
+# 两个人同时「读出来 → 改一处 → 整份写回」会互相把对方的改动抹掉。
+env_lock = threading.RLock()
 DEFAULT_MESSAGE_TEMPLATE = "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n[API]"
 
 
@@ -46,6 +52,20 @@ def _dump_value(value) -> str:
 
 
 def write_env(data: dict, extra: dict | None = None) -> Path:
+    with env_lock:
+        return _write_env(data, extra)
+
+
+def _backup(path: Path) -> None:
+    """留一份上一版。原子写保证不会写出半个文件，备份是为了写对了但内容错了还能捞回来。"""
+    try:
+        if path.is_file() and path.stat().st_size > 0:
+            shutil.copy2(path, path.with_name(path.name + ".bak"))
+    except OSError:
+        pass
+
+
+def _write_env(data: dict, extra: dict | None = None) -> Path:
     path = env_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     current = load_env()
@@ -107,7 +127,8 @@ def write_env(data: dict, extra: dict | None = None) -> Path:
     for key, value in current.items():
         if key not in seen:
             lines.append(f"{key}={_dump_value(value)}")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    _backup(path)
+    safe_io.write_text(path, "\n".join(lines) + "\n")
     return path
 
 

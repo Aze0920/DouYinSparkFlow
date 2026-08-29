@@ -10,6 +10,7 @@ from pathlib import Path
 import httpx
 
 from utils.logger import setup_logger
+from webui import safe_io
 from webui.users import (
     find_user,
     is_permanent,
@@ -161,7 +162,7 @@ def save_notify(payload: dict) -> dict:
     if "team" in incoming_nx:
         notifyx["team"] = str(incoming_nx.get("team") or "").strip()
     data = {"wechat": wechat, "wxpusher": wxpusher, "notifyx": notifyx, "events": events}
-    NOTIFY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    safe_io.write_json(NOTIFY_FILE, data)
     return data
 
 
