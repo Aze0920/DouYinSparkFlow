@@ -58,8 +58,8 @@
   <div id="addAccountModal" class="modal-mask hidden">
     <div class="modal-card">
       <h3 id="addAccountTitle">添加账号</h3>
-      <p class="sub">先选这个号平时上网的地区，登录过程就会从当地 IP 出去，再挑一种登录方式。</p>
-      <div class="region-box add-region">
+      <p class="sub" id="addAccountIntro">先选这个号平时上网的地区，登录过程就会从当地 IP 出去，再挑一种登录方式。</p>
+      <div class="region-box add-region" id="addRegionBox">
         <span class="region-label">上网地区</span>
         <div class="region-selects">
           <select id="addProvince" class="region-province" onchange="onAddProvinceChange()">
@@ -1207,6 +1207,7 @@
       setBusy(data.running, data.run_message || "空闲", data.running_ids || []);
       if (typeof data.allow_self_unbind === "boolean") allowSelfUnbind = data.allow_self_unbind;
       if (typeof data.invite_enabled === "boolean") setInviteEnabled(data.invite_enabled);
+      if (typeof data.proxy_enabled === "boolean") setProxyEnabled(data.proxy_enabled);
       if (data.me) {
         current = Object.assign(current || {}, data.me);
         applyRole();
@@ -1347,6 +1348,12 @@
       return null;
     }
     function regionFieldHtml(region, index, operate) {
+      // 住宅代理总开关关掉：地区没有任何用处，整块 UI 都藏起来。
+      // 但仍要留一个隐藏域存住原来的地区码——这样保存时不会被清空，
+      // 将来重新打开代理，之前设好的地区还在。
+      if (!window.__proxyEnabled) {
+        return `<input type="hidden" class="region-code" value="${escapeAttr(region || "")}" />`;
+      }
       const list = window.__regions || [];
       const province = provinceOf(region);
       const pcode = province ? province.code : "";
@@ -1382,6 +1389,13 @@
     }
     function regionsReady() {
       return !!(window.__regions && window.__regions.length);
+    }
+    function setProxyEnabled(on) {
+      on = !!on;
+      // 只在真的变化时重渲染，否则每次轮询都重建账号卡片，会打断正在编辑的输入
+      if (window.__proxyEnabled === on) return;
+      window.__proxyEnabled = on;
+      renderAccounts();
     }
     function readRegion(node) {
       const hidden = node.querySelector(".region-code");
@@ -1519,6 +1533,7 @@
       // 地区表要先到位，否则账号卡片上的省市下拉会渲染成空的
       await loadRegions();
       const cfg = await api("/api/config");
+      window.__proxyEnabled = !!cfg.proxy_enabled;
       if ($("maxTaskThreads")) $("maxTaskThreads").value = String(cfg.max_task_threads || 10);
       window.__defaultCron = "09:00";
       window.__defaultTemplate = cfg.message_template || "";
@@ -2330,6 +2345,7 @@
       // 老号带出它自己的地区；新号必须先选，否则这次登录就从机房 IP 出去了
       const known = isNew ? "" : ((window.__accounts || [])[window.__addReplaceIndex] || {}).region || "";
       fillAddRegion(known);
+      applyAddRegionVisibility();
       $("addAccountModal").classList.remove("hidden");
     }
     function fillAddRegion(region) {
@@ -2362,9 +2378,21 @@
       if (!p || !regionsReady()) return window.__addRegionSaved || "";
       return (c && c.value) || p.value || "";
     }
+    function applyAddRegionVisibility() {
+      // 总开关关掉：添加账号不需要选地区，整块藏起来，直接挑登录方式
+      const on = !!window.__proxyEnabled;
+      if ($("addRegionBox")) $("addRegionBox").classList.toggle("hidden", !on);
+      if ($("addAccountIntro")) {
+        $("addAccountIntro").textContent = on
+          ? "先选这个号平时上网的地区，登录过程就会从当地 IP 出去，再挑一种登录方式。"
+          : "挑一种登录方式即可。";
+      }
+      syncAddRegionLock();
+    }
     function syncAddRegionLock() {
+      // 关了代理就没有「先选地区」这道坎，按钮一律放开
       // 新号没选地区就不让往下走；老号本来可能就没设，不强求
-      const need = window.__addReplaceIndex < 0 && !addRegion();
+      const need = !!window.__proxyEnabled && window.__addReplaceIndex < 0 && !addRegion();
       ["addQrBtn", "addAppBtn", "addCkBtn"].forEach((id) => {
         if ($(id)) $(id).disabled = need;
       });
@@ -2379,7 +2407,8 @@
     }
     function chooseAddAccount(kind) {
       const idx = Number.isInteger(window.__addReplaceIndex) ? window.__addReplaceIndex : -1;
-      if (idx < 0 && !addRegion()) {
+      // 只有开着代理时才要求先选地区；关了就直接进入登录
+      if (window.__proxyEnabled && idx < 0 && !addRegion()) {
         toast("请先选择上网地区", "err");
         return;
       }

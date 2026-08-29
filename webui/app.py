@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui import keepalive, safe_io
 from webui.origin import public_origin, split_host_port
-from webui.proxy import fetch_proxy, load_proxy, public_proxy, save_proxy
+from webui.proxy import fetch_proxy, load_proxy, proxy_enabled, public_proxy, save_proxy
 from webui.proxy import list_accounts as list_proxy_accounts_api
 from webui.regions import area_label, normalize_area, region_of, region_tree
 from webui.legal_docs import (
@@ -1462,6 +1462,7 @@ def status(request: Request):
         "me": public_user(user),
         "allow_self_unbind": allow_self_unbind(),
         "invite_enabled": bool(invite_public_settings().get("enabled")),
+        "proxy_enabled": proxy_enabled(),
         "spark_stats": _spark_dashboard_stats(user),
     }
     if _is_admin(user):
@@ -1640,6 +1641,8 @@ def get_config(request: Request):
         "max_task_threads": _clamp_task_threads(env.get("MAX_TASK_THREADS") or 10),
         "log_level": env.get("LOG_LEVEL") or "DEBUG",
         "accounts": _filter_accounts(user, accounts),
+        # 住宅代理总开关：关掉时前端把「上网地区」整块都藏起来，添加账号也不再要求选地区
+        "proxy_enabled": proxy_enabled(),
     }
     if _is_admin(user):
         payload["github_repo"] = repo_name()
