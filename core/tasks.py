@@ -538,12 +538,27 @@ def _account_proxy(username: str, region: str):
         return None
 
 
+class _ChatListUnavailable(RuntimeError):
+    """会话列表没能打开——多半是这条代理 IP 太慢/太差，换一条再试就好。
+
+    专门跟「扫码墙」「被限流」区分开：那两种换 IP 也没用，不该重试。
+    """
+
+
+def _proxy_ip_tries(region: str) -> int:
+    """设了地区才走代理，代理 IP 质量参差，允许换几条重试；直连没得换，只试一次。"""
+    if not str(region or "").strip():
+        return 1
+    try:
+        raw = int(config.get("proxyIpTries") or 3)
+    except (TypeError, ValueError):
+        raw = 3
+    return max(1, min(raw, 5))
+
+
 def do_user_task(username, cookies, targets, message_template="", unique_id="", region=""):
     user_id_dict = {}
-    lease = _account_proxy(username, region)
-    proxy = lease.server if lease else None
     playwright, browser = get_browser()
-    context = None
     spark_seen: dict[str, dict] = {}
     spark_error = []
 
@@ -575,9 +590,17 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
         except Exception:
             logger.exception("账号 %s 刷新火花天数失败", username)
 
-    try:
-        from webui.session_store import load_state_path, save_state
+    from webui.session_store import load_state_path, save_state
 
+    def _attempt(lease, proxy, dump_debug):
+        """用给定的这条 IP 跑一遍：打开私信页→等会话列表→逐个发送。
+
+        会话列表打不开就抛 _ChatListUnavailable，交给外层换一条 IP 重试；
+        扫码墙 / 被限流 / 输入框改版则直接抛普通错误，换 IP 也没用、不重试。
+
+        dump_debug=False 时（还要换 IP 重试）只记一行 URL，不截图——
+        截图在死代理上要等满超时，几条 IP 试下来光截图就烧一两分钟。
+        """
         state = load_state_path(unique_id)
         try:
             context = make_context(browser, storage_state=state, cookies=cookies, proxy=proxy)
@@ -586,112 +609,152 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                 raise
             logger.exception("账号 %s 用代理建上下文失败，改走直连", username)
             context = make_context(browser, storage_state=state, cookies=cookies)
-        context.set_default_navigation_timeout(config["browserTimeout"])
-        # 走代理时私信这个重型 IM 应用每一步都更慢，默认超时也得放宽，
-        # 否则找输入框、读文字、截图动不动就先超时了。
-        slow = bool(proxy)
-        context.set_default_timeout(12000 if slow else 8000)
-        page = context.new_page()
-        page.on("response", _make_info_handler(user_id_dict))
-        send_records = []
-        page.on("response", _make_send_handler(send_records))
-
-        retry_operation(
-            "打开抖音网页聊天页面",
-            page.goto,
-            retries=config["taskRetryTimes"],
-            delay=2,
-            url="https://www.douyin.com/chat",
-            # 默认是等 load（连图片都要加载完），私信页这么重的应用走代理根本等不到。
-            # 只等响应头，真正要等的会话列表下面有 _wait_locator 专门盯着。
-            wait_until="commit",
-        )
-        # commit 只保证开始接收文档，给页面一点时间把内容渲染出来，
-        # 否则下面这句在空 body 上判断，登录墙会认不出来
-        time.sleep(4 if slow else 2.5)
-        if _looks_like_login(page):
-            _dump_chat_debug(page, username)
-            raise RuntimeError(f"账号 {username} 打开私信页失败：页面在要求登录，请点「检测」或重新登录后再续火花")
-
-        # 会话列表是抖音私信里最重的一块，走代理时渲染很慢。检测那边给到 25 秒才判「没列表」，
-        # 这边只给 15 秒就会出现「检测说正常、续火花却打不开列表」。代理下放宽到 40 秒对齐。
-        item_loc, scope, item_sel = _wait_locator(
-            page, CONVERSATION_ITEM_SELECTORS, timeout_ms=40000 if slow else 15000
-        )
-        list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
-        if item_loc is None:
-            _dump_chat_debug(page, username)
-            raise RuntimeError(
-                f"账号 {username} 打不开会话列表。不是扫码失败，是私信页没有出现好友列表，已截图到 logs/chat-debug-*.png"
-            )
-        logger.info("账号 %s 已找到会话列表 item=%s list=%s", username, item_sel, list_sel or "父级滚动")
-        if unique_id:
-            save_state(context, unique_id)
-        # 火焰图标是懒加载的，等一下再扫，否则列表刚出来时天数还没渲染出来
         try:
-            page.wait_for_selector(
-                ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
-                timeout=9000 if slow else 5000,
-            )
-        except Exception:
-            pass
-        harvest_sparks(page)
+            context.set_default_navigation_timeout(config["browserTimeout"])
+            # 走代理时私信这个重型 IM 应用每一步都更慢，默认超时也得放宽，
+            # 否则找输入框、读文字、截图动不动就先超时了。
+            slow = bool(proxy)
+            context.set_default_timeout(12000 if slow else 8000)
+            page = context.new_page()
+            page.on("response", _make_info_handler(user_id_dict))
+            send_records = []
+            page.on("response", _make_send_handler(send_records))
 
-        logger.debug(f"账号 {username} 开始发送消息")
-        sent = []
-        failed = []
-        blocked = ""
-        for target_symbol, friend_name in scroll_and_select_user(
-            page, username, targets, user_id_dict, item_loc, list_loc, scope
-        ):
-            # 代理到点就收手，剩下的好友留给下次。硬撑只会在断网里空转，已发出去的还得算数
-            if lease and lease.expired():
-                logger.warning(
-                    "账号 %s 代理已用满 %s 分钟，本次发到第 %s 个为止，剩下的等下次",
-                    username, lease.minutes, len(sent),
-                )
-                break
-            # 找好友的过程本身就在滚列表，每滚到一个人就把当前视口的天数一起收了
-            harvest_sparks(page)
-            logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
-            message = build_message(message_template)
-            logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
             try:
-                _send_chat_message(page, message, send_records)
+                retry_operation(
+                    "打开抖音网页聊天页面",
+                    page.goto,
+                    retries=config["taskRetryTimes"],
+                    delay=2,
+                    url="https://www.douyin.com/chat",
+                    # 默认是等 load（连图片都要加载完），私信页这么重的应用走代理根本等不到。
+                    # 只等响应头，真正要等的会话列表下面有 _wait_locator 专门盯着。
+                    wait_until="commit",
+                )
             except Exception as exc:
-                failed.append(friend_name)
-                logger.error(f"账号 {username} 给好友 {friend_name} 发送失败：{exc}")
-                if _looks_blocked(exc):
-                    blocked = str(exc)
-                    logger.error("账号 %s 疑似被抖音限制，停止本次发送：%s", username, blocked)
-                    break
-                continue
-            sent.append(friend_name)
-            logger.info(f"账号 {username} 给好友 {friend_name} 发送成功")
-            time.sleep(_send_gap())
+                # 连响应头都等不到，这条 IP 基本是死的——换一条再来，别在这条上耗
+                raise _ChatListUnavailable(
+                    f"账号 {username} 这条代理连私信页都打不开：{exc}"
+                ) from exc
+            # commit 只保证开始接收文档，给页面一点时间把内容渲染出来，
+            # 否则下面这句在空 body 上判断，登录墙会认不出来
+            time.sleep(4 if slow else 2.5)
+            if _looks_like_login(page):
+                _dump_chat_debug(page, username)
+                raise RuntimeError(f"账号 {username} 打开私信页失败：页面在要求登录，请点「检测」或重新登录后再续火花")
 
-        harvest_sparks(page)
-        logger.info("账号 %s 发送结果 成功=%s 失败=%s", username, len(sent), len(failed))
-        if failed:
-            logger.warning("账号 %s 以下好友没发出去: %s", username, failed)
-        if blocked:
-            _dump_chat_debug(page, username)
-            raise RuntimeError(
-                f"账号 {username} 被抖音限制，成功 {len(sent)} 个后中断：{blocked}"
+            # 会话列表是抖音私信里最重的一块，走代理时渲染很慢。检测那边给到 25 秒才判「没列表」，
+            # 这边只给 15 秒就会出现「检测说正常、续火花却打不开列表」。代理下放宽到 40 秒对齐。
+            item_loc, scope, item_sel = _wait_locator(
+                page, CONVERSATION_ITEM_SELECTORS, timeout_ms=40000 if slow else 15000
             )
-        if not sent:
-            _dump_chat_debug(page, username)
-            raise RuntimeError(
-                f"账号 {username} 一条消息都没发出去，聊天输入框可能已经改版，已保存截图到 logs/chat-debug-*.png"
-            )
-    finally:
-        # 放在 finally 里：中途被限流或报错也要把已经扫到的天数留下来，它不依赖页面还开着
-        save_sparks()
-        if context:
+            list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
+            if item_loc is None:
+                if dump_debug:
+                    _dump_chat_debug(page, username)
+                else:
+                    logger.warning("账号 %s 这条 IP 没渲染出会话列表 url=%s", username, getattr(page, "url", ""))
+                raise _ChatListUnavailable(
+                    f"账号 {username} 打不开会话列表（这条 IP 太慢，页面没渲染出好友列表）"
+                )
+            logger.info("账号 %s 已找到会话列表 item=%s list=%s", username, item_sel, list_sel or "父级滚动")
+            if unique_id:
+                save_state(context, unique_id)
+            # 火焰图标是懒加载的，等一下再扫，否则列表刚出来时天数还没渲染出来
+            try:
+                page.wait_for_selector(
+                    ".commonStreaknormalText, img.commonStreakicon, img[src*='flame_icon']",
+                    timeout=9000 if slow else 5000,
+                )
+            except Exception:
+                pass
+            harvest_sparks(page)
+
+            logger.debug(f"账号 {username} 开始发送消息")
+            sent = []
+            failed = []
+            blocked = ""
+            for target_symbol, friend_name in scroll_and_select_user(
+                page, username, targets, user_id_dict, item_loc, list_loc, scope
+            ):
+                # 代理到点就收手，剩下的好友留给下次。硬撑只会在断网里空转，已发出去的还得算数
+                if lease and lease.expired():
+                    logger.warning(
+                        "账号 %s 代理已用满 %s 分钟，本次发到第 %s 个为止，剩下的等下次",
+                        username, lease.minutes, len(sent),
+                    )
+                    break
+                # 找好友的过程本身就在滚列表，每滚到一个人就把当前视口的天数一起收了
+                harvest_sparks(page)
+                logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
+                message = build_message(message_template)
+                logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
+                try:
+                    _send_chat_message(page, message, send_records)
+                except Exception as exc:
+                    failed.append(friend_name)
+                    logger.error(f"账号 {username} 给好友 {friend_name} 发送失败：{exc}")
+                    if _looks_blocked(exc):
+                        blocked = str(exc)
+                        logger.error("账号 %s 疑似被抖音限制，停止本次发送：%s", username, blocked)
+                        break
+                    continue
+                sent.append(friend_name)
+                logger.info(f"账号 {username} 给好友 {friend_name} 发送成功")
+                time.sleep(_send_gap())
+
+            harvest_sparks(page)
+            logger.info("账号 %s 发送结果 成功=%s 失败=%s", username, len(sent), len(failed))
+            if failed:
+                logger.warning("账号 %s 以下好友没发出去: %s", username, failed)
+            if blocked:
+                _dump_chat_debug(page, username)
+                raise RuntimeError(
+                    f"账号 {username} 被抖音限制，成功 {len(sent)} 个后中断：{blocked}"
+                )
+            if not sent:
+                _dump_chat_debug(page, username)
+                raise RuntimeError(
+                    f"账号 {username} 一条消息都没发出去，聊天输入框可能已经改版，已保存截图到 logs/chat-debug-*.png"
+                )
+        finally:
             try:
                 context.close()
             except Exception:
                 pass
+
+    try:
+        tries = _proxy_ip_tries(region)
+        last_err: _ChatListUnavailable | None = None
+        for ip_try in range(1, tries + 1):
+            lease = _account_proxy(username, region)
+            proxy = lease.server if lease else None
+            try:
+                _attempt(lease, proxy, dump_debug=ip_try == tries)
+                return  # 成功，收工
+            except _ChatListUnavailable as exc:
+                last_err = exc
+                if ip_try < tries:
+                    logger.warning(
+                        "账号 %s 第 %s/%s 条 IP 打不开会话列表，换一条新 IP 重试：%s",
+                        username, ip_try, tries, exc,
+                    )
+            finally:
+                # 每一条 IP 用完当场登记收手，再去取下一条，绝不同时占着两条
+                if lease:
+                    lease.release(f"账号 {username}（第 {ip_try} 条 IP）")
+        # 几条都打不开：这才是真失败，给出带排障截图的最终错误
+        if str(region or "").strip():
+            raise RuntimeError(
+                f"账号 {username} 连换 {tries} 条代理 IP 都打不开会话列表。"
+                f"多半是这批住宅 IP 太慢，稍后重试或换个地区；已截图到 logs/chat-debug-*.png"
+            ) from last_err
+        raise RuntimeError(
+            f"账号 {username} 打不开会话列表。不是扫码失败，是私信页没有出现好友列表，已截图到 logs/chat-debug-*.png"
+        ) from last_err
+    finally:
+        # 放在最外层 finally：中途被限流或报错也要把已经扫到的天数留下来，它不依赖页面还开着
+        save_sparks()
         try:
             browser.close()
         except Exception:
@@ -700,9 +763,6 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             playwright.stop()
         except Exception:
             pass
-        # 浏览器全关掉才算真的不再往这条 IP 上发请求，所以登记排在最后
-        if lease:
-            lease.release(f"账号 {username}")
 
 
 def _max_task_threads(n_users: int) -> int:
