@@ -1860,8 +1860,8 @@ def _share_challenge_cookies(context) -> list[str]:
     shared = []
     for cookie in context.cookies():
         name = str(cookie.get("name") or "")
-        if name not in CHALLENGE_COOKIES:
-            continue
+        if name not in CHALLENGE_COOKIES or name in shared:
+            continue  # 同名 cookie 可能在 www 和 sso 各有一份，摊一次就够，摊两次是后一份覆盖前一份
         if str(cookie.get("domain") or "").lstrip(".") == "douyin.com":
             continue
         try:
@@ -1958,8 +1958,14 @@ def _fetch_qr_in_page(page, fp: str) -> tuple[str, str, str]:
             }""",
             {"url": SSO + "/get_qrcode/", "params": _sso_params(fp)},
         )
-    except Exception:
-        logger.debug("页面内 fetch get_qrcode 失败", exc_info=True)
+    except Exception as exc:
+        # 抖音的安全 SDK 会接管 window.fetch，认出是脚本发的就直接掐掉（栈里能看到 blockFetch）。
+        # 这是它主动拦的，不是我们出错，所以只记一行，别甩一大段吓人的 traceback ——
+        # 后面还有「开私信页取码」这条路兜底。
+        if "Failed to fetch" in str(exc):
+            logger.info("页面内取码被抖音安全 SDK 拦掉了（正常现象），改走开私信页取码")
+        else:
+            logger.debug("页面内 fetch get_qrcode 失败", exc_info=True)
         return "", "", ""
     if not isinstance(payload, dict) or payload.get("_raw"):
         logger.warning("页面内 get_qrcode 非 JSON %s", (payload or {}).get("_raw") if isinstance(payload, dict) else type(payload))

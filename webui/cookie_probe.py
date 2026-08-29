@@ -142,10 +142,13 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
 
         page = context.new_page()
         profile = extract_profile(page, context, allow_stop=False)
+        chat_reachable = True
         try:
-            page.goto(CHAT, wait_until="domcontentloaded", timeout=25000)
+            # 走代理每一跳都更慢，直连够用的超时在代理下会一路超时
+            page.goto(CHAT, wait_until="domcontentloaded", timeout=45000 if proxy else 25000)
         except Exception:
-            logger.warning("打开私信页检查登录态失败", exc_info=True)
+            chat_reachable = False
+            logger.warning("打开私信页超时，这次没法顺带验证私信功能", exc_info=True)
         chat_state = wait_chat_access(page, timeout_s=12)
         signals = _page_signals(page)
         if not signals:
@@ -165,14 +168,25 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
             got_uid = ""
         named = bool(username) and username not in {got_uid, "抖音账号"}
         account_id = got_uid or str(unique_id or "").strip()
-        valid = bool(chat_ok and (named or has_session) and not login_wall)
+        # 私信页压根没打开，跟「打开了但要求扫码」是两回事：前者是网线问题，后者才是掉线。
+        # 资料接口刚刚还正常返回了昵称和抖音号，这时候判掉线是误判，
+        # 还会白推一条「账号掉线」通知，用户回头一看号好好的。
+        undecided = not chat_reachable and not login_wall and (has_session or named)
+        valid = bool(chat_ok and (named or has_session) and not login_wall) or undecided
         saved = _cookies_for_save(context) or cookies
         if valid:
             save_state(context, account_id)
-            message = (
-                f"Cookie 有效 · 网页私信可打开 · {username or '已登录'}"
-                + (f" · 抖音号 {got_uid}" if got_uid else "")
-            )
+            if chat_ok:
+                message = (
+                    f"Cookie 有效 · 网页私信可打开 · {username or '已登录'}"
+                    + (f" · 抖音号 {got_uid}" if got_uid else "")
+                )
+            else:
+                message = (
+                    f"登录态正常 · {username or '已登录'}"
+                    + (f" · 抖音号 {got_uid}" if got_uid else "")
+                    + "。这次网络太慢没打开私信页，没能顺带验证私信，稍后可再检测一次"
+                )
         elif login_wall:
             message = "首页 Cookie 可能还在，但网页私信在要求扫码。请重新扫码登录这个号，不要只贴 JSON Cookie"
         elif not has_session:
@@ -182,13 +196,14 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
         else:
             message = "Cookie 还在，但没抓到昵称和抖音号，可能被风控，建议重新扫码"
         logger.info(
-            "Cookie 检测结果 valid=%s username=%s unique_id=%s wall=%s session=%s chat=%s",
+            "Cookie 检测结果 valid=%s username=%s unique_id=%s wall=%s session=%s chat=%s 私信页可达=%s",
             valid,
             username,
             got_uid,
             login_wall,
             has_session,
             chat_state,
+            chat_reachable,
         )
         return {
             "ok": True,
