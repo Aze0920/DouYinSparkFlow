@@ -203,14 +203,24 @@ class FakeResponse:
         self.status_code = status
 
 
+def php_json(msg: str) -> str:
+    """PHP 的 json_encode 默认把中文转成 \\uXXXX，接口回的就是这种报文。
+
+    用明文中文造测试数据会让「在原始报文里搜中文」的写法假装通过，线上却一次都匹配不上。
+    """
+    return json.dumps({"code": 0, "extract": {"ok": True, "data": msg}}, ensure_ascii=True)
+
+
 # 线上实际返回的报文：HTTP 200，但 extract 里是「没加白」
-NOT_WHITELISTED = FakeResponse(
-    '{"code":0,"extract":{"ok":true,"data":"请先将223.254.142.111加入到白名单再进行提取"}}'
-)
+NOT_WHITELISTED = FakeResponse(php_json("请先将223.254.142.111加入到白名单再进行提取"))
 
 
 class WhitelistTests(unittest.TestCase):
-    def test_extracts_ip_from_real_error_message(self):
+    def test_extracts_ip_from_escaped_json_payload(self):
+        self.assertNotIn("白名单", NOT_WHITELISTED.text, "报文里的中文本就是转义的")
+        self.assertEqual(whitelist_ip_from_error(NOT_WHITELISTED.text), "223.254.142.111")
+
+    def test_extracts_ip_from_plain_message(self):
         self.assertEqual(
             whitelist_ip_from_error("请先将223.254.142.111加入到白名单再进行提取"),
             "223.254.142.111",

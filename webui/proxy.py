@@ -138,8 +138,10 @@ def whitelist_ip_from_error(text: str) -> str:
 
     接口默认只加白「调用方来源 IP」，但品赞校验的是真正发起提取那一跳的来源，
     两者不一致时就得拿它报的这个 IP 显式加一次白。
+
+    注意必须先解码：接口的 JSON 里中文是 \\uXXXX 转义的，直接在原始报文里搜中文永远搜不到。
     """
-    raw = str(text or "")
+    raw = _failure_reason(text)
     if "白名单" not in raw:
         return ""
     m = re.search(r"(\d{1,3}(?:\.\d{1,3}){3})", raw)
@@ -161,9 +163,12 @@ def add_whitelist(cfg: dict, ip: str) -> bool:
         ok = bool(wl.get("ok")) if isinstance(wl, dict) else str(data.get("code")) == "0"
         if ok:
             logger.info("已把 %s 加入代理白名单", ip)
-        else:
-            logger.warning("把 %s 加白失败：%s", ip, _failure_reason(resp.text))
-        return ok
+            return True
+        why = ""
+        if isinstance(wl, dict):
+            why = str(wl.get("message") or wl.get("data") or wl.get("error") or "")
+        logger.warning("把 %s 加白失败：%s", ip, why or _failure_reason(resp.text))
+        return False
     except Exception as exc:
         logger.warning("把 %s 加白异常：%s", ip, exc)
         return False
@@ -251,6 +256,8 @@ def fetch_proxy(area: str, cfg: dict | None = None, reasons: list | None = None)
                     healed = True
                     if add_whitelist(cfg, need):
                         continue
+                elif "白名单" in last_reason:
+                    logger.warning("接口说要加白，但没能从回复里认出 IP：%s", last_reason)
         except Exception as exc:
             last_reason = str(exc)
             logger.warning("提取代理异常（第%s/%s次）地区=%s %s", attempt, RETRIES, area_label(code), exc)
