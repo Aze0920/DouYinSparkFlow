@@ -511,6 +511,13 @@
             <label>可添加账号数（0 不限）<input id="newMaxAccounts" type="number" min="0" max="100" value="1" /></label>
             <button class="btn-primary" onclick="createUser()">添加账户</button>
           </div>
+          <div class="list-toolbar">
+            <div class="search-box">
+              <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input id="userSearch" placeholder="搜索用户名 / 卡密" autocomplete="off" oninput="onUserSearch()" />
+              <button class="search-clear hidden" id="userSearchClear" type="button" title="清空" onclick="clearUserSearch()">&times;</button>
+            </div>
+          </div>
           <div id="userList" class="users-list"></div>
           <div id="usersPager" class="page-bar hidden"></div>
         </section>
@@ -535,15 +542,22 @@
           </div>
           <div class="table-toolbar">
             <div class="muted" id="cardCountLabel">还没有卡密</div>
-            <label class="pager-size">每页
-              <select id="cardPageSize" onchange="changeCardPageSize()">
-                <option value="10">10</option>
-                <option value="20" selected>20</option>
-                <option value="50">50</option>
-                <option value="100">100</option>
-              </select>
-              条
-            </label>
+            <div class="toolbar-right">
+              <div class="search-box">
+                <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+                <input id="cardSearch" placeholder="搜索卡密 / 备注 / 使用人" autocomplete="off" oninput="onCardSearch()" />
+                <button class="search-clear hidden" id="cardSearchClear" type="button" title="清空" onclick="clearCardSearch()">&times;</button>
+              </div>
+              <label class="pager-size">每页
+                <select id="cardPageSize" onchange="changeCardPageSize()">
+                  <option value="10">10</option>
+                  <option value="20" selected>20</option>
+                  <option value="50">50</option>
+                  <option value="100">100</option>
+                </select>
+                条
+              </label>
+            </div>
           </div>
           <div class="table-wrap">
             <table class="data-table">
@@ -2533,12 +2547,38 @@
       window.__users = data.users || [];
       renderUsers();
     }
+    let userQuery = "";
+    function onUserSearch() {
+      userQuery = (($("userSearch") && $("userSearch").value) || "").trim().toLowerCase();
+      if ($("userSearchClear")) $("userSearchClear").classList.toggle("hidden", !userQuery);
+      window.__usersPage = 1;
+      renderUsers();
+    }
+    function clearUserSearch() {
+      if ($("userSearch")) $("userSearch").value = "";
+      onUserSearch();
+    }
+    function filteredUsers() {
+      const all = window.__users || [];
+      if (!userQuery) return all;
+      return all.filter((u) => matchesQuery(userQuery, [u.username, u.card_code]));
+    }
     function renderUsers() {
-      const list = window.__users || [];
+      const all = window.__users || [];
+      const list = filteredUsers();
       const pages = pageCount(list.length, USERS_PER_PAGE);
       window.__usersPage = Math.min(Math.max(window.__usersPage || 1, 1), pages);
       const start = (window.__usersPage - 1) * USERS_PER_PAGE;
-      if ($("usersTitle")) $("usersTitle").textContent = `控制台用户【${list.length}】`;
+      if ($("usersTitle")) {
+        $("usersTitle").textContent = userQuery
+          ? `控制台用户【匹配 ${list.length} / 共 ${all.length}】`
+          : `控制台用户【${all.length}】`;
+      }
+      if (!list.length) {
+        $("userList").innerHTML = `<div class="users-empty">${userQuery ? `没有匹配「${escapeHtml(userQuery)}」的用户。` : "还没有用户。"}</div>`;
+        renderPageBar("usersPager", 1, 1, 0, "个用户", "gotoUsersPage");
+        return;
+      }
       $("userList").innerHTML = list.slice(start, start + USERS_PER_PAGE).map((u) => {
         const admin = u.role === "admin";
         const protectedUser = !!u.protected || String(u.username || "").toLowerCase() === "admin";
@@ -2584,7 +2624,7 @@
           </div>
         </div>`;
       }).join("");
-      renderPageBar("usersPager", window.__usersPage, pages, list.length, "个用户", "gotoUsersPage");
+      renderPageBar("usersPager", window.__usersPage, pages, list.length, userQuery ? "个匹配用户" : "个用户", "gotoUsersPage");
     }
     function toggleNewUserDays() {
       const admin = $("newRole") && $("newRole").value === "admin";
@@ -2606,6 +2646,8 @@
         toast("已添加账户");
         $("newUsername").value = "";
         $("newPassword").value = "";
+        // 留着搜索词的话新用户可能不在结果里，看起来像没添加
+        clearUserSearch();
         await loadUsers();
       } catch (err) {
         toast(err.message, "err");
@@ -2711,6 +2753,24 @@
       });
       return out;
     }
+    let cardQuery = "";
+    function matchesQuery(query, fields) {
+      return fields.some((value) => String(value == null ? "" : value).toLowerCase().includes(query));
+    }
+    function onCardSearch() {
+      cardQuery = (($("cardSearch") && $("cardSearch").value) || "").trim().toLowerCase();
+      if ($("cardSearchClear")) $("cardSearchClear").classList.toggle("hidden", !cardQuery);
+      cardPage = 1;
+      renderCards();
+    }
+    function clearCardSearch() {
+      if ($("cardSearch")) $("cardSearch").value = "";
+      onCardSearch();
+    }
+    function filteredCards() {
+      if (!cardQuery) return cardStore;
+      return cardStore.filter((item) => matchesQuery(cardQuery, [item.code, item.note, item.used_by]));
+    }
     function renderCards(cards, created) {
       if (Array.isArray(cards)) cardStore = cards;
       if (created) {
@@ -2718,19 +2778,24 @@
         cardPage = 1;
       }
       const size = cardPageSize();
-      const total = cardStore.length;
+      const list = filteredCards();
+      const total = list.length;
       const realPages = Math.max(1, Math.ceil(total / size) || 1);
       if (cardPage > realPages) cardPage = realPages;
       if (cardPage < 1) cardPage = 1;
       const start = (cardPage - 1) * size;
-      const slice = cardStore.slice(start, start + size);
+      const slice = list.slice(start, start + size);
       if ($("cardCountLabel")) {
-        $("cardCountLabel").textContent = total ? ("共 " + total + " 张卡密") : "还没有卡密";
+        $("cardCountLabel").textContent = cardQuery
+          ? `匹配 ${total} 张 · 共 ${cardStore.length} 张卡密`
+          : (cardStore.length ? "共 " + cardStore.length + " 张卡密" : "还没有卡密");
       }
       const body = $("cardTableBody");
       if (body) {
         if (!total) {
-          body.innerHTML = `<tr><td class="empty-cell" colspan="9">还没有卡密。填好天数和账号数后点「生成卡密」。</td></tr>`;
+          body.innerHTML = cardQuery
+            ? `<tr><td class="empty-cell" colspan="9">没有匹配「${escapeHtml(cardQuery)}」的卡密。</td></tr>`
+            : `<tr><td class="empty-cell" colspan="9">还没有卡密。填好天数和账号数后点「生成卡密」。</td></tr>`;
         } else {
           body.innerHTML = slice.map((item) => {
             const used = !!item.used;
@@ -2799,7 +2864,10 @@
         const codes = created.map((item) => item.code).join("\n");
         if ($("newCardCodes")) $("newCardCodes").textContent = codes;
         if ($("newCardWrap")) $("newCardWrap").classList.toggle("hidden", !codes);
-        renderCards(data.cards || [], created);
+        cardStore = data.cards || [];
+        // 留着搜索词的话新卡会被过滤掉，看起来像没生成
+        clearCardSearch();
+        renderCards(cardStore, created);
         toast("已生成 " + created.length + " 张卡密");
       } catch (err) {
         toast(err.message, "err");

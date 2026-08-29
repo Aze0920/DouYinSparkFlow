@@ -108,12 +108,37 @@ class SpaNavTests(unittest.TestCase):
 
     def test_users_page_shows_count_and_paginates_by_ten(self):
         self.assertIn('id="usersTitle"', INDEX)
-        self.assertIn("控制台用户【${list.length}】", INDEX)
+        self.assertIn("控制台用户【${all.length}】", INDEX)
         self.assertIn("const USERS_PER_PAGE = 10;", INDEX)
         self.assertIn('id="usersPager" class="page-bar hidden"', INDEX)
         self.assertIn("function gotoUsersPage", INDEX)
         self.assertIn("function renderUsers", INDEX)
         self.assertIn("USERS_PER_PAGE)", INDEX)
+
+    def test_cards_and_users_have_search_boxes(self):
+        for input_id, clear_id in (("cardSearch", "cardSearchClear"), ("userSearch", "userSearchClear")):
+            self.assertIn(f'id="{input_id}"', INDEX)
+            self.assertIn(f'id="{clear_id}"', INDEX)
+        self.assertIn("function filteredCards", INDEX)
+        self.assertIn("function filteredUsers", INDEX)
+        self.assertIn("function onCardSearch", INDEX)
+        self.assertIn("function onUserSearch", INDEX)
+        self.assertIn("function matchesQuery", INDEX)
+        self.assertIn(".search-box", CSS)
+        # 搜索按 code/用户名匹配，分页要基于过滤后的列表
+        self.assertIn("[item.code, item.note, item.used_by]", INDEX)
+        self.assertIn("[u.username, u.card_code]", INDEX)
+        self.assertIn("const list = filteredCards();", INDEX)
+        self.assertIn("const list = filteredUsers();", INDEX)
+
+    def test_search_resets_so_new_rows_are_visible(self):
+        """带着搜索词生成卡密/新建用户，新数据会被过滤掉，看起来像没成功。"""
+        start = INDEX.find("async function generateCards()")
+        self.assertGreaterEqual(start, 0)
+        self.assertIn("clearCardSearch();", INDEX[start:start + 900])
+        start = INDEX.find("async function createUser()")
+        self.assertGreaterEqual(start, 0)
+        self.assertIn("clearUserSearch();", INDEX[start:start + 900])
 
     def test_page_bar_styles_do_not_clash_with_card_table_pager(self):
         """卡密表格用的是 .pager，账号/用户分页必须用独立类名，否则会改掉卡密页外观。"""
