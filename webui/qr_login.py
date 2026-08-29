@@ -1625,6 +1625,13 @@ def _http_get(context, url: str, params: dict | None = None):
         return context.request.get(url, **kwargs)
 
 
+def _is_timeout(exc: Exception) -> bool:
+    """代理死了/网太慢时，Playwright 抛的就是这些。用它把「超时」和真正的报错分开。"""
+    name = type(exc).__name__
+    msg = str(exc)
+    return name == "TimeoutError" or "Timeout" in msg or "ERR_TIMED_OUT" in msg or "ERR_TUNNEL" in msg
+
+
 def _try_json(context, url: str, params: dict | None = None) -> dict[str, str]:
     try:
         resp = _http_get(context, url, params)
@@ -1636,7 +1643,11 @@ def _try_json(context, url: str, params: dict | None = None) -> dict[str, str]:
         if isinstance(payload, dict) and "data" in payload:
             return _walk_user(payload.get("data"))
         return _walk_user(payload)
-    except Exception:
+    except Exception as exc:
+        if _is_timeout(exc):
+            # 超时是「没连通」，不是代码出错，打一行就够，别甩满屏堆栈；再抛给上层去数连败次数。
+            logger.warning("资料接口超时 %s（%s）", url, type(exc).__name__)
+            raise
         logger.exception("资料接口异常 %s", url)
         return {}
 
@@ -1677,8 +1688,20 @@ def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
             {"device_platform": "webapp", "aid": "6383", "publish_video_strategy_type": "2"},
         ),
     ]
+    # 代理一旦死了，下面每个探针都会各自等满超时。连着两次超时就别再耗了：
+    # 4 个接口 + 3 个页面挨个等满，轻松烧掉 200 多秒，还占着代理额度。
+    # 早点收手交回空资料，上层会据此判成「无法确认」而不是「掉线」。
+    dead_streak = 0
     for url, params in probes:
-        got = _try_json(context, url, params)
+        try:
+            got = _try_json(context, url, params)
+        except Exception:
+            dead_streak += 1
+            if dead_streak >= 2:
+                logger.warning("资料接口连续超时，判定这条线路没通，放弃后续探测")
+                return _finalize_profile(found, context)
+            continue
+        dead_streak = 0
         if got.get("username") and not found["username"] and not re.fullmatch(r"[0-9a-fA-F]{16,64}", str(got.get("username") or "")):
             found["username"] = got["username"]
         if got.get("unique_id") and is_display_unique_id(got.get("unique_id")) and not found["unique_id"]:
@@ -1694,12 +1717,22 @@ def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
             if allow_stop and _stop.is_set():
                 break
             try:
-                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                # 只等 commit：资料藏在首屏 HTML 的 <script> 里，响应体一到就能抓，
+                # 犯不上等整页 domcontentloaded（走代理常常等不到）。
+                page.goto(url, wait_until="commit", timeout=_TIMEOUTS["nav"])
                 logger.debug("打开资料页 %s", page.url)
                 time.sleep(1.2)
-            except Exception:
-                logger.exception("打开资料页失败 %s", url)
+            except Exception as exc:
+                if _is_timeout(exc):
+                    dead_streak += 1
+                    logger.warning("打开资料页超时 %s（%s）", url, type(exc).__name__)
+                    if dead_streak >= 2:
+                        logger.warning("资料页连续超时，判定这条线路没通，放弃后续探测")
+                        break
+                else:
+                    logger.exception("打开资料页失败 %s", url)
                 continue
+            dead_streak = 0
             got = _try_page_user(page)
             if got.get("username") and not found["username"] and not re.fullmatch(r"[0-9a-fA-F]{16,64}", str(got.get("username") or "")):
                 found["username"] = got["username"]
@@ -1710,6 +1743,12 @@ def extract_profile(page, context, allow_stop: bool = True) -> dict[str, str]:
             if found["username"] and found["unique_id"]:
                 break
 
+    return _finalize_profile(found, context)
+
+
+def _finalize_profile(found: dict[str, str], context) -> dict[str, str]:
+    """把抓到的资料收口成统一格式。抓不到时兜底成「抖音账号」+ 空号，
+    上层据此判成「无法确认」，不会误当掉线。"""
     cookies = _cookie_map(context)
     if not is_display_unique_id(found["unique_id"]):
         found["unique_id"] = ""

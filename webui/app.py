@@ -1799,6 +1799,10 @@ def check_account_cookie(request: Request, payload: dict | None = None):
             f"Cookie 还能登录，但抖音号是 {got_uid}，不是当前这个号 {unique_id}。"
             "请用这个号重新扫码或粘贴对应的 Cookie。"
         )
+    elif result.get("undecided"):
+        # 没连通抖音，状态未知。既不判正常也不判掉线，保持原样、绝不推掉线通知。
+        result["mismatch"] = False
+        result["cookie_status"] = "unknown"
     elif result.get("valid"):
         result["mismatch"] = False
         result["cookie_status"] = "ok"
@@ -1819,7 +1823,10 @@ def check_account_cookie(request: Request, payload: dict | None = None):
             old_status = str(item.get("cookie_status") or "").strip()
             account_name = str(item.get("username") or unique_id)
             owner_name = _account_owner(item)
-            item["cookie_status"] = result.get("cookie_status") or "bad"
+            # 「无法确认」不落库、不改状态：账号原来是什么状态就还是什么状态，
+            # 免得把一个本来正常的号写成别的、或反复刷新未检测。
+            if result.get("cookie_status") != "unknown":
+                item["cookie_status"] = result.get("cookie_status") or "bad"
             got_name = str(result.get("username") or "").strip()
             if result.get("cookie_status") == "ok" and got_name and got_name != "抖音账号":
                 item["username"] = got_name

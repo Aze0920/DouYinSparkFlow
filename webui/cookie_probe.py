@@ -170,13 +170,20 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
             got_uid = ""
         named = bool(username) and username not in {got_uid, "抖音账号"}
         account_id = got_uid or str(unique_id or "").strip()
-        # 私信页压根没打开，跟「打开了但要求扫码」是两回事：前者是网线问题，后者才是掉线。
-        # 资料接口刚刚还正常返回了昵称和抖音号，这时候判掉线是误判，
-        # 还会白推一条「账号掉线」通知，用户回头一看号好好的。
-        undecided = not chat_reachable and not login_wall and (has_session or named)
-        valid = bool(chat_ok and (named or has_session) and not login_wall) or undecided
+
+        # 判「掉线」必须有实锤，只有两种：
+        #   1) 私信页把我们弹到了扫码墙（login_wall）——账号确实需要重新登录；
+        #   2) 压根没有登录态 cookie（not has_session）——Cookie 本身就是坏的。
+        # 除此之外，只要还揣着 session、又没撞见扫码墙，那就得先「确认」到点东西
+        # 才敢说有效：私信列表出来了（chat_ok）或抓到了昵称/抖音号（named）。
+        positive = chat_ok or named
+        # 什么都没确认到、可又没有掉线的实锤 —— 这次纯粹是没连通抖音
+        # （代理挂了或网太慢，所有请求全超时），只能算「无法确认」。
+        # 绝不能据此判掉线、更不能白推一条「账号掉线」通知，用户回头一看号好好的。
+        undecided = has_session and not login_wall and not positive
+        valid = bool(positive and not login_wall) or undecided
         saved = _cookies_for_save(context) or cookies
-        if valid:
+        if positive and not login_wall:
             save_state(context, account_id)
             if chat_ok:
                 message = (
@@ -189,17 +196,20 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
                     + (f" · 抖音号 {got_uid}" if got_uid else "")
                     + "。这次网络太慢没打开私信页，没能顺带验证私信，稍后可再检测一次"
                 )
+        elif undecided:
+            message = (
+                "这次没连上抖音（代理可能失效，或网络太慢导致请求全部超时），"
+                "账号状态无法确认。登录态 Cookie 还在，账号大概率没问题，"
+                "请稍后或换条线路再检测一次——本次不作掉线处理。"
+            )
         elif login_wall:
             message = "首页 Cookie 可能还在，但网页私信在要求扫码。请重新扫码登录这个号，不要只贴 JSON Cookie"
-        elif not has_session:
-            message = "Cookie 无效：没有可用的登录态"
-        elif not chat_ok:
-            message = "Cookie 还在，但网页私信没有出现好友列表，请重新扫码登录后再选好友"
         else:
-            message = "Cookie 还在，但没抓到昵称和抖音号，可能被风控，建议重新扫码"
+            message = "Cookie 无效：没有可用的登录态，请重新扫码登录"
         logger.info(
-            "Cookie 检测结果 valid=%s username=%s unique_id=%s wall=%s session=%s chat=%s 私信页可达=%s",
+            "Cookie 检测结果 valid=%s undecided=%s username=%s unique_id=%s wall=%s session=%s chat=%s 私信页可达=%s",
             valid,
+            undecided,
             username,
             got_uid,
             login_wall,
@@ -210,6 +220,7 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
         return {
             "ok": True,
             "valid": valid,
+            "undecided": undecided,
             "username": username,
             "unique_id": got_uid,
             "avatar": str(profile.get("avatar") or "").strip(),

@@ -37,13 +37,16 @@ class Context:
         pass
 
 
-def run_probe(chat_opens: bool, chat_state: str, signals=None, has_session=True):
+EMPTY_PROFILE = {"username": "抖音账号", "unique_id": "", "avatar": ""}
+
+
+def run_probe(chat_opens: bool, chat_state: str, signals=None, has_session=True, profile=None):
     page = Page(chat_opens)
     context = Context(page)
     patches = [
         patch.object(probe_mod, "get_browser", return_value=(None, None)),
         patch.object(probe_mod, "make_context", return_value=context),
-        patch.object(probe_mod, "extract_profile", return_value=PROFILE),
+        patch.object(probe_mod, "extract_profile", return_value=profile or PROFILE),
         patch.object(probe_mod, "wait_chat_access", return_value=chat_state),
         patch.object(probe_mod, "_page_signals", return_value=signals or {}),
         patch.object(probe_mod, "_has_session", return_value=has_session),
@@ -86,14 +89,34 @@ class VerdictTests(unittest.TestCase):
         self.assertFalse(result["valid"])
 
     def test_no_session_is_offline(self):
-        result = run_probe(chat_opens=False, chat_state="empty", has_session=False)
-        # 昵称还在就说明资料接口通了，仍按登录态正常处理；真正的失效由 login_wall 兜
+        """连登录态 cookie 都没有、又没抓到资料，才是真·无效。"""
+        result = run_probe(
+            chat_opens=False, chat_state="empty", has_session=False, profile=EMPTY_PROFILE
+        )
+        self.assertFalse(result["valid"])
+        self.assertFalse(result["undecided"])
+
+    def test_named_profile_is_valid_even_without_chat_list(self):
+        """资料接口要登录态才会返回昵称+抖音号，抓到了就证明号是活的，
+        私信列表没渲染出来只是页面慢，不该判掉线。"""
+        result = run_probe(chat_opens=True, chat_state="empty")
         self.assertTrue(result["valid"])
 
-    def test_chat_empty_but_reachable_is_still_offline(self):
-        """页面开了却没有好友列表，是真有问题，不该被兜底放过。"""
-        result = run_probe(chat_opens=True, chat_state="empty")
+    def test_dead_proxy_is_undecided_not_offline(self):
+        """代理死了：什么资料都没抓到、私信页也没打开，但 session 还在、没撞扫码墙。
+        这是「无法确认」，绝不能判掉线、绝不能推通知。"""
+        result = run_probe(chat_opens=False, chat_state="empty", profile=EMPTY_PROFILE)
+        self.assertTrue(result["valid"], "没连上抖音被误判成掉线，会白推掉线通知")
+        self.assertTrue(result["undecided"])
+        self.assertIn("无法确认", result["message"])
+
+    def test_dead_proxy_but_login_wall_still_offline(self):
+        """哪怕线路差，只要真看见了扫码墙，就是掉线，不能被『无法确认』兜过去。"""
+        result = run_probe(
+            chat_opens=False, chat_state="empty", signals={"hasScan": True}, profile=EMPTY_PROFILE
+        )
         self.assertFalse(result["valid"])
+        self.assertFalse(result["undecided"])
 
 
 class ProxyTimeoutTests(unittest.TestCase):
