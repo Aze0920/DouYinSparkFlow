@@ -7,6 +7,7 @@ import secrets
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from urllib.parse import quote, unquote
 
 from webui import safe_io
 
@@ -412,14 +413,16 @@ def consume_password_code(username: str, code: str) -> None:
 
 def make_token(username: str) -> str:
     name = str(username or "").strip()
-    return f"{_hmac_hex(f'token|{name}')}:{name}"
+    # Cookie 值必须是 latin-1 可编码的：签名走原始用户名，携带部分做百分号编码，
+    # 这样中文等非 ASCII 用户名也能安全写进 Set-Cookie 头。纯 ASCII 用户名编码后不变，向后兼容旧 token。
+    return f"{_hmac_hex(f'token|{name}')}:{quote(name, safe='')}"
 
 
 def parse_token(token: str):
     if not token or ":" not in token:
         return None
-    sig, username = token.split(":", 1)
-    name = str(username or "").strip()
+    sig, encoded = token.split(":", 1)
+    name = unquote(str(encoded or "")).strip()
     if not name or not valid_username(name):
         return None
     if not _digest_eq(sig, _hmac_hex(f"token|{name}")):

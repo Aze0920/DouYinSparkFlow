@@ -98,6 +98,21 @@ class AuthTokenTests(unittest.TestCase):
         self.assertIsNone(parse_token(bad))
         self.assertIsNone(parse_token("not-a-token"))
 
+    def test_token_cookie_is_latin1_safe_for_cjk_username(self):
+        # Set-Cookie 头要求 latin-1 可编码；中文用户名不能让 make_token 产出无法写入的值。
+        token = make_token("小天秤")
+        token.encode("latin-1")  # 不抛异常即视为通过
+
+    def test_token_roundtrips_cjk_username(self):
+        tmp = TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        with patch.object(users_mod, "USERS_FILE", Path(tmp.name) / "users.json"):
+            save_users([make_user("小天秤", "pass1234", role="user", days=7, max_accounts=1)])
+            token = make_token("小天秤")
+            user = parse_token(token)
+            self.assertIsNotNone(user)
+            self.assertEqual(user["username"], "小天秤")
+
     def test_password_hash_differs_from_legacy(self):
         self.assertNotEqual(_hash_password("admin", "admin"), _legacy_hash_password("admin", "admin"))
 
