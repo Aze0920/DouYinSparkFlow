@@ -135,6 +135,20 @@
     </div>
   </div>
 
+  <div id="announceModal" class="modal-mask hidden" onclick="if(event.target===this)closeAnnounce()">
+    <div class="modal-card announce-card">
+      <div class="announce-head">
+        <span class="announce-badge">公告</span>
+        <h3 id="announceTitle">系统公告</h3>
+      </div>
+      <div id="announceBody" class="announce-body"></div>
+      <div class="modal-actions announce-actions">
+        <button class="btn-ghost" type="button" onclick="dismissAnnounceToday()">今日不再提醒</button>
+        <button class="btn-run" type="button" onclick="closeAnnounce()">我知道了</button>
+      </div>
+    </div>
+  </div>
+
   <div id="loginPage" class="login-page hidden">
     <section class="login-box">
       <div class="login-card">
@@ -606,6 +620,11 @@
             </div>
             <div class="settings-row">
               <label>同时处理账号数<input id="maxTaskThreads" type="number" min="1" max="32" value="10" /></label>
+            </div>
+            <div class="settings-row settings-announce">
+              <label class="check-line"><input id="anEnabled" type="checkbox" onchange="syncSettingsVisibility()" /> 登录弹窗公告</label>
+              <label class="settings-if-announce">公告标题<input id="anTitle" maxlength="60" placeholder="可留空，默认显示「系统公告」" autocomplete="off" /></label>
+              <label class="settings-if-announce settings-announce-body">公告内容<textarea id="anContent" rows="4" maxlength="4000" placeholder="用户登录成功后弹出这段公告，支持换行；改动内容后，点过「今日不再提醒」的用户会重新看到。"></textarea></label>
             </div>
             <div class="settings-row">
               <label class="check-line"><input id="pxEnabled" type="checkbox" onchange="syncSettingsVisibility()" /> 启用住宅代理 IP <span class="ck-status" id="pxStatus">未配置</span></label>
@@ -2559,6 +2578,7 @@
         await saveConfig(true, false);
         await saveNotifySettings(true);
         await saveProxySettings(true);
+        await saveAnnounceSettings(true);
         toast("设置已保存");
       } catch (err) {
         toast(err.message, "err");
@@ -2570,7 +2590,9 @@
       const nxOn = !!( $("nxEnabled") && $("nxEnabled").checked );
       const wxOn = !!( $("wxEnabled") && $("wxEnabled").checked );
       const pxOn = !!( $("pxEnabled") && $("pxEnabled").checked );
+      const anOn = !!( $("anEnabled") && $("anEnabled").checked );
       document.querySelectorAll(".settings-if-px").forEach((el) => el.classList.toggle("hidden", !pxOn));
+      document.querySelectorAll(".settings-if-announce").forEach((el) => el.classList.toggle("hidden", !anOn));
       document.querySelectorAll(".settings-if-invite").forEach((el) => el.classList.toggle("hidden", !inviteOn));
       document.querySelectorAll(".settings-if-wp").forEach((el) => el.classList.toggle("hidden", !wpOn));
       document.querySelectorAll(".settings-if-nx").forEach((el) => el.classList.toggle("hidden", !nxOn));
@@ -3152,6 +3174,62 @@
       try {
         fillProxySettings(await api("/api/settings/proxy"));
       } catch (e) {}
+      try {
+        fillAnnounceSettings(await api("/api/settings/announcement"));
+      } catch (e) {}
+    }
+    function fillAnnounceSettings(data) {
+      data = data || {};
+      if ($("anEnabled")) $("anEnabled").checked = !!data.enabled;
+      if ($("anTitle")) $("anTitle").value = data.title || "";
+      if ($("anContent")) $("anContent").value = data.content || "";
+      syncSettingsVisibility();
+    }
+    async function saveAnnounceSettings(silent) {
+      const data = await api("/api/settings/announcement", {
+        method: "POST",
+        body: JSON.stringify({
+          enabled: !!($("anEnabled") && $("anEnabled").checked),
+          title: ($("anTitle") && $("anTitle").value) || "",
+          content: ($("anContent") && $("anContent").value) || "",
+        }),
+      });
+      fillAnnounceSettings(data);
+      if (!silent) toast("公告已保存");
+      return data;
+    }
+    const ANNOUNCE_DISMISS_KEY = "dsf_announce_dismiss";
+    function announceToday() {
+      const d = new Date();
+      const p = (n) => String(n).padStart(2, "0");
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+    }
+    async function maybeShowAnnouncement() {
+      try {
+        const data = await api("/api/announcement");
+        if (!data || !data.active || !data.content) return;
+        let saved = {};
+        try { saved = JSON.parse(localStorage.getItem(ANNOUNCE_DISMISS_KEY) || "{}") || {}; } catch (e) {}
+        // 只有「同一版本公告」且「就在今天」点过不再提醒才跳过；版本变了或换了一天都要弹
+        if (String(saved.version) === String(data.version) && saved.date === announceToday()) return;
+        showAnnounce(data);
+      } catch (e) {}
+    }
+    function showAnnounce(data) {
+      window.__announce = data;
+      if ($("announceTitle")) $("announceTitle").textContent = data.title || "系统公告";
+      if ($("announceBody")) $("announceBody").innerHTML = escapeHtml(data.content || "").replace(/\r?\n/g, "<br>");
+      if ($("announceModal")) $("announceModal").classList.remove("hidden");
+    }
+    function closeAnnounce() {
+      if ($("announceModal")) $("announceModal").classList.add("hidden");
+    }
+    function dismissAnnounceToday() {
+      const data = window.__announce || {};
+      try {
+        localStorage.setItem(ANNOUNCE_DISMISS_KEY, JSON.stringify({ version: data.version || 0, date: announceToday() }));
+      } catch (e) {}
+      closeAnnounce();
     }
     function renderProxyPhones(accounts, current) {
       const sel = $("pxPhone");
@@ -3614,6 +3692,7 @@
       await checkStatus();
       await loadConfig();
       showPage(pathToPage(location.pathname), { replace: true });
+      maybeShowAnnouncement();
       setInterval(async () => {
         if (pollBusy) return;
         pollBusy = true;

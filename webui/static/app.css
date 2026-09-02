@@ -1192,6 +1192,32 @@ body.spark-locked .spark-action {
 .wp-modal-actions { flex-wrap: wrap; justify-content: flex-end; }
 .wp-modal-actions button { width: auto; }
 .modal-card input { width: 100%; margin-top: 8px; }
+.announce-card { width: min(520px, calc(100% - 24px)); }
+.announce-head { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.announce-head h3 { margin: 0; word-break: break-word; }
+.announce-badge {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  color: #fff;
+  background: linear-gradient(135deg, #ff7a45, #ff4d4f);
+}
+.announce-body {
+  margin: 6px 0 4px;
+  max-height: 52vh;
+  overflow-y: auto;
+  line-height: 1.7;
+  color: var(--text, #e6e6e6);
+  white-space: normal;
+  word-break: break-word;
+  font-size: 14px;
+}
+.announce-actions { flex-wrap: wrap; }
+.announce-actions button { width: auto; }
+.settings-announce-body { grid-column: span 2; }
+.settings-announce textarea { min-height: 88px; resize: vertical; width: 100%; }
 .invite-link-box {
   display: flex;
   gap: 8px;
@@ -1254,6 +1280,7 @@ body.spark-locked .spark-action {
   .form-row .btn-primary { grid-column: 1 / -1; width: 100%; }
   .settings-row { grid-template-columns: 1fr; }
   .settings-broadcast-body { grid-column: auto; }
+  .settings-announce-body { grid-column: auto; }
   .dash-admin-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-admin-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dash-hero { flex-direction: column; align-items: stretch; gap: 0; }

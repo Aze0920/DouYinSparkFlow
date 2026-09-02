@@ -19,6 +19,11 @@ from webui import keepalive, safe_io
 from webui.origin import public_origin, split_host_port
 from webui.proxy import fetch_proxy, load_proxy, proxy_enabled, public_proxy, save_proxy
 from webui.proxy import list_accounts as list_proxy_accounts_api
+from webui.announcement import (
+    admin_announcement,
+    public_announcement,
+    save_announcement,
+)
 from webui.regions import area_label, normalize_area, region_of, region_tree
 from webui.legal_docs import (
     PRIVACY_HTML,
@@ -1232,6 +1237,30 @@ def test_proxy_settings(request: Request, payload: dict | None = None):
         raise HTTPException(status_code=400, detail=f"提取失败（耗时 {cost}s）：{why}")
     logger.info("代理提取测试成功 area=%s server=%s", area, server)
     return {"ok": True, "server": server, "area": area, "area_label": area_label(area), "seconds": cost}
+
+
+@app.get("/api/announcement")
+def get_announcement(request: Request):
+    # 已登录用户都能拉到公告，用于登录后弹窗。
+    require_auth(request)
+    return {"ok": True, **public_announcement()}
+
+
+@app.get("/api/settings/announcement")
+def get_announcement_settings(request: Request):
+    require_admin(request)
+    return {"ok": True, **admin_announcement()}
+
+
+@app.post("/api/settings/announcement")
+def save_announcement_settings(request: Request, payload: dict | None = None):
+    admin = require_admin(request)
+    data = save_announcement(payload or {})
+    logger.info(
+        "已保存登录公告 admin=%s enabled=%s len=%s version=%s",
+        admin.get("username"), data.get("enabled"), len(data.get("content") or ""), data.get("version"),
+    )
+    return {"ok": True, **admin_announcement(data)}
 
 
 @app.get("/api/settings/notify")
