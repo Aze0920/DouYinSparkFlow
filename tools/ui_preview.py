@@ -38,26 +38,33 @@ USER = {
 }
 
 
+# 贴近真实账号：好友多、昵称长、模板里带转义符，这些都是撑爆布局的常见来源
+FRIENDS = ["帅帅", "凯凯", "赵喜巧", "三七", "喜喜宝贝", "长长长长的备注名字测试", "十七"]
+TEMPLATE = "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n愿你今天也被温柔以待"
+
+
 def make_account(idx: int, bound: bool = True) -> dict:
+    targets = FRIENDS[: 5 + (idx % 3)] if bound else []
     return {
-        "username": f"火花小号{idx}",
-        "unique_id": f"douyin_{idx}0086",
+        "username": "王洁" if idx % 2 else f"火花小号{idx}",
+        "unique_id": f"dy2g3m9ueeey{idx}",
         "avatar": "",
         "cookies_set": bound,
         "cookie_status": "ok" if bound else "",
         "cookie_source": "qr",
         "owner": "小天秤",
         "region": "410700",
-        "cron_hour": 9,
-        "cron_minute": 0,
-        "message_template": "早安，今天也要元气满满呀～",
-        "targets": ["阿橙", "小满"] if bound else [],
+        "cron_hour": 0,
+        "cron_minute": 1,
+        "message_template": TEMPLATE,
+        "targets": targets,
         "target_avatars": {},
-        "target_sparks": {"阿橙": 128, "小满": 47},
+        "target_sparks": {n: 90 + i * 137 for i, n in enumerate(targets)},
     }
 
 
-ACCOUNTS = [make_account(1), make_account(2), make_account(3, bound=False)]
+# 用户真实规模是 41 个账号（每页 10 个）
+ACCOUNTS = [make_account(i, bound=(i % 7 != 0)) for i in range(1, 42)]
 
 FAKE_API = {
     "/api/me": {"authed": True, "user": USER},

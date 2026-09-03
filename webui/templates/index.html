@@ -1422,6 +1422,22 @@
       }
       return window.__regions;
     }
+    // 手机上账号卡默认收起，只留一行摘要：41 个账号全展开要滚十几屏，根本没法用。
+    // 这里记住展开的是哪几个，翻页或重渲染后不会把用户正在编辑的那张合上。
+    window.__openAccounts = new Set();
+    function accountKey(data, index) {
+      return data.unique_id ? "uid:" + data.unique_id : "idx:" + index;
+    }
+    function toggleAccountCard(index, event) {
+      // 头部里的「检测 / 删除」有自己的动作，别被折叠抢走点击
+      if (event && event.target.closest("button")) return;
+      const card = document.querySelector('.account[data-index="' + index + '"]');
+      if (!card) return;
+      const opened = card.classList.toggle("is-open");
+      const key = card.dataset.key || "";
+      if (opened) window.__openAccounts.add(key);
+      else window.__openAccounts.delete(key);
+    }
     function accountCard(data, index) {
       const name = data.username || "抖音账号";
       const uid = data.unique_id || "";
@@ -1430,12 +1446,16 @@
       const operate = canSpark();
       const ck = cookieStatusMeta(data);
       const tpl = data.message_template || window.__defaultTemplate || "";
-      return `<div class="account" data-index="${index}">
-        <div class="account-head">
+      const key = accountKey(data, index);
+      const open = window.__openAccounts.has(key);
+      const brief = `${cron} · ${(data.targets || []).length} 个好友`;
+      return `<div class="account${open ? " is-open" : ""}" data-index="${index}" data-key="${escapeAttr(key)}">
+        <div class="account-head" onclick="toggleAccountCard(${index}, event)">
           ${avatarImg(data.avatar, name, "account-avatar")}
           <div class="account-head-copy">
             <strong>${escapeHtml(name)}</strong>
             <div class="account-id">${uid ? escapeHtml(uid) : "尚未登录"}</div>
+            <div class="account-brief">${escapeHtml(brief)}</div>
           </div>
           <div class="account-head-right">
             <span class="ck-status ${ck.cls}">${ck.text}</span>
@@ -1443,8 +1463,12 @@
               <button class="btn-ghost mini spark-action" type="button" onclick="checkAccount(${index})" ${operate ? "" : "disabled"}>检测</button>
               <button class="btn-ghost mini spark-action" type="button" onclick="removeAccount(${index})" ${operate ? "" : "disabled"}>删除</button>
             </div>
+            <span class="account-caret" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>
+            </span>
           </div>
         </div>
+        <div class="account-body">
         <input type="hidden" class="username" value="${escapeAttr(name)}" />
         <input type="hidden" class="unique-id" value="${escapeAttr(uid)}" />
         <input type="hidden" class="account-avatar-url" value="${escapeAttr(data.avatar || "")}" />
@@ -1472,6 +1496,7 @@
           <button class="btn-ghost spark-action" type="button" onclick="openAddAccount(${index})" ${operate ? "" : "disabled"}>${bound ? "重新登录" : "扫码登录"}</button>
           ${isAdmin() ? `<button class="btn-ghost" type="button" onclick="copyAccountCk(${index})" ${bound ? "" : "disabled"}>复制CK</button>` : ""}
           <button class="btn-run btn-run-account spark-action" type="button" data-uid="${escapeAttr(uid)}" onclick="runAccount(${index})" ${operate ? "" : "disabled"}>立即续火花</button>
+        </div>
         </div>
       </div>`;
     }

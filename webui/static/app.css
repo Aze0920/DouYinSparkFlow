@@ -892,6 +892,11 @@ body.spark-locked .spark-action {
   flex-wrap: nowrap;
   align-items: center;
 }
+/* 桌面上这层包装不参与布局，卡片内部还是原来的 flex 列，间距一像素不变。
+   手机上它才变成可折叠的容器（见底部媒体查询）。 */
+.account-body { display: contents; }
+.account-brief,
+.account-caret { display: none; }
 .account-head-copy {
   flex: 1;
   min-width: 0;
@@ -1311,14 +1316,49 @@ body.spark-locked .spark-action {
   .dash-empty { min-height: 0; padding: 20px 12px; gap: 6px; }
   .dash-empty-icon { width: 46px; height: 46px; border-radius: 15px; font-size: 19px; margin-bottom: 2px; }
 
-  /* 账号卡片：手机上最占高度的一块，去掉撑高并把按钮排成栅格 */
-  .accounts-grid .account { min-height: 0; padding: 14px; gap: 10px; }
-  .dy-avatar-wrap.account-avatar { width: 44px; height: 44px; }
-  .account-head-copy { min-height: 44px; }
+  /* 账号卡片：手机上默认收起成一行摘要，点一下再展开编辑。
+     41 个账号全摊开要滚十几屏，这才是手机端最主要的臃肿来源。 */
+  .accounts-grid { gap: 8px; }
+  .accounts-grid .account { min-height: 0; padding: 10px 12px; gap: 10px; }
+  .account-head { cursor: pointer; }
+  .account-body { display: none; }
+  .account.is-open > .account-body {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .account-brief {
+    display: block;
+    color: var(--muted);
+    font-size: 12px;
+    margin-top: 2px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .account-caret {
+    display: grid;
+    place-items: center;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    color: var(--muted);
+    transition: transform .18s ease;
+  }
+  .account-caret svg { width: 16px; height: 16px; }
+  .account.is-open .account-caret { transform: rotate(180deg); color: var(--ember); }
+  /* 收起时头部就是整张卡，别再留出撑高的空白 */
+  .accounts-grid .account-head { min-height: 0; }
+  .dy-avatar-wrap.account-avatar { width: 40px; height: 40px; }
+  .account-head-copy { min-height: 0; }
   .account-head-copy strong { font-size: 15px; }
+  .account-head-right { gap: 8px; }
+  /* 收起状态下「检测 / 删除」先不占地方，展开后再给出来 */
+  .account:not(.is-open) .account-head-actions { display: none; }
   .accounts-grid .account .targets { min-height: 96px; }
   .accounts-grid .account .message-template { min-height: 68px; }
-  .target-friend-list { max-height: 210px; }
+  /* 行高 42 + 间距 6，正好卡 4 行（4*42+3*6），避免露出半行显得像坏了 */
+  .target-friend-list { max-height: 186px; }
   .target-friend-row { min-height: 42px; }
   .account-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; }
   .account-actions.has-copy-ck { grid-template-columns: repeat(3, minmax(0, 1fr)); }

@@ -64,8 +64,10 @@ def probe(rev: str | None):
 
 
 def main():
-    before = probe("HEAD")
+    base = sys.argv[1] if len(sys.argv) > 1 else "HEAD"
+    before = probe(base)
     after = probe(None)
+    print(f"对比基准：{base}\n")
     print(f"{'视口':<16}{'页面':<10}{'改前':>7}{'改后':>7}{'变化':>10}   横向溢出   能滚到底")
     print("-" * 74)
     for key in before:

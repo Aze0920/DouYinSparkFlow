@@ -55,6 +55,35 @@ class CssStructureTests(unittest.TestCase):
             self.assertNotIn(dead, text, f"CSS 里还留着已删除组件 {dead} 的样式")
 
 
+class AccountFoldTests(unittest.TestCase):
+    """手机端账号卡折叠：只影响手机，且不能把可编辑字段搬出卡片。"""
+
+    def test_desktop_wrapper_is_layout_neutral(self):
+        css = read(CSS)
+        # display:contents 让包装层在桌面端不参与布局，卡片间距才保持原样
+        self.assertRegex(css, r"\.account-body\s*\{\s*display:\s*contents;\s*\}")
+
+    def test_mobile_collapses_by_default(self):
+        mobile = read(CSS).split("@media (max-width: 860px)", 1)[1]
+        self.assertRegex(mobile, r"\.account-body\s*\{\s*display:\s*none;")
+        self.assertIn(".account.is-open > .account-body", mobile)
+
+    def test_body_wraps_all_editable_fields(self):
+        """折叠靠隐藏 .account-body，字段必须都在里面；
+        漏在外面的字段收起时会露馅，读取逻辑也会错位。"""
+        html = read(HTML)
+        card = html.split("function accountCard(", 1)[1].split("\n    }", 1)[0]
+        body = card.split('<div class="account-body">', 1)[1]
+        for field in ("cron-time", "message-template", "targets-json", "account-actions", "unique-id"):
+            self.assertIn(field, body, f"{field} 不在 .account-body 里，收起时会露出来")
+
+    def test_toggle_ignores_clicks_on_buttons(self):
+        """头部有「检测 / 删除」，折叠不能抢走它们的点击。"""
+        html = read(HTML)
+        fn = html.split("function toggleAccountCard(", 1)[1].split("\n    }", 1)[0]
+        self.assertIn('closest("button")', fn)
+
+
 class HtmlStructureTests(unittest.TestCase):
     def test_div_tags_balanced(self):
         text = read(HTML)
