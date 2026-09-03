@@ -255,7 +255,14 @@ class SpaNavTests(unittest.TestCase):
     def test_mobile_uses_bottom_tabs(self):
         self.assertIn("bottom: 0", CSS)
         self.assertIn(".sidebar .nav-btn.admin-only", CSS)
-        self.assertIn("88px + env(safe-area-inset-bottom)", CSS)
+        # 主区底部要给固定标签栏留出安全区。留多少像素会随布局微调，这里只认「留了」，不写死数值。
+        self.assertRegex(CSS, r"padding:[^;]*\d+px \+ env\(safe-area-inset-bottom\)")
+
+    def test_mobile_lets_the_document_scroll(self):
+        """桌面是「只滚 .main」，手机必须把高度交还文档流，
+        否则 .app 锁死一屏高，下面的内容会溢出到一个滚不动的盒子里。"""
+        mobile = CSS.split("@media (max-width: 860px)", 1)[1]
+        self.assertRegex(mobile, r"\.app\s*\{[^}]*height:\s*auto")
 
 
 class PublicOriginTests(unittest.TestCase):

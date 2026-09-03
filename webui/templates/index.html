@@ -247,14 +247,10 @@
         </div>
       </div>
     </aside>
-    <div class="sidebar-backdrop" id="sidebarBackdrop" onclick="closeMobileSidebar()"></div>
 
     <main class="main">
       <div class="topbar">
         <div class="topbar-left">
-          <button class="menu-btn" type="button" onclick="toggleSidebar()" title="打开菜单" aria-label="打开菜单">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
-          </button>
           <div class="topbar-titles">
             <h1 class="page-title" id="pageTitle">仪表盘</h1>
             <div class="sub" id="pageSub">今天也要好好续火</div>
@@ -769,26 +765,15 @@
     function isMobileLayout() {
       return window.matchMedia("(max-width: 860px)").matches;
     }
-    function closeMobileSidebar() {
-      document.documentElement.classList.remove("sidebar-open");
-    }
     function toggleSidebar() {
-      if (isMobileLayout()) {
-        document.documentElement.classList.toggle("sidebar-open");
-        return;
-      }
+      // 手机上侧栏被布局成底部标签栏，没有折叠态，只有桌面需要记住折叠
+      if (isMobileLayout()) return;
       const next = !document.documentElement.classList.contains("sidebar-collapsed");
       document.documentElement.classList.toggle("sidebar-collapsed", next);
       try {
         localStorage.setItem(SIDEBAR_KEY, next ? "1" : "0");
       } catch (e) {}
     }
-    window.addEventListener("resize", () => {
-      if (!isMobileLayout()) closeMobileSidebar();
-    });
-    document.addEventListener("keydown", (event) => {
-      if (event.key === "Escape") closeMobileSidebar();
-    });
     async function api(path, options = {}) {
       const resp = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
       const data = await resp.json().catch(() => ({}));
@@ -1071,7 +1056,6 @@
       if (event && (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey || event.button)) return true;
       if (event) event.preventDefault();
       showPage(name);
-      closeMobileSidebar();
       return false;
     }
     function showPage(name, opts) {
