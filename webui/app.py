@@ -16,6 +16,8 @@ from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui import keepalive, safe_io
+from webui.http_log import filter_probe_lines, is_app_path
+from webui import run_preview
 from webui.origin import public_origin, split_host_port
 from webui.proxy import (
     fetch_github_proxy,
@@ -183,9 +185,19 @@ _sched_boot = time.time()
 @app.middleware("http")
 async def log_api_calls(request: Request, call_next):
     path = request.url.path
+    # 扫目录的机器人不写进运行日志，否则「刷新日志」里全是 /wp-admin
+    if not is_app_path(path):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["X-XSS-Protection"] = "0"
+        return response
     quiet = path in {
         "/api/status",
         "/api/logs",
+        "/api/run/preview",
+        "/api/run/preview.jpg",
         "/api/me",
         "/api/douyin/login/status",
         "/api/douyin/login/live",
@@ -451,6 +463,11 @@ def _filter_accounts(user: dict | None, accounts: list) -> list:
         return accounts
     name = str((user or {}).get("username") or "")
     return [item for item in accounts if _account_owner(item) == name]
+
+
+def _preview_visible(user: dict | None, data: dict | None) -> bool:
+    """私信截图只给管理员。普通用户连空框都不该看见。"""
+    return _is_admin(user)
 
 
 def _load_spark_stats() -> dict:
@@ -1632,6 +1649,52 @@ def status(request: Request):
     return payload
 
 
+def _public_preview(data: dict) -> dict:
+    return {
+        "ts": float(data.get("ts") or 0),
+        "phase": str(data.get("phase") or ""),
+        "caption": str(data.get("caption") or ""),
+        "account": str(data.get("account") or ""),
+        "friend": str(data.get("friend") or ""),
+        "before": str(data.get("before") or ""),
+        "after": str(data.get("after") or ""),
+        "result": str(data.get("result") or ""),
+        "has_image": bool(data.get("has_image")),
+        "recent": [
+            {
+                "friend": str(row.get("friend") or ""),
+                "account": str(row.get("account") or ""),
+                "result": str(row.get("result") or ""),
+                "before": str(row.get("before") or ""),
+                "after": str(row.get("after") or ""),
+            }
+            for row in (data.get("recent") or [])
+            if isinstance(row, dict)
+        ],
+    }
+
+
+@app.get("/api/run/preview")
+def run_live_preview(request: Request):
+    require_admin(request)
+    data = run_preview.snapshot()
+    return {
+        "ok": True,
+        "visible": True,
+        "running": bool(_run_state["running"]),
+        **_public_preview(data),
+    }
+
+
+@app.get("/api/run/preview.jpg")
+def run_live_preview_image(request: Request):
+    require_admin(request)
+    raw = run_preview.image_bytes()
+    if not raw:
+        raise HTTPException(status_code=404, detail="还没有截图")
+    return Response(content=raw, media_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+
 @app.post("/api/github/check")
 def github_check(request: Request):
     require_admin(request)
@@ -2112,7 +2175,9 @@ def logs(request: Request, lines: int = 4000):
     require_admin(request)
     if not LOG_FILE.is_file():
         return {"ok": True, "text": "还没有日志。扫码登录、从 GitHub 更新、续火花都会写到这里。"}
-    content = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    content = filter_probe_lines(
+        LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
+    )
     return {"ok": True, "text": "\n".join(content[-max(50, min(lines, 8000)):])}
 
 
@@ -2223,6 +2288,10 @@ def _run_task(unique_ids=None):
             ]
             _run_state["message"] = "正在执行续火花任务"
         _run_state["started_at"] = time.time()
+        try:
+            run_preview.begin_run(ids or _run_state.get("running_ids") or [])
+        except Exception:
+            logger.debug("实时预览开场失败", exc_info=True)
         logger.info("开始执行续火花任务 ids=%s", ids or "全部")
         proc = subprocess.run(
             [sys.executable, str(ROOT / "main.py")],
@@ -2256,6 +2325,10 @@ def _run_task(unique_ids=None):
     finally:
         _run_state["running"] = False
         _run_state["running_ids"] = []
+        try:
+            run_preview.finish_run()
+        except Exception:
+            logger.debug("实时预览收尾失败", exc_info=True)
         try:
             LOCK_FILE.unlink(missing_ok=True)
         except Exception:

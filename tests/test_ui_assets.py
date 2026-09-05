@@ -28,7 +28,7 @@ class EncodingTests(unittest.TestCase):
     def test_chinese_still_readable(self):
         # 挑几个必然存在的中文串，编码一旦串味这里就会挂
         html = read(HTML)
-        for word in ("仪表盘", "账号列表", "立即续火花", "今日不再提醒"):
+        for word in ("仪表盘", "账号列表", "立即续火花", "今日不再提醒", "实时预览"):
             self.assertIn(word, html)
 
 

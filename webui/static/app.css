@@ -298,6 +298,90 @@ html.sidebar-collapsed .logout-btn { padding-left: 8px; padding-right: 8px; }
 .card-click { cursor: pointer; }
 .card-click:hover { border-color: rgba(255, 122, 58, 0.45); transform: translateY(-1px); }
 .panel { padding: 18px; margin-top: 16px; }
+.panel-head .run-preview-cap {
+  margin: 0;
+  max-width: min(520px, 100%);
+  text-align: right;
+  font-size: 13px;
+}
+.run-preview-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+  gap: 14px;
+  align-items: start;
+}
+.run-preview-frame {
+  position: relative;
+  min-height: 180px;
+  background: #0a1018;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.run-preview-shot {
+  display: block;
+  width: 100%;
+  height: auto;
+  vertical-align: top;
+}
+.run-preview-empty {
+  padding: 36px 20px;
+  color: var(--muted);
+  text-align: center;
+  line-height: 1.6;
+  font-size: 13px;
+}
+.run-preview-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 8px;
+  max-height: 360px;
+  overflow: auto;
+}
+.run-preview-list li {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, .03);
+  border: 1px solid var(--line);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.run-preview-list li b { display: block; margin-bottom: 2px; }
+.run-preview-list li.is-ok { border-color: rgba(79, 210, 165, .28); }
+.run-preview-list li.is-fail { border-color: rgba(255, 93, 122, .35); }
+.run-preview-list li.is-ok b { color: var(--ok); }
+.run-preview-list li.is-fail b { color: var(--rose); }
+.run-preview-dock {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  width: min(360px, calc(100vw - 32px));
+  z-index: 30;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.run-preview-dock-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+}
+.run-preview-dock-head strong { flex: 0 0 auto; font-size: 13px; }
+.run-preview-dock-head .run-preview-cap {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.run-preview-dock .run-preview-shot { max-height: 200px; object-fit: cover; object-position: top left; }
 
 .dash { display: grid; gap: 18px; }
 .dash-hero {
@@ -1272,6 +1356,9 @@ body.spark-locked .spark-action {
     padding: 12px 12px calc(78px + env(safe-area-inset-bottom));
   }
   .panel { padding: 14px; margin-top: 12px; }
+  .run-preview-body { grid-template-columns: 1fr; }
+  .panel-head .run-preview-cap { text-align: left; max-width: none; }
+  .run-preview-dock { right: 12px; bottom: calc(72px + env(safe-area-inset-bottom)); }
   .card { padding: 13px; }
   .card strong { font-size: 20px; }
   .card-sub { margin-top: 4px; }

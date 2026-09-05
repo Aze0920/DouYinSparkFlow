@@ -84,14 +84,21 @@ class FakePage:
         self.keyboard = FakeKeyboard(editor)
         self.chat_texts = []
         self.previews = []
+        self.revealed_previews = None
+        self.clicked_titles = []
         self.frames = []
         editor.page = self
 
     def locator(self, _selector):
         return FakeEmpty()
 
-    def evaluate(self, script):
+    def evaluate(self, script, arg=None):
         text = str(script or "")
+        if "click-conversation" in text:
+            self.clicked_titles.append(arg)
+            if self.revealed_previews is not None:
+                self.previews = list(self.revealed_previews)
+            return True
         if "ConversationItemwrapper" in text or "conversation-item" in text:
             return list(self.previews)
         return list(self.chat_texts)
@@ -121,12 +128,15 @@ class SendChatMessageTests(unittest.TestCase):
         self._wait_locator = tasks._wait_locator
         self._toast_warning = tasks._toast_warning
         self._sleep = tasks.time.sleep
+        self._live = tasks._live
         tasks.time.sleep = lambda *_: None
+        tasks._live = lambda *a, **k: None
 
     def tearDown(self):
         tasks._wait_locator = self._wait_locator
         tasks._toast_warning = self._toast_warning
         tasks.time.sleep = self._sleep
+        tasks._live = self._live
 
     def test_sends_message_and_splits_literal_newlines(self):
         editor = FakeEditor()
@@ -304,6 +314,78 @@ class SendChatMessageTests(unittest.TestCase):
         editor.on_enter = on_enter
         tasks._send_chat_message(page, "[盖瑞]今日火花[加一]", friend_name="凯凯")
         self.assertEqual(editor.sent, ["[盖瑞]今日火花[加一]"])
+
+    def test_empty_current_preview_is_revealed_by_clicking_other(self):
+        """点开凯凯后预览被收空，点一下别人再读，正文变成新火花才算成功。"""
+        editor = FakeEditor(shows_in_chat=False)
+        page = _patched(editor)
+        page.chat_texts = ["昨天的旧消息"]
+        page.previews = [
+            {"title": "静静", "preview": "[盖瑞]今日火花[加一] 洞庭有归客", "time": "刚刚", "current": False},
+            {"title": "凯凯", "preview": "めまぐるしい", "time": "02:40", "current": True},
+        ]
+        page.revealed_previews = [
+            {"title": "静静", "preview": "[盖瑞]今日火花[加一] 洞庭有归客", "time": "刚刚", "current": True},
+            {"title": "凯凯", "preview": "[盖瑞]今日火花[加一] 洞庭有归客", "time": "刚刚", "current": False},
+        ]
+
+        def on_enter():
+            editor.sent.append(editor.text)
+            editor.text = ""
+            page.previews = [
+                {"title": "静静", "preview": "[盖瑞]今日火花[加一] 洞庭有归客", "time": "刚刚", "current": False},
+                {"title": "凯凯", "preview": "", "time": "刚刚", "current": True},
+            ]
+
+        editor.on_enter = on_enter
+        tasks._send_chat_message(page, "[盖瑞]今日火花[加一]", friend_name="凯凯")
+        self.assertEqual(editor.sent, ["[盖瑞]今日火花[加一]"])
+        self.assertEqual(page.clicked_titles, ["静静"])
+
+    def test_empty_preview_still_fails_when_revealed_preview_unchanged(self):
+        """收空后再读仍是旧预览，说明没发出去，不能当成成功。"""
+        editor = FakeEditor(shows_in_chat=False)
+        page = _patched(editor)
+        page.chat_texts = ["昨天的旧消息"]
+        page.previews = [
+            {"title": "静静", "preview": "别人的旧消息", "time": "刚刚", "current": False},
+            {"title": "凯凯", "preview": "めまぐるしい", "time": "02:40", "current": True},
+        ]
+        page.revealed_previews = [
+            {"title": "静静", "preview": "别人的旧消息", "time": "刚刚", "current": True},
+            {"title": "凯凯", "preview": "めまぐるしい", "time": "刚刚", "current": False},
+        ]
+
+        def on_enter():
+            editor.sent.append(editor.text)
+            editor.text = ""
+            page.previews = [
+                {"title": "静静", "preview": "别人的旧消息", "time": "刚刚", "current": False},
+                {"title": "凯凯", "preview": "", "time": "刚刚", "current": True},
+            ]
+
+        editor.on_enter = on_enter
+        with self.assertRaises(RuntimeError) as ctx:
+            tasks._send_chat_message(page, "[盖瑞]今日火花[加一]", friend_name="凯凯")
+        self.assertIn("会话预览没有更新", str(ctx.exception))
+        self.assertEqual(page.clicked_titles, ["静静"])
+
+    def test_empty_preview_without_other_conversation_is_still_failure(self):
+        editor = FakeEditor(shows_in_chat=False)
+        page = _patched(editor)
+        page.chat_texts = ["昨天的旧消息"]
+        page.previews = [{"title": "凯凯", "preview": "めまぐるしい", "time": "02:40", "current": True}]
+
+        def on_enter():
+            editor.sent.append(editor.text)
+            editor.text = ""
+            page.previews = [{"title": "凯凯", "preview": "", "time": "刚刚", "current": True}]
+
+        editor.on_enter = on_enter
+        with self.assertRaises(RuntimeError) as ctx:
+            tasks._send_chat_message(page, "[盖瑞]今日火花[加一]", friend_name="凯凯")
+        self.assertIn("会话预览没有更新", str(ctx.exception))
+        self.assertEqual(page.clicked_titles, [])
 
 
 class FinishSendResultTests(unittest.TestCase):

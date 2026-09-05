@@ -101,6 +101,7 @@ def run_task(*, region, leases, wait_results, login_wall=False, friends=()):
         patch.object(tasks, "_find_locator", return_value=(None, None, "")),
         patch.object(tasks, "_dump_chat_debug", return_value=None),
         patch.object(tasks, "scroll_and_select_user", return_value=iter(friends)),
+        patch.object(tasks, "_live", lambda *a, **k: None),
         patch.object(tasks.time, "sleep", lambda *a, **k: None),
         patch("webui.session_store.load_state_path", return_value=None),
         patch("webui.session_store.save_state", return_value=True),

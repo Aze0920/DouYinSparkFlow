@@ -94,6 +94,22 @@ class SpaNavTests(unittest.TestCase):
         self.assertNotIn('class="users-grid"', INDEX)
         self.assertNotIn('class="user-card"', INDEX)
 
+    def test_run_preview_is_wired(self):
+        self.assertIn('id="runPreviewPanel"', INDEX)
+        self.assertIn("run-preview-panel admin-only hidden", INDEX)
+        self.assertIn("function refreshRunPreview", INDEX)
+        self.assertIn("if (!isAdmin()) return;", INDEX)
+        self.assertIn("/api/run/preview", INDEX)
+        self.assertIn("/api/run/preview", APP_PY)
+        self.assertIn("/api/run/preview.jpg", APP_PY)
+        self.assertIn(".run-preview-frame", CSS)
+        start = APP_PY.find('@app.get("/api/run/preview")')
+        self.assertGreaterEqual(start, 0)
+        nxt = APP_PY.find("@app.get(", start + 10)
+        chunk = APP_PY[start:nxt if nxt > start else start + 400]
+        self.assertIn("require_admin", chunk)
+        self.assertNotIn("require_auth", chunk)
+
     def test_accounts_page_shows_count_and_paginates_by_ten(self):
         self.assertIn('id="accountsTitle"', INDEX)
         self.assertIn("抖音账号【${list.length}】", INDEX)

@@ -1,5 +1,6 @@
 import random
 import re
+import threading
 import traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -13,6 +14,24 @@ import time
 
 config = get_config()
 logger = setup_logger(level=config.get("logLevel", "Info"))
+_preview_ctx = threading.local()
+
+
+def _preview_bind(account: str = "", unique_id: str = ""):
+    _preview_ctx.account = account
+    _preview_ctx.unique_id = unique_id
+
+
+def _live(page=None, **kwargs):
+    """实时预览失败不能拖累发送。"""
+    try:
+        from webui.run_preview import publish
+
+        kwargs.setdefault("account", getattr(_preview_ctx, "account", "") or "")
+        kwargs.setdefault("unique_id", getattr(_preview_ctx, "unique_id", "") or "")
+        publish(page, **kwargs)
+    except Exception:
+        logger.debug("实时预览更新失败", exc_info=True)
 
 CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
@@ -70,7 +89,7 @@ SEND_BUTTON_SELECTORS = [
 ]
 CHAT_BUBBLE_JS = """() => {
   const nodes = [...document.querySelectorAll(
-    '[class*="essage"],[class*="ubble"],[class*="MessageItem"],[class*="messageItem"],[class*="imMessage"]'
+    '[data-e2e*="message"],[class*="essage"],[class*="ubble"],[class*="MessageItem"],[class*="messageItem"],[class*="imMessage"],[class*="chatItem"],[class*="ChatItem"]'
   )];
   return nodes.slice(-24).map(el => (el.innerText || '').replace(/\\s+/g, ' ').trim()).filter(Boolean);
 }"""
@@ -89,6 +108,19 @@ LIST_PREVIEW_JS = """() => {
       current: /curConversation|isActive|selected/i.test(el.className || ''),
     };
   }).filter((row) => row.title || row.preview);
+}"""
+CLICK_CONVERSATION_JS = """(title) => {
+  /* click-conversation */
+  const items = [...document.querySelectorAll(
+    '[data-e2e="conversation-item"], .conversationConversationItemwrapper, [class*="ConversationItemwrapper"]'
+  )];
+  const el = items.find((item) => {
+    const t = item.querySelector('[class*="ConversationItemtitle"], [class*="Itemtitle"], [class*="nickName"]');
+    return ((t && t.innerText) || '').replace(/\\s+/g, ' ').trim() === title;
+  });
+  if (!el) return false;
+  el.click();
+  return true;
 }"""
 LOGIN_HINTS = ("扫码登录", "登录后免费畅享", "打开「抖音APP」", "验证码登录", "请使用抖音APP")
 CHALLENGE_HINTS = (
@@ -632,6 +664,39 @@ def _preview_updated(before_row: dict | None, after_row: dict | None, snippet: s
     return _text_has_snippet(after_preview, snippet)
 
 
+def _other_conversation_title(rows: list[dict], friend_name: str) -> str:
+    for row in rows:
+        title = str(row.get("title") or "").strip()
+        if title and title != friend_name:
+            return title
+    return ""
+
+
+def _click_conversation_title(page, title: str) -> bool:
+    if not title:
+        return False
+    try:
+        return bool(page.evaluate(CLICK_CONVERSATION_JS, title))
+    except TypeError:
+        return False
+    except Exception:
+        logger.debug("点开会话 %s 失败", title, exc_info=True)
+        return False
+
+
+def _reveal_hidden_preview(page, friend_name: str) -> dict | None:
+    """当前会话被点开后，列表预览经常被收成空的。点一下别人再读回来。"""
+    rows = _list_previews(page)
+    other = _other_conversation_title(rows, friend_name)
+    if not other:
+        return _row_for_friend(rows, friend_name)
+    if not _click_conversation_title(page, other):
+        return _row_for_friend(rows, friend_name)
+    logger.info("发送核对 %s 当前预览被收空，点开 %s 后再读", friend_name or "?", other)
+    time.sleep(0.4)
+    return _row_for_friend(_list_previews(page), friend_name)
+
+
 def _finish_send_result(username: str, sent: list, failed: list, blocked: str = ""):
     if blocked:
         raise RuntimeError(
@@ -664,6 +729,13 @@ def _send_chat_message(page, message: str, send_records=None, friend_name=""):
     if chat_input is None:
         raise RuntimeError("找不到聊天输入框，会话可能没打开")
     logger.debug("使用输入框 selector=%s", selector)
+    _live(
+        page,
+        friend=friend_name,
+        phase="sending",
+        caption=f"正在给 {friend_name or '好友'} 发消息",
+        force=True,
+    )
     editor = _editor_target(page, chat_input)
     lines = [part for part in message.replace("\\n", "\n").split("\n")]
     snippet = _message_snippet(message)
@@ -712,6 +784,25 @@ def _send_chat_message(page, message: str, send_records=None, friend_name=""):
         landed = True
     if _snippet_hits(after_chat, snippet) > _snippet_hits(before_chat, snippet):
         landed = True
+    # 点开当前会话后，抖音常把这一行预览收成空的。静静靠气泡过了，凯凯气泡也是 0。
+    if not landed and friend_name and not ((after_row or {}).get("preview") or "").strip():
+        _live(
+            page,
+            friend=friend_name,
+            phase="reveal",
+            caption=f"{friend_name} 当前预览被收空，点开别人再核对",
+            before=(before_row or {}).get("preview") or "",
+            after="",
+            force=True,
+        )
+        revealed = _reveal_hidden_preview(page, friend_name)
+        if revealed:
+            after_row = revealed
+        if _preview_updated(before_row, after_row, snippet):
+            landed = True
+        after_chat = _chat_texts(page)
+        if _snippet_hits(after_chat, snippet) > _snippet_hits(before_chat, snippet):
+            landed = True
     logger.info(
         "发送核对 %s 预览「%s」→「%s」 气泡 %s→%s",
         friend_name or "?",
@@ -720,25 +811,86 @@ def _send_chat_message(page, message: str, send_records=None, friend_name=""):
         _snippet_hits(before_chat, snippet),
         _snippet_hits(after_chat, snippet),
     )
+    before_txt = (before_row or {}).get("preview") or ""
+    after_txt = (after_row or {}).get("preview") or ""
     api_error = _send_failure_from_api(list(send_records or []))
     if api_error:
+        _live(
+            page,
+            friend=friend_name,
+            phase="fail",
+            result="fail",
+            caption=f"{friend_name or '好友'} 被抖音拒绝",
+            before=before_txt,
+            after=after_txt,
+            force=True,
+        )
         raise RuntimeError(f"抖音拒绝了这条消息：{api_error}")
     toast = _toast_warning(page)
     if toast:
+        _live(
+            page,
+            friend=friend_name,
+            phase="fail",
+            result="fail",
+            caption=f"{friend_name or '好友'} 出现提示：{toast}",
+            before=before_txt,
+            after=after_txt,
+            force=True,
+        )
         raise RuntimeError(f"抖音提示：{toast}")
     if landed:
+        _live(
+            page,
+            friend=friend_name,
+            phase="ok",
+            result="ok",
+            caption=f"{friend_name or '好友'} 预览已更新",
+            before=before_txt,
+            after=after_txt,
+            force=True,
+        )
         return
     if not cleared:
+        _live(
+            page,
+            friend=friend_name,
+            phase="fail",
+            result="fail",
+            caption=f"{friend_name or '好友'} 输入框没清空",
+            before=before_txt,
+            after=after_txt,
+            force=True,
+        )
         raise RuntimeError("消息可能没发出去：回车后输入框内容没有被清空")
     logger.warning(
         "发送核对失败 friend=%s before=%s after=%s",
         friend_name or "?",
-        (before_row or {}).get("preview") or "",
-        (after_row or {}).get("preview") or "",
+        before_txt,
+        after_txt,
     )
     if after_row or after_chat:
+        _live(
+            page,
+            friend=friend_name,
+            phase="fail",
+            result="fail",
+            caption=f"{friend_name or '好友'} 预览没有更新",
+            before=before_txt,
+            after=after_txt,
+            force=True,
+        )
         raise RuntimeError("消息可能没发出去：这个好友的会话预览没有更新")
     logger.warning("聊天区没抓到气泡，只能按输入框已清空判断，核对片段=%s", snippet)
+    _live(
+        page,
+        friend=friend_name,
+        phase="checking",
+        caption=f"{friend_name or '好友'} 没抓到预览，只看到输入框已清空",
+        before=before_txt,
+        after=after_txt,
+        force=True,
+    )
 
 
 def _proxy_off(region: str) -> bool:
@@ -793,6 +945,14 @@ def _proxy_ip_tries(region: str) -> int:
 
 def do_user_task(username, cookies, targets, message_template="", unique_id="", region=""):
     user_id_dict = {}
+    _preview_bind(username, unique_id)
+    _live(
+        None,
+        account=username,
+        unique_id=unique_id,
+        phase="opening",
+        caption=f"正在打开 {username} 的私信页",
+    )
     playwright, browser = get_browser()
     spark_seen: dict[str, dict] = {}
     spark_error = []
@@ -883,6 +1043,7 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             # 否则下面这句在空 body 上判断，登录墙会认不出来
             time.sleep(4 if slow else 2.5)
             if _looks_like_login(page):
+                _live(page, phase="fail", caption=f"{username} 打开的是登录页", force=True)
                 _dump_chat_debug(page, username)
                 raise RuntimeError(f"账号 {username} 打开私信页失败：页面在要求登录，请点「检测」或重新登录后再续火花")
             if _looks_like_challenge(page):
@@ -915,6 +1076,7 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                     f"账号 {username} 打不开会话列表（这条 IP 太慢，页面没渲染出好友列表）"
                 )
             logger.info("账号 %s 已找到会话列表 item=%s list=%s", username, item_sel, list_sel or "父级滚动")
+            _live(page, phase="list", caption=f"{username} 已打开会话列表", force=True)
             if unique_id:
                 save_state(context, unique_id)
             # 火焰图标是懒加载的，等一下再扫，否则列表刚出来时天数还没渲染出来
@@ -952,6 +1114,13 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                 logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
                 logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
                 try:
+                    _live(
+                        page,
+                        friend=friend_name,
+                        phase="sending",
+                        caption=f"{username} 已选中 {friend_name}",
+                        force=True,
+                    )
                     _send_chat_message(page, message, send_records, friend_name=friend_name)
                 except Exception as exc:
                     failed.append(friend_name)
@@ -1046,6 +1215,12 @@ def runTasks():
     global config
     config = get_config()
     user_data = get_userData()
+    try:
+        from webui.run_preview import begin_run
+
+        begin_run([str(user.get("unique_id") or "") for user in user_data])
+    except Exception:
+        logger.debug("实时预览开场失败", exc_info=True)
     logger.info("开始执行任务")
     logger.debug("当前配置如下：")
     logger.debug(f"消息模板: {config.get('messageTemplate', '未找到消息模板')}")
@@ -1055,32 +1230,40 @@ def runTasks():
             f"用户: {user.get('username', '未知用户')}, 目标好友: {user['targets']}"
         )
 
-    if not user_data:
-        logger.warning("没有可执行的账号任务")
-        return
+    try:
+        if not user_data:
+            logger.warning("没有可执行的账号任务")
+            return
 
-    workers = _max_task_threads(len(user_data))
-    logger.info("并发执行账号任务 accounts=%s threads=%s", len(user_data), workers)
-    errors = []
-    if workers == 1 or len(user_data) == 1:
-        for user in user_data:
-            try:
-                _run_one_account(user)
-            except Exception:
-                username = user.get("username", "未知用户")
-                logger.exception("账号 %s 任务失败", username)
-                errors.append(username)
-    else:
-        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="spark") as pool:
-            futures = {pool.submit(_run_one_account, user): user for user in user_data}
-            for future in as_completed(futures):
-                user = futures[future]
-                username = user.get("username", "未知用户")
+        workers = _max_task_threads(len(user_data))
+        logger.info("并发执行账号任务 accounts=%s threads=%s", len(user_data), workers)
+        errors = []
+        if workers == 1 or len(user_data) == 1:
+            for user in user_data:
                 try:
-                    future.result()
+                    _run_one_account(user)
                 except Exception:
+                    username = user.get("username", "未知用户")
                     logger.exception("账号 %s 任务失败", username)
                     errors.append(username)
+        else:
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="spark") as pool:
+                futures = {pool.submit(_run_one_account, user): user for user in user_data}
+                for future in as_completed(futures):
+                    user = futures[future]
+                    username = user.get("username", "未知用户")
+                    try:
+                        future.result()
+                    except Exception:
+                        logger.exception("账号 %s 任务失败", username)
+                        errors.append(username)
 
-    if errors:
-        raise RuntimeError("部分账号任务失败: " + ", ".join(errors))
+        if errors:
+            raise RuntimeError("部分账号任务失败: " + ", ".join(errors))
+    finally:
+        try:
+            from webui.run_preview import finish_run
+
+            finish_run()
+        except Exception:
+            logger.debug("实时预览收尾失败", exc_info=True)

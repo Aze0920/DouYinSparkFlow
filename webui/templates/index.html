@@ -374,6 +374,19 @@
       </section>
 
       <section id="page-accounts" class="hidden">
+        <section class="panel run-preview-panel admin-only hidden" id="runPreviewPanel">
+          <div class="panel-head">
+            <h2>实时预览</h2>
+            <span class="sub run-preview-cap">点「立即续火花」后，这里会跟着抖音私信页一起动</span>
+          </div>
+          <div class="run-preview-body">
+            <div class="run-preview-frame">
+              <img class="run-preview-shot hidden" alt="续火花画面" />
+              <div class="run-preview-empty">还没有画面。续火花开始后会显示当前私信页，方便你对照预览有没有发出去。</div>
+            </div>
+            <ol class="run-preview-list"></ol>
+          </div>
+        </section>
         <section class="panel">
           <div class="panel-head">
             <h2 id="accountsTitle">抖音账号</h2>
@@ -503,6 +516,19 @@
       </section>
 
       <section id="page-logs" class="hidden">
+        <section class="panel run-preview-panel">
+          <div class="panel-head">
+            <h2>实时预览</h2>
+            <span class="sub run-preview-cap">续火花进行中会显示当前私信页</span>
+          </div>
+          <div class="run-preview-body">
+            <div class="run-preview-frame">
+              <img class="run-preview-shot hidden" alt="续火花画面" />
+              <div class="run-preview-empty">还没有画面。任务开始后这里会跟上当前打开的会话。</div>
+            </div>
+            <ol class="run-preview-list"></ol>
+          </div>
+        </section>
         <section class="panel">
           <div class="panel-head">
             <h2>运行日志</h2>
@@ -687,6 +713,15 @@
           </div>
         </section>
       </section>
+      <aside id="runPreviewDock" class="run-preview-dock hidden">
+        <div class="run-preview-dock-head">
+          <strong>续火花画面</strong>
+          <span class="run-preview-cap">进行中</span>
+          <button class="btn-ghost mini" type="button" onclick="return navTo(event, 'accounts')">查看</button>
+          <button class="btn-ghost mini" type="button" onclick="hideRunPreviewDock()">收起</button>
+        </div>
+        <img class="run-preview-shot hidden" alt="续火花画面" />
+      </aside>
     </main>
   </div>
 
@@ -706,6 +741,10 @@
     let qrPollBusy = false;
     let liveQueue = Promise.resolve();
     let liveQuietUntil = 0;
+    let runPreviewTimer = null;
+    let runPreviewTs = 0;
+    let runPreviewDockHidden = false;
+    let runPreviewWasRunning = false;
     let lastVerifyKey = "";
     let githubCheckBusy = false;
     let wpBindOpen = false;
@@ -1100,6 +1139,10 @@
       if (name === "cards" && isAdmin()) loadCards();
       if (name === "settings" && isAdmin()) loadNotifySettings();
       if (name === "invite") loadInvitePage();
+      const dock = $("runPreviewDock");
+      if (dock && !dock.classList.contains("hidden")) {
+        if (name === "accounts" || name === "logs") dock.classList.add("hidden");
+      }
     }
     window.addEventListener("popstate", () => {
       showPage(pathToPage(location.pathname), { skipHistory: true });
@@ -1215,6 +1258,7 @@
         current = Object.assign(current || {}, data.me);
         applyRole();
       }
+      syncRunPreviewTimer(!!data.running);
       if ($("updateBtn")) $("updateBtn").textContent = data.update_available ? "发现新版本" : "从 GitHub 更新";
       renderDashboard();
     }
@@ -1222,6 +1266,79 @@
       const data = await api("/api/status");
       applyStatus(data);
       return data;
+    }
+    function hideRunPreviewDock() {
+      runPreviewDockHidden = true;
+      const dock = $("runPreviewDock");
+      if (dock) dock.classList.add("hidden");
+    }
+    function syncRunPreviewTimer(running) {
+      if (!isAdmin()) {
+        if (runPreviewTimer) {
+          clearInterval(runPreviewTimer);
+          runPreviewTimer = null;
+        }
+        const dock = $("runPreviewDock");
+        if (dock) dock.classList.add("hidden");
+        return;
+      }
+      if (running && !runPreviewWasRunning) runPreviewDockHidden = false;
+      runPreviewWasRunning = !!running;
+      if (running && !runPreviewTimer) {
+        refreshRunPreview();
+        runPreviewTimer = setInterval(refreshRunPreview, 1000);
+      } else if (!running && runPreviewTimer) {
+        clearInterval(runPreviewTimer);
+        runPreviewTimer = null;
+        refreshRunPreview();
+      }
+    }
+    function renderRunPreview(data) {
+      const visible = !!(data && data.visible);
+      const running = !!(data && data.running);
+      const caption = visible
+        ? ((data.account ? data.account + " · " : "") + (data.caption || (running ? "进行中" : "上一帧")))
+        : (running ? "正在续火花" : "点「立即续火花」后，这里会跟着抖音私信页一起动");
+      document.querySelectorAll(".run-preview-cap").forEach((el) => {
+        el.textContent = caption;
+      });
+      const src = visible && data.has_image && data.ts
+        ? ("/api/run/preview.jpg?t=" + encodeURIComponent(String(data.ts)))
+        : "";
+      if (src && data.ts !== runPreviewTs) {
+        runPreviewTs = data.ts;
+        document.querySelectorAll(".run-preview-shot").forEach((img) => {
+          img.src = src;
+        });
+      }
+      document.querySelectorAll(".run-preview-shot").forEach((img) => {
+        img.classList.toggle("hidden", !src);
+      });
+      document.querySelectorAll(".run-preview-empty").forEach((el) => {
+        el.classList.toggle("hidden", !!src);
+      });
+      const rows = visible ? (data.recent || []) : [];
+      const listHtml = rows.slice().reverse().map((row) => {
+        const ok = row.result === "ok";
+        const after = row.after || "（预览空）";
+        return `<li class="${ok ? "is-ok" : "is-fail"}"><b>${escapeHtml(row.friend || "?")}</b><span>${ok ? "成功" : "失败"} · ${escapeHtml(after)}</span></li>`;
+      }).join("");
+      document.querySelectorAll(".run-preview-list").forEach((el) => {
+        el.innerHTML = listHtml;
+        el.classList.toggle("hidden", !listHtml);
+      });
+      const dock = $("runPreviewDock");
+      if (dock) {
+        const onWatchPage = page === "accounts" || page === "logs";
+        dock.classList.toggle("hidden", !isAdmin() || !running || runPreviewDockHidden || onWatchPage);
+      }
+    }
+    async function refreshRunPreview() {
+      if (!isAdmin()) return;
+      try {
+        const data = await api("/api/run/preview");
+        renderRunPreview(data);
+      } catch (e) {}
     }
     async function checkGithub(silent = false) {
       if (!isAdmin() || githubCheckBusy) return;
@@ -2682,10 +2799,9 @@
           body: JSON.stringify({ unique_id: item.unique_id }),
         });
         toast(data.message || "任务已开始");
-        if (isAdmin()) {
-          showPage("logs");
-          await loadLogs();
-        }
+        showPage(isAdmin() ? "logs" : "accounts");
+        syncRunPreviewTimer(true);
+        await refreshRunPreview();
       } catch (err) {
         toast(err.message, "err");
       }
@@ -2698,10 +2814,9 @@
         if (canSpark()) await saveConfig(true, true);
         const data = await api("/api/run", { method: "POST", body: "{}" });
         toast(data.message || "任务已开始");
-        if (isAdmin()) {
-          showPage("logs");
-          await loadLogs();
-        }
+        showPage(isAdmin() ? "logs" : "accounts");
+        syncRunPreviewTimer(true);
+        await refreshRunPreview();
       } catch (err) {
         toast(err.message, "err");
       }
@@ -3700,6 +3815,7 @@
       await checkStatus();
       await loadConfig();
       showPage(pathToPage(location.pathname), { replace: true });
+      refreshRunPreview();
       maybeShowAnnouncement();
       setInterval(async () => {
         if (pollBusy) return;
