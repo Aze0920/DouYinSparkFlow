@@ -129,15 +129,19 @@ GIT_MIRROR_TEMPLATES = [
     "https://mirror.ghproxy.com/https://github.com/{repo}.git",
     "https://gitclone.com/github.com/{repo}",
     "https://kkgithub.com/{repo}.git",
+    "https://github.com/{repo}.git",
+    # HTTPS 整片被挡时的最后一条路：GitHub 的 SSH over 443 和 140.82/185.199
+    # 不是同一条链路，国内机器常常这条还活着。需要服务器上有 SSH key。
+    "ssh://git@ssh.github.com:443/{repo}.git",
 ]
 VERSION_MIRROR_TEMPLATES = [
     "https://cdn.jsdelivr.net/gh/{repo}@main/VERSION",
     "https://ghfast.top/https://raw.githubusercontent.com/{repo}/main/VERSION",
     "https://gh-proxy.com/https://raw.githubusercontent.com/{repo}/main/VERSION",
     "https://gh.llkk.cc/https://raw.githubusercontent.com/{repo}/main/VERSION",
-    "https://raw.gitmirror.com/{repo}/main/VERSION",
     "https://ghproxy.net/https://raw.githubusercontent.com/{repo}/main/VERSION",
     "https://kkgithub.com/{repo}/raw/main/VERSION",
+    "https://raw.githubusercontent.com/{repo}/main/VERSION",
 ]
 MIRROR_HINTS = (
     "ghproxy",
@@ -544,9 +548,26 @@ def _assert_account_quota(user: dict | None, count: int) -> None:
         raise HTTPException(status_code=403, detail=f"当前卡密最多添加 {limit} 个抖音账号")
 
 
+def _httpx_client(timeout: float = 8.0, **kwargs) -> httpx.Client:
+    """国内 VPS 常常没有 IPv6。DNS 给了 AAAA 就会立刻 Errno 101（Network is unreachable），
+    看起来像镜像挂了，其实是本机出不去。绑到 0.0.0.0 强制走 IPv4。"""
+    kwargs.setdefault("follow_redirects", True)
+    kwargs.setdefault("verify", False)
+    kwargs.setdefault(
+        "transport",
+        httpx.HTTPTransport(local_address="0.0.0.0", verify=kwargs.get("verify", False)),
+    )
+    return httpx.Client(timeout=timeout, **kwargs)
+
+
 def run_git(*args: str, timeout: int = 20, ssl_verify: bool = True) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
+    # 走 ssh:// 镜像时别卡在「是否信任主机指纹」的交互上，也别为死链路等满默认超时
+    env.setdefault(
+        "GIT_SSH_COMMAND",
+        "ssh -o StrictHostKeyChecking=accept-new -o BatchMode=yes -o ConnectTimeout=8",
+    )
     cmd = ["git"]
     if not ssl_verify:
         env["GIT_SSL_NO_VERIFY"] = "1"
@@ -585,10 +606,11 @@ def git_mirror_urls() -> list[str]:
     custom = configured_mirror()
     if custom:
         urls.append(custom.format(repo=repo) if "{repo}" in custom else custom)
+    urls.extend(template.format(repo=repo) for template in GIT_MIRROR_TEMPLATES)
+    # 上次成功的 origin 放后面：gitclone 一旦抽风，放最前面会先白等 45 秒。
     origin = origin_url()
     if origin and any(key in origin for key in MIRROR_HINTS):
         urls.append(origin)
-    urls.extend(template.format(repo=repo) for template in GIT_MIRROR_TEMPLATES)
     seen = set()
     unique = []
     for url in urls:
@@ -621,7 +643,7 @@ def fetch_remote_version() -> tuple[str, str]:
     for url in urls:
         try:
             logger.info("检测版本镜像: %s", url.split("?")[0])
-            with httpx.Client(timeout=8.0, follow_redirects=True, headers=headers, verify=False) as client:
+            with _httpx_client(timeout=6.0, headers=headers) as client:
                 resp = client.get(url)
             version = parse_version_text(resp.text if resp.status_code == 200 else "")
             if version:
@@ -630,6 +652,36 @@ def fetch_remote_version() -> tuple[str, str]:
             logger.warning("版本镜像无效 HTTP %s %s", resp.status_code, url.split("?")[0])
         except Exception as exc:
             logger.warning("版本镜像失败 %s: %s", url.split("?")[0], exc)
+    version, source = _version_via_git()
+    if version:
+        logger.info("HTTP 镜像全挂，改用 git 读到远端版本 %s（%s）", version, source)
+        return version, source
+    return "", ""
+
+
+def _version_via_git() -> tuple[str, str]:
+    """HTTP 镜像全军覆没时的兜底：用 git 拉一次浅历史，直接读远端的 VERSION 文件。
+
+    只要 git 能通（SSH over 443、配了 http.proxy、或某个镜像还活着），
+    版本检测就跟着能通，不必再依赖那一串随时会死的 raw/CDN 域名。
+    fetch 下来的 FETCH_HEAD 正好给后面的更新直接 reset 用，不算白拉。
+    """
+    if not (ROOT / ".git").exists():
+        return "", ""
+    for url in git_mirror_urls():
+        try:
+            fetch = run_git("fetch", "--depth=1", url, "main", timeout=30, ssl_verify=False)
+        except subprocess.TimeoutExpired:
+            logger.debug("git 读版本超时 %s", url)
+            continue
+        except Exception:
+            continue
+        if fetch.returncode != 0:
+            continue
+        show = run_git("show", "FETCH_HEAD:VERSION", timeout=10)
+        version = parse_version_text(show.stdout if show.returncode == 0 else "")
+        if version:
+            return version, url
     return "", ""
 
 
@@ -1514,7 +1566,7 @@ def status(request: Request):
 @app.post("/api/github/check")
 def github_check(request: Request):
     require_admin(request)
-    logger.info("手动检测 GitHub 版本（镜像 HTTP）")
+    logger.info("手动检测 GitHub 版本（镜像 HTTP，失败则回退 git）")
     version, source = fetch_remote_version()
     if version:
         _remote_cache["version"] = version
@@ -1529,7 +1581,10 @@ def github_check(request: Request):
             else f"已是最新 v{version}"
         )
     else:
-        message = "镜像没有获取到 GitHub 版本，请看运行日志"
+        message = (
+            "没能获取到 GitHub 版本：HTTP 镜像和 git 都不通。"
+            "这台服务器到 GitHub 的网络被挡了，请看运行日志"
+        )
     logger.info("GitHub 检测结果 local=%s remote=%s source=%s", local, version, source)
     return {
         "ok": True,
