@@ -76,6 +76,7 @@ class VerdictTests(unittest.TestCase):
         self.assertTrue(result["valid"], "网慢被判掉线，会误推掉线通知")
         self.assertFalse(result["chat_ok"])
         self.assertIn("没打开私信页", result["message"])
+        self.assertNotIn("网络太慢", result["message"])
         self.assertEqual(result["unique_id"], "92483184909")
 
     def test_login_wall_is_still_offline(self):
@@ -129,7 +130,20 @@ class ProxyTimeoutTests(unittest.TestCase):
 
     def test_element_wait_also_gets_longer_behind_a_proxy(self):
         """走代理时会话列表渲染得慢，等元素的时间也要跟着放宽。"""
-        self.assertIn("timeout_s=25 if proxy else 12", self.source)
+        self.assertIn("wait_s = 35 if proxy else 20", self.source)
+
+    def test_challenge_is_not_called_slow_network(self):
+        result = run_probe(chat_opens=True, chat_state="challenge")
+        self.assertTrue(result["valid"])
+        self.assertFalse(result["chat_ok"])
+        self.assertIn("安全验证", result["message"])
+        self.assertNotIn("网络太慢", result["message"])
+
+    def test_open_page_without_list_is_not_called_slow_network(self):
+        result = run_probe(chat_opens=True, chat_state="empty")
+        self.assertTrue(result["valid"])
+        self.assertIn("会话列表没出来", result["message"])
+        self.assertNotIn("网络太慢", result["message"])
 
 
 if __name__ == "__main__":

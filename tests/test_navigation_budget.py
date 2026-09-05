@@ -46,7 +46,12 @@ class ChatNavigationTests(unittest.TestCase):
     def test_every_chat_entry_only_waits_for_commit(self):
         for rel, label in CHAT_ENTRIES.items():
             path = ROOT / rel
+            source = path.read_text(encoding="utf-8")
             calls = list(chat_gotos(path))
+            # 检测 / 选好友用 CHAT_URLS 循环，goto 的参数是变量，AST 里看不到 /chat
+            if not calls and "CHAT_URLS" in source:
+                self.assertIn('wait_until="commit"', source, f"{label}（{rel}）循环打开私信页没写 commit")
+                continue
             self.assertTrue(calls, f"{rel} 里没找到打开私信页的调用，测试该更新了")
             for call in calls:
                 waits = [kw.value for kw in call.keywords if kw.arg == "wait_until"]
@@ -79,7 +84,7 @@ class TaskListBudgetTests(unittest.TestCase):
         cls.source = (ROOT / "core" / "tasks.py").read_text(encoding="utf-8")
 
     def test_conversation_list_wait_is_proxy_aware_and_generous(self):
-        self.assertIn("40000 if slow else 15000", self.source)
+        self.assertIn("40000 if slow else 20000", self.source)
 
     def test_task_knows_whether_it_is_behind_a_proxy(self):
         self.assertIn("slow = bool(proxy)", self.source)

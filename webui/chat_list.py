@@ -9,7 +9,7 @@ from typing import Any
 from core.browser import get_browser
 from utils.logger import setup_logger
 from webui.cookie_probe import _probe_lock
-from webui.qr_login import CHAT, wait_chat_access
+from webui.qr_login import CHAT_URLS, wait_chat_access
 from webui.session_store import (
     clear_browser_state,
     load_chats,
@@ -21,14 +21,31 @@ from webui.session_store import (
 logger = setup_logger("app", "DEBUG")
 
 EXTRACT_JS = """() => {
+  const queryAllDeep = (sel, root = document) => {
+    const out = [];
+    const walk = (node) => {
+      if (!node) return;
+      try { node.querySelectorAll && node.querySelectorAll(sel).forEach((el) => out.push(el)); } catch (e) {}
+      let all = [];
+      try { all = node.querySelectorAll ? node.querySelectorAll('*') : []; } catch (e) { return; }
+      for (const el of all) {
+        if (el.shadowRoot) walk(el.shadowRoot);
+      }
+    };
+    walk(root);
+    return out;
+  };
   const itemSels = [
     '[data-e2e="conversation-item"]',
+    '[data-e2e="session-item"]',
     '.conversationConversationItemwrapper',
     '[class*="conversationItemwrapper"]',
+    '[class*="sessionItem"]',
+    '[class*="chatListItem"]',
   ];
   let items = [];
   for (const sel of itemSels) {
-    items = Array.from(document.querySelectorAll(sel));
+    items = queryAllDeep(sel);
     if (items.length) break;
   }
   items = items.filter((el) => items.every((other) => other === el || !other.contains(el)));
@@ -180,8 +197,24 @@ EXTRACT_SELF_AVATAR_JS = """() => {
 }"""
 
 SCROLL_JS = """() => {
-  const item = document.querySelector('[data-e2e="conversation-item"], [class*="conversationItemwrapper"]');
-  let box = document.querySelector('.conversationConversationListwrapper, [class*="conversationListwrapper"], [class*="ConversationListwrapper"]');
+  const queryDeep = (sel) => {
+    const walk = (node) => {
+      if (!node) return null;
+      try { const hit = node.querySelector && node.querySelector(sel); if (hit) return hit; } catch (e) {}
+      let all = [];
+      try { all = node.querySelectorAll ? node.querySelectorAll('*') : []; } catch (e) { return null; }
+      for (const el of all) {
+        if (el.shadowRoot) {
+          const inner = walk(el.shadowRoot);
+          if (inner) return inner;
+        }
+      }
+      return null;
+    };
+    return walk(document);
+  };
+  const item = queryDeep('[data-e2e="conversation-item"], [class*="conversationItemwrapper"], [class*="sessionItem"]');
+  let box = queryDeep('.conversationConversationListwrapper, [class*="conversationListwrapper"], [class*="ConversationListwrapper"], [class*="session-list"]');
   if (!box && item) {
     let p = item.parentElement;
     while (p) {
@@ -656,8 +689,16 @@ def list_conversations(
         page.on("response", on_response)
         # 只等响应头。等 domcontentloaded 的话，私信页这么重的应用走代理常常直接超时，
         # 而超时会把整个「选好友」流程掀掉；真正要等的会话列表由 wait_chat_access 盯着。
-        page.goto(CHAT, wait_until="commit", timeout=30000 if proxy else 20000)
-        chat_state = wait_chat_access(page, timeout_s=25 if proxy else 15)
+        chat_state = "empty"
+        for url in CHAT_URLS:
+            try:
+                page.goto(url, wait_until="commit", timeout=30000 if proxy else 20000)
+            except Exception as exc:
+                logger.warning("打开私信页超时（%s）url=%s", type(exc).__name__, url)
+                continue
+            chat_state = wait_chat_access(page, timeout_s=35 if proxy else 20)
+            if chat_state in {"chat", "login", "challenge"}:
+                break
         if chat_state == "login" or _looks_like_login(page):
             if account_id:
                 clear_browser_state(account_id)
@@ -676,6 +717,22 @@ def list_conversations(
                 "ok": False,
                 "items": [],
                 "message": "网页私信在要求扫码。请重新扫码登录这个号",
+            }
+        if chat_state == "challenge":
+            cached = load_chats(account_id) if account_id else None
+            if cached and cached.get("items"):
+                items = cached.get("items") or []
+                return {
+                    "ok": True,
+                    "items": items,
+                    "self_avatar": str(cached.get("self_avatar") or ""),
+                    "from_snapshot": True,
+                    "message": f"私信页在做安全验证，已改用上次快照（{len(items)} 个会话）",
+                }
+            return {
+                "ok": False,
+                "items": [],
+                "message": "私信页在做安全验证，暂时读不到好友列表。账号没掉线，稍后或换条线路再试",
             }
 
         item_loc, scope, item_sel = _wait_locator(page, CONVERSATION_ITEM_SELECTORS, timeout_ms=8000)

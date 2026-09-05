@@ -11,6 +11,9 @@ class SelectorTests(unittest.TestCase):
         self.assertEqual(tasks.CHAT_EDITOR_SELECTOR, '.messageEditorimChatEditorContainer')
         self.assertIn(tasks.CONVERSATION_LIST_SELECTOR, tasks.CONVERSATION_LIST_SELECTORS)
         self.assertIn(tasks.CONVERSATION_ITEM_SELECTOR, tasks.CONVERSATION_ITEM_SELECTORS)
+        self.assertIn('[data-e2e="session-item"]', tasks.CONVERSATION_ITEM_SELECTORS)
+        self.assertIn("[class*='session-list']", tasks.CONVERSATION_LIST_SELECTORS)
+        self.assertTrue(tasks.CHALLENGE_HINTS)
 
 
 if __name__ == '__main__':

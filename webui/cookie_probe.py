@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from core.browser import get_browser, make_context
 from utils.logger import setup_logger
 from webui.qr_login import (
-    CHAT,
+    CHAT_URLS,
     HOME,
     _cookies_for_save,
     _has_session,
@@ -144,16 +144,22 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
 
         page = context.new_page()
         profile = extract_profile(page, context, allow_stop=False)
-        chat_reachable = True
-        try:
-            # 只等 commit（响应头到了就算），不等 domcontentloaded。
-            # 私信页是个很重的 IM 应用，等它把同步脚本全跑完，走代理时 45 秒都不够；
-            # 而我们真正要看的是「会话列表元素出没出来」，那件事交给下面的轮询更准也更快。
-            page.goto(CHAT, wait_until="commit", timeout=30000 if proxy else 20000)
-        except Exception as exc:
-            chat_reachable = False
-            logger.warning("打开私信页超时（%s），这次没法顺带验证私信功能，不影响登录态判断", type(exc).__name__)
-        chat_state = wait_chat_access(page, timeout_s=25 if proxy else 12)
+        chat_reachable = False
+        chat_state = "empty"
+        wait_s = 35 if proxy else 20
+        nav_ms = 30000 if proxy else 20000
+        # /chat 和 ?isPopup=1 两套壳，有的号只在其中一个渲染会话列表。
+        # 只等 commit：真正要看的是列表元素，交给 wait_chat_access。
+        for url in CHAT_URLS:
+            try:
+                page.goto(url, wait_until="commit", timeout=nav_ms)
+                chat_reachable = True
+            except Exception as exc:
+                logger.warning("打开私信页超时（%s）url=%s，这次没法顺带验证私信功能，不影响登录态判断", type(exc).__name__, url)
+                continue
+            chat_state = wait_chat_access(page, timeout_s=wait_s)
+            if chat_state in {"chat", "login", "challenge"}:
+                break
         signals = _page_signals(page)
         if not signals:
             try:
@@ -166,6 +172,7 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
         has_session = _has_session(context)
         login_wall = chat_state == "login" or bool(signals.get("hasScan") or signals.get("hasEnjoy"))
         chat_ok = chat_state == "chat"
+        challenged = chat_state == "challenge" or bool(signals.get("hasChallenge") or signals.get("hasVerify"))
         username = str(profile.get("username") or "").strip()
         got_uid = str(profile.get("unique_id") or "").strip()
         if got_uid and not is_display_unique_id(got_uid):
@@ -187,16 +194,27 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
         saved = _cookies_for_save(context) or cookies
         if positive and not login_wall:
             save_state(context, account_id)
+            who = (username or "已登录") + (f" · 抖音号 {got_uid}" if got_uid else "")
             if chat_ok:
+                message = f"Cookie 有效 · 网页私信可打开 · {who}"
+            elif challenged:
                 message = (
-                    f"Cookie 有效 · 网页私信可打开 · {username or '已登录'}"
-                    + (f" · 抖音号 {got_uid}" if got_uid else "")
+                    f"登录态正常 · {who}。"
+                    "私信页在做安全验证（滑块/验证码），会话列表出不来，续火花也会失败。"
+                    "账号没掉线，换条线路或稍后再试"
+                )
+            elif chat_reachable:
+                snippet = str(signals.get("snippet") or "").strip()
+                extra = f"（页面有：{snippet[:40]}）" if snippet else ""
+                message = (
+                    f"登录态正常 · {who}。"
+                    f"私信页打开了，但会话列表没出来{extra}。"
+                    "不是 Cookie 失效，多半是页面改版或被限制，续火花会同样打不开列表"
                 )
             else:
                 message = (
-                    f"登录态正常 · {username or '已登录'}"
-                    + (f" · 抖音号 {got_uid}" if got_uid else "")
-                    + "。这次网络太慢没打开私信页，没能顺带验证私信，稍后可再检测一次"
+                    f"登录态正常 · {who}。"
+                    "这次没打开私信页（线路超时），没能顺带验证私信，稍后可再检测一次"
                 )
         elif undecided:
             message = (
@@ -209,15 +227,17 @@ def probe_cookies(cookies: list[dict[str, Any]], unique_id: str = "", region: st
         else:
             message = "Cookie 无效：没有可用的登录态，请重新扫码登录"
         logger.info(
-            "Cookie 检测结果 valid=%s undecided=%s username=%s unique_id=%s wall=%s session=%s chat=%s 私信页可达=%s",
+            "Cookie 检测结果 valid=%s undecided=%s username=%s unique_id=%s wall=%s challenge=%s session=%s chat=%s 私信页可达=%s snippet=%s",
             valid,
             undecided,
             username,
             got_uid,
             login_wall,
+            challenged,
             has_session,
             chat_state,
             chat_reachable,
+            str(signals.get("snippet") or "")[:80],
         )
         return {
             "ok": True,

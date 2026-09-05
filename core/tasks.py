@@ -24,15 +24,24 @@ CONVERSATION_LIST_SELECTORS = [
     "[class*='ConversationList']",
     "[class*='conversation-list']",
     "[class*='conversationList']",
+    "[class*='session-list']",
+    "[class*='SessionList']",
+    "[class*='chat-list']",
+    "[class*='ChatListwrapper']",
 ]
 CONVERSATION_ITEM_SELECTORS = [
     CONVERSATION_ITEM_SELECTOR,
     '[data-e2e="conversation-item"]',
+    '[data-e2e="session-item"]',
     "[class*='ConversationItemwrapper']",
     "[class*='conversationItemwrapper']",
     "[class*='ConversationItem']",
     "[class*='conversation-item']",
     "[class*='conversationItem']",
+    "[class*='sessionItem']",
+    "[class*='SessionItem']",
+    "[class*='session-item']",
+    "[class*='chatListItem']",
 ]
 CONVERSATION_TITLE_SELECTORS = [
     CONVERSATION_TITLE_SELECTOR,
@@ -51,6 +60,16 @@ CHAT_EDITOR_SELECTORS = [
     "[contenteditable='true']",
 ]
 LOGIN_HINTS = ("扫码登录", "登录后免费畅享", "打开「抖音APP」", "验证码登录", "请使用抖音APP")
+CHALLENGE_HINTS = (
+    "请完成验证",
+    "滑动验证",
+    "拖动滑块",
+    "安全验证",
+    "智能验证",
+    "异常访问",
+    "请进行验证",
+    "访问验证",
+)
 TOAST_SELECTORS = [
     "[class*='toast']",
     "[class*='Toast']",
@@ -221,6 +240,11 @@ def _page_text(page) -> str:
 def _looks_like_login(page) -> bool:
     text = _page_text(page)
     return any(hint in text for hint in LOGIN_HINTS)
+
+
+def _looks_like_challenge(page) -> bool:
+    text = _page_text(page)
+    return any(hint in text for hint in CHALLENGE_HINTS)
 
 
 def _item_title(element) -> str:
@@ -633,35 +657,57 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             send_records = []
             page.on("response", _make_send_handler(send_records))
 
-            try:
-                retry_operation(
-                    "打开抖音网页聊天页面",
-                    page.goto,
-                    retries=config["taskRetryTimes"],
-                    delay=2,
-                    url="https://www.douyin.com/chat",
-                    # 默认是等 load（连图片都要加载完），私信页这么重的应用走代理根本等不到。
-                    # 只等响应头，真正要等的会话列表下面有 _wait_locator 专门盯着。
-                    wait_until="commit",
-                )
-            except Exception as exc:
+            opened = False
+            last_nav_err = None
+            for chat_url in ("https://www.douyin.com/chat", "https://www.douyin.com/chat?isPopup=1"):
+                try:
+                    retry_operation(
+                        "打开抖音网页聊天页面",
+                        page.goto,
+                        retries=config["taskRetryTimes"],
+                        delay=2,
+                        url=chat_url,
+                        # 默认是等 load（连图片都要加载完），私信页这么重的应用走代理根本等不到。
+                        # 只等响应头，真正要等的会话列表下面有 _wait_locator 专门盯着。
+                        wait_until="commit",
+                    )
+                    opened = True
+                    break
+                except Exception as exc:
+                    last_nav_err = exc
+                    logger.warning("账号 %s 打开 %s 失败：%s", username, chat_url, exc)
+            if not opened:
                 # 连响应头都等不到，这条 IP 基本是死的——换一条再来，别在这条上耗
                 raise _ChatListUnavailable(
-                    f"账号 {username} 这条代理连私信页都打不开：{exc}"
-                ) from exc
+                    f"账号 {username} 这条代理连私信页都打不开：{last_nav_err}"
+                ) from last_nav_err
             # commit 只保证开始接收文档，给页面一点时间把内容渲染出来，
             # 否则下面这句在空 body 上判断，登录墙会认不出来
             time.sleep(4 if slow else 2.5)
             if _looks_like_login(page):
                 _dump_chat_debug(page, username)
                 raise RuntimeError(f"账号 {username} 打开私信页失败：页面在要求登录，请点「检测」或重新登录后再续火花")
+            if _looks_like_challenge(page):
+                raise _ChatListUnavailable(
+                    f"账号 {username} 私信页在做安全验证，换一条 IP 再试"
+                )
 
-            # 会话列表是抖音私信里最重的一块，走代理时渲染很慢。检测那边给到 25 秒才判「没列表」，
+            # 会话列表是抖音私信里最重的一块，走代理时渲染很慢。检测那边给到 35 秒才判「没列表」，
             # 这边只给 15 秒就会出现「检测说正常、续火花却打不开列表」。代理下放宽到 40 秒对齐。
             item_loc, scope, item_sel = _wait_locator(
-                page, CONVERSATION_ITEM_SELECTORS, timeout_ms=40000 if slow else 15000
+                page, CONVERSATION_ITEM_SELECTORS, timeout_ms=40000 if slow else 20000
             )
             list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
+            if item_loc is None:
+                try:
+                    page.goto("https://www.douyin.com/chat?isPopup=1", wait_until="commit")
+                    time.sleep(3 if slow else 2)
+                    item_loc, scope, item_sel = _wait_locator(
+                        page, CONVERSATION_ITEM_SELECTORS, timeout_ms=20000 if slow else 12000
+                    )
+                    list_loc, _, list_sel = _find_locator(page, CONVERSATION_LIST_SELECTORS)
+                except Exception as exc:
+                    logger.warning("账号 %s 回退弹层私信失败：%s", username, exc)
             if item_loc is None:
                 if dump_debug:
                     _dump_chat_debug(page, username)

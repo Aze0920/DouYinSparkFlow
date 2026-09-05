@@ -20,6 +20,9 @@ logger = setup_logger("app", "DEBUG")
 SSO = "https://sso.douyin.com"
 HOME = "https://www.douyin.com"
 CHAT = "https://www.douyin.com/chat"
+# 部分账号被推到弹层私信，光开 /chat 只有壳、没有会话列表
+CHAT_POPUP = "https://www.douyin.com/chat?isPopup=1"
+CHAT_URLS = (CHAT, CHAT_POPUP)
 
 # 走住宅代理时每一跳都比直连慢，直连够用的超时在代理下会一路超时。
 # 同一时刻只有一个扫码会话（_lock 保证），所以这里用一份全局预算就够。
@@ -428,70 +431,153 @@ def _has_session(context) -> bool:
     return False
 
 
+# 私信列表经常被包进微前端 / 开放 Shadow DOM，主文档 querySelector 看不见。
+# 选择器要覆盖旧 class、data-e2e，以及近年出现的 session / chat-list 变体。
+PAGE_SIGNALS_JS = """() => {
+  const chatSels = [
+    "[data-e2e='conversation-item']",
+    "[data-e2e='session-item']",
+    "[class*='conversation']",
+    "[class*='Conversation']",
+    "[class*='imChatEditor']",
+    "[class*='messageEditor']",
+    "[class*='sessionItem']",
+    "[class*='SessionItem']",
+    "[class*='session-item']",
+    "[class*='chat-list']",
+    "[class*='ChatList']",
+    "[class*='chatListItem']",
+  ];
+  const walk = (root, fn) => {
+    if (!root) return;
+    try { fn(root); } catch (e) {}
+    let nodes = [];
+    try { nodes = root.querySelectorAll ? root.querySelectorAll("*") : []; } catch (e) { return; }
+    for (const el of nodes) {
+      if (el.shadowRoot) walk(el.shadowRoot, fn);
+    }
+  };
+  const hasSel = (sel) => {
+    let found = false;
+    walk(document, (root) => {
+      if (found) return;
+      try { if (root.querySelector && root.querySelector(sel)) found = true; } catch (e) {}
+    });
+    return found;
+  };
+  let text = "";
+  walk(document, (root) => {
+    try {
+      const chunk = (root.body && root.body.innerText) || root.innerText || "";
+      if (chunk) text += " " + chunk;
+    } catch (e) {}
+  });
+  let hasUser = "", loginStatus = "";
+  try { hasUser = localStorage.getItem("HasUserLogin") || ""; } catch (e) {}
+  try { loginStatus = localStorage.getItem("LOGIN_STATUS") || ""; } catch (e) {}
+  let href = "";
+  try { href = location.href || ""; } catch (e) {}
+  let hasChat = false;
+  try { hasChat = chatSels.some(hasSel); } catch (e) {}
+  const snippet = String(text || "").replace(/\\s+/g, " ").trim().slice(0, 160);
+  return {
+    href,
+    hasUser,
+    loginStatus,
+    hasScan: text.includes("扫码登录"),
+    hasEnjoy: text.includes("登录后免费畅享") || text.includes("打开「抖音APP」"),
+    hasVerify: text.includes("身份验证") && (text.includes("为保障账号安全") || text.includes("确保为本人操作")),
+    hasChallenge: /请完成验证|滑动验证|拖动滑块|安全验证|智能验证|异常访问|请进行验证|访问验证/.test(text),
+    hasChat,
+    snippet,
+    blank: !text && (!href || href === "about:blank" || href.startsWith("chrome-error")),
+  };
+}"""
+
+
+def _empty_signals() -> dict[str, Any]:
+    return {
+        "href": "",
+        "hasUser": "",
+        "loginStatus": "",
+        "hasScan": False,
+        "hasEnjoy": False,
+        "hasVerify": False,
+        "hasChallenge": False,
+        "hasChat": False,
+        "snippet": "",
+        "blank": True,
+    }
+
+
+def _merge_signals(base: dict[str, Any], flags: dict[str, Any]) -> dict[str, Any]:
+    out = dict(base)
+    if flags.get("href") and not out.get("href"):
+        out["href"] = flags["href"]
+    if flags.get("hasUser") and not out.get("hasUser"):
+        out["hasUser"] = flags["hasUser"]
+    if flags.get("loginStatus") and not out.get("loginStatus"):
+        out["loginStatus"] = flags["loginStatus"]
+    if flags.get("snippet") and not out.get("snippet"):
+        out["snippet"] = flags["snippet"]
+    for key in ("hasScan", "hasEnjoy", "hasVerify", "hasChallenge", "hasChat"):
+        out[key] = bool(out.get(key) or flags.get(key))
+    if not flags.get("blank"):
+        out["blank"] = False
+    return out
+
+
 def _page_signals(page) -> dict[str, Any]:
     # 每一处读取都各自 try 兜住：代理没连通时页面会落到 chrome-error:// 这种「不透明源」，
     # 上面读 localStorage 会直接抛 SecurityError。以前等 domcontentloaded 时导航失败会先报错、
     # 走不到这里；改等 commit 后会真的停在错误页，所以这里必须自己扛住，别再把一屏堆栈刷出来。
-    try:
-        return page.evaluate(
-            """() => {
-              let text = "";
-              try { text = (document.body && document.body.innerText) || ""; } catch (e) {}
-              let hasUser = "", loginStatus = "";
-              try { hasUser = localStorage.getItem("HasUserLogin") || ""; } catch (e) {}
-              try { loginStatus = localStorage.getItem("LOGIN_STATUS") || ""; } catch (e) {}
-              let hasChat = false;
-              try {
-                hasChat = !!(document.querySelector("[class*='conversation']") || document.querySelector("[class*='Conversation']"));
-              } catch (e) {}
-              let href = "";
-              try { href = location.href || ""; } catch (e) {}
-              return {
-                href,
-                hasUser,
-                loginStatus,
-                hasScan: text.includes("扫码登录"),
-                hasEnjoy: text.includes("登录后免费畅享") || text.includes("打开「抖音APP」"),
-                hasVerify: text.includes("身份验证") && (text.includes("为保障账号安全") || text.includes("确保为本人操作")),
-                hasChat,
-                blank: !text && (!href || href === "about:blank" || href.startsWith("chrome-error")),
-              };
-            }"""
-        ) or {}
-    except Exception as exc:
-        # JS 里已经逐个兜住了，走到这基本是页面正忙/正导航，打一行就够，别甩堆栈
-        logger.debug("读取页面登录信号失败（%s）", type(exc).__name__)
-        return {}
+    # 私信列表可能在 iframe / Shadow DOM 里，主文档和每个 frame 都要扫一遍。
+    merged = _empty_signals()
+    any_ok = False
+    for scope in _iter_scopes(page):
+        try:
+            flags = scope.evaluate(PAGE_SIGNALS_JS) or {}
+        except Exception as exc:
+            logger.debug("读取页面登录信号失败（%s）", type(exc).__name__)
+            continue
+        any_ok = True
+        merged = _merge_signals(merged, flags)
+    return merged if any_ok else {}
 
 
-def wait_chat_access(page, timeout_s: float = 12) -> str:
-    """等私信页出现会话列表，或确认其实在扫码登录。返回 chat / login / empty。"""
-    deadline = time.time() + max(timeout_s, 1)
-    last = "empty"
-    blank_streak = 0
-    while time.time() < deadline:
-        signals = _page_signals(page)
-        if signals.get("hasScan") or signals.get("hasEnjoy"):
-            return "login"
-        if signals.get("hasChat"):
-            return "chat"
-        # 页面是空的错误页（代理没连通，落到 chrome-error/about:blank）：
-        # 再怎么等也不会长出会话列表，连着几轮都这样就别耗满超时了。
-        if signals.get("blank"):
-            blank_streak += 1
-            if blank_streak >= 3:
-                logger.debug("页面是空错误页，八成没连上，提前收手")
-                return last
-        else:
-            blank_streak = 0
-        last = "empty"
-        time.sleep(0.4)
-    signals = _page_signals(page)
+def _classify_chat_signals(signals: dict[str, Any]) -> str:
     if signals.get("hasScan") or signals.get("hasEnjoy"):
         return "login"
     if signals.get("hasChat"):
         return "chat"
-    return last
+    if signals.get("hasChallenge") or signals.get("hasVerify"):
+        return "challenge"
+    return "empty"
+
+
+def wait_chat_access(page, timeout_s: float = 12) -> str:
+    """等私信页出现会话列表，或确认其实在扫码 / 验证。返回 chat / login / challenge / empty。"""
+    deadline = time.time() + max(timeout_s, 1)
+    last = "empty"
+    error_streak = 0
+    while time.time() < deadline:
+        signals = _page_signals(page)
+        state = _classify_chat_signals(signals)
+        if state != "empty":
+            return state
+        # 只有确认落在 chrome-error 才提前收手。刚 commit 时常见 about:blank，
+        # 那是导航空档，当成死页会让所有号都误报「私信打不开」。
+        href = str(signals.get("href") or "")
+        if signals.get("blank") and href.startswith("chrome-error"):
+            error_streak += 1
+            if error_streak >= 6:
+                logger.debug("页面是 chrome-error，线路没通，提前收手")
+                return last
+        else:
+            error_streak = 0
+        last = "empty"
+        time.sleep(0.4)
+    return _classify_chat_signals(_page_signals(page))
 
 
 def _page_logged_in(page) -> bool:

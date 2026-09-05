@@ -141,9 +141,10 @@ class ProxyRetryTests(unittest.TestCase):
     def test_stops_as_soon_as_a_good_ip_opens_the_list(self):
         """第 2 条 IP 就出了列表：不该再去取第 3 条。"""
         leases = [FakeLease("http://a:1"), FakeLease("http://b:2"), FakeLease("http://c:3")]
-        # 第 1 条没列表(None)，第 2 条出列表(object)。列表出来后没好友可发 → 抛别的错，但不再换 IP。
+        # 每条 IP 会先等 /chat，没有列表再等一次弹层页，所以第 1 条是两次 None。
+        # 第 2 条第一次就出列表。之后没好友可发 → 抛别的错，但不再换 IP。
         raised, proxy_calls = run_task(
-            region="河南省", leases=leases, wait_results=[None, object()], friends=[]
+            region="河南省", leases=leases, wait_results=[None, None, object()], friends=[]
         )
         self.assertEqual(proxy_calls, 2, "好 IP 出现后仍在换 IP，白烧额度")
         self.assertNotIn("连换", str(raised or ""))
