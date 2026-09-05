@@ -779,10 +779,8 @@ def _refresh_remote_version():
 
 
 def remote_version_fast() -> str:
-    stale = time.time() - _remote_cache["ts"] > 60
-    if stale or not _remote_cache["version"]:
-        threading.Thread(target=_refresh_remote_version, daemon=True).start()
-    return _remote_cache["version"]
+    """只读上次手动检测留下的缓存，绝不在后台再抽住宅 IP。"""
+    return str(_remote_cache.get("version") or "")
 
 
 def _git_fetch_reset(url: str, errors: list[str], http_proxy: str | None = None) -> str:
@@ -2130,12 +2128,12 @@ def import_account_cookie(request: Request, payload: dict | None = None):
 
 
 @app.get("/api/logs")
-def logs(request: Request, lines: int = 200):
+def logs(request: Request, lines: int = 4000):
     require_admin(request)
     if not LOG_FILE.is_file():
         return {"ok": True, "text": "还没有日志。扫码登录、从 GitHub 更新、续火花都会写到这里。"}
     content = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
-    return {"ok": True, "text": "\n".join(content[-max(20, min(lines, 2000)):])}
+    return {"ok": True, "text": "\n".join(content[-max(50, min(lines, 8000)):])}
 
 
 @app.post("/api/logs/clear")

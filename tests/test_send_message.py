@@ -22,13 +22,15 @@ class FakeKeyboard:
 class FakeEditor:
     """模拟 contenteditable：回车后被前端清空才算真的发出去了。"""
 
-    def __init__(self, sends=True, api_reply=None, records=None):
+    def __init__(self, sends=True, api_reply=None, records=None, shows_in_chat=True):
         self.text = ""
         self.sends = sends
         self.api_reply = api_reply
         self.records = records
+        self.shows_in_chat = shows_in_chat
         self.sent = []
         self.first = self
+        self.page = None
 
     def click(self):
         pass
@@ -50,16 +52,39 @@ class FakeEditor:
     def on_enter(self):
         if self.sends and self.text:
             self.sent.append(self.text)
+            if self.shows_in_chat and self.page is not None:
+                self.page.chat_texts.append(self.text)
             self.text = ""
         # 接口响应总是在回车之后才回来
         if self.api_reply is not None and self.records is not None:
             self.records.append(self.api_reply)
 
 
+class FakeEmpty:
+    def count(self):
+        return 0
+
+    @property
+    def first(self):
+        return self
+
+    def click(self, timeout=0):
+        raise RuntimeError("no send button")
+
+
 class FakePage:
     def __init__(self, editor):
         self.editor = editor
         self.keyboard = FakeKeyboard(editor)
+        self.chat_texts = []
+        self.frames = []
+        editor.page = self
+
+    def locator(self, _selector):
+        return FakeEmpty()
+
+    def evaluate(self, _script):
+        return list(self.chat_texts)
 
 
 class FakeResponse:
@@ -119,7 +144,12 @@ class SendChatMessageTests(unittest.TestCase):
         """清空后残留零宽字符时不能误判成没发出去。"""
         editor = FakeEditor()
         page = _patched(editor)
-        editor.on_enter = lambda: setattr(editor, "text", "\u200b\n")
+
+        def on_enter():
+            page.chat_texts.append("你好")
+            editor.text = "\u200b\n"
+
+        editor.on_enter = on_enter
         tasks._send_chat_message(page, "你好")
         self.assertEqual(page.keyboard.presses.count("Enter"), 1)
 
@@ -168,11 +198,26 @@ class SendChatMessageTests(unittest.TestCase):
         self.assertEqual(editor.sent, ["你好"])
 
     def test_succeeds_when_no_api_response_captured(self):
-        """抖音私信主要走 WebSocket，抓不到 HTTP 响应时不能误判成失败。"""
+        """抖音私信主要走 WebSocket，抓不到 HTTP 响应时看聊天区气泡。"""
         editor = FakeEditor()
         page = _patched(editor)
         tasks._send_chat_message(page, "你好", [])
         self.assertEqual(editor.sent, ["你好"])
+
+    def test_editor_cleared_but_chat_missing_is_failure(self):
+        """输入框空了但对话里没出现这条，就是假成功。"""
+        editor = FakeEditor(shows_in_chat=False)
+        page = _patched(editor)
+        page.chat_texts = ["昨天的旧消息"]
+        with self.assertRaises(RuntimeError) as ctx:
+            tasks._send_chat_message(page, "你好")
+        self.assertIn("聊天区没有出现", str(ctx.exception))
+
+    def test_snippet_skips_decoration_lines(self):
+        snippet = tasks._message_snippet(
+            "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n海内存知己"
+        )
+        self.assertEqual(snippet, "[盖瑞]今日火花[加一]")
 
 
 class SendHandlerTests(unittest.TestCase):

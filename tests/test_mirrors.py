@@ -53,6 +53,19 @@ class MirrorListTests(unittest.TestCase):
         self.assertIn("_lease_github_proxy", text)
         self.assertIn("github.com/", text)
 
+    def test_status_does_not_auto_refresh_github(self):
+        """仪表盘轮询不得再偷偷抽住宅 IP 去查版本。"""
+        tree = ast.parse(self.source)
+        fn = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "remote_version_fast"
+        )
+        text = ast.get_source_segment(self.source, fn) or ""
+        self.assertNotIn("Thread", text)
+        self.assertNotIn("_refresh_remote_version", text)
+        self.assertIn("_remote_cache", text)
+
     def test_stuck_origin_is_not_tried_first(self):
         tree = ast.parse(self.source)
         fn = next(

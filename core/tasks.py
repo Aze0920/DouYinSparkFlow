@@ -59,6 +59,20 @@ CHAT_EDITOR_SELECTORS = [
     "[class*='messageEditor']",
     "[contenteditable='true']",
 ]
+SEND_BUTTON_SELECTORS = [
+    "button:has-text('发送')",
+    "[class*='sendBtn']",
+    "[class*='SendBtn']",
+    "[class*='SendButton']",
+    "[data-e2e='im-send']",
+    "[class*='send-btn']",
+]
+CHAT_BUBBLE_JS = """() => {
+  const nodes = [...document.querySelectorAll(
+    '[class*="essage"],[class*="ubble"],[class*="MessageItem"],[class*="messageItem"],[class*="imMessage"]'
+  )];
+  return nodes.slice(-24).map(el => (el.innerText || '').replace(/\\s+/g, ' ').trim()).filter(Boolean);
+}"""
 LOGIN_HINTS = ("扫码登录", "登录后免费畅享", "打开「抖音APP」", "验证码登录", "请使用抖音APP")
 CHALLENGE_HINTS = (
     "请完成验证",
@@ -401,6 +415,7 @@ def scroll_and_select_user(page, username, targets, user_id_dict, item_loc, list
                     continue
 
                 element.click()
+                time.sleep(0.8)
                 yield targetSymbol, targetName
 
                 if targetSymbol in remaining_targets:
@@ -501,6 +516,46 @@ def _send_gap() -> float:
     return random.uniform(max(low, 0), high)
 
 
+def _message_snippet(message: str) -> str:
+    """从文案里挑一小段，用来核对聊天区是不是真的出现了这条消息。"""
+    text = str(message or "").replace("\\n", "\n")
+    skip = ("每日一言", "自动续火花助手", "[error]")
+    for line in text.splitlines():
+        line = " ".join(line.split()).strip()
+        if len(line) < 2 or any(token in line for token in skip):
+            continue
+        return line[:32]
+    return " ".join(text.split())[:32]
+
+
+def _chat_texts(page) -> list[str]:
+    try:
+        texts = page.evaluate(CHAT_BUBBLE_JS)
+    except Exception:
+        return []
+    if not isinstance(texts, list):
+        return []
+    return [str(item).strip() for item in texts if str(item).strip()]
+
+
+def _snippet_hits(texts, snippet: str) -> int:
+    if not snippet:
+        return 0
+    return sum(1 for item in texts if snippet in item)
+
+
+def _click_send_button(page) -> bool:
+    loc, _, selector = _find_locator(page, SEND_BUTTON_SELECTORS)
+    if loc is None:
+        return False
+    try:
+        loc.first.click(timeout=1500)
+        logger.debug("回车没清空，改点发送按钮 selector=%s", selector)
+        return True
+    except Exception:
+        return False
+
+
 def _send_chat_message(page, message: str, send_records=None):
     chat_input, _, selector = _wait_locator(page, CHAT_EDITOR_SELECTORS, timeout_ms=15000)
     if chat_input is None:
@@ -508,6 +563,8 @@ def _send_chat_message(page, message: str, send_records=None):
     logger.debug("使用输入框 selector=%s", selector)
     editor = _editor_target(page, chat_input)
     lines = message.split("\\n")
+    snippet = _message_snippet(message)
+    before_hits = _snippet_hits(_chat_texts(page), snippet)
 
     # 回车之前可以重试：还没发出去，重来一次不会造成重复
     typed = False
@@ -525,22 +582,36 @@ def _send_chat_message(page, message: str, send_records=None):
     # 回车之后一律不再重发。此刻消息可能已经送达，重试就会让好友收到两条
     page.keyboard.press("Enter")
     cleared = False
-    for _ in range(20):
+    landed = False
+    clicked_send = False
+    for _ in range(24):
         time.sleep(0.15)
         if not _editor_text(editor):
             cleared = True
+        if _snippet_hits(_chat_texts(page), snippet) > before_hits:
+            landed = True
             break
+        if not cleared and not clicked_send:
+            clicked_send = _click_send_button(page)
 
-    # 输入框清空只说明前端收下了，服务端有没有投递还得看接口和提示条
+    # 输入框清空只说明前端收下了，聊天区没出现这条就不能算成功
     time.sleep(0.6)
+    after = _chat_texts(page)
+    if _snippet_hits(after, snippet) > before_hits:
+        landed = True
     api_error = _send_failure_from_api(list(send_records or []))
     if api_error:
         raise RuntimeError(f"抖音拒绝了这条消息：{api_error}")
     toast = _toast_warning(page)
     if toast:
         raise RuntimeError(f"抖音提示：{toast}")
+    if landed:
+        return
+    if after:
+        raise RuntimeError("消息可能没发出去：回车后聊天区没有出现这条内容")
     if not cleared:
         raise RuntimeError("消息可能没发出去：回车后输入框内容没有被清空")
+    logger.warning("聊天区没抓到气泡，只能按输入框已清空判断，核对片段=%s", snippet)
 
 
 def _proxy_off(region: str) -> bool:
@@ -730,6 +801,12 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             harvest_sparks(page)
 
             logger.debug(f"账号 {username} 开始发送消息")
+            message = build_message(message_template)
+            logger.info(
+                "账号 %s 本轮文案：%s",
+                username,
+                message.replace("\n", " / ").replace("\\n", " / ")[:160],
+            )
             sent = []
             failed = []
             blocked = ""
@@ -746,7 +823,6 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                 # 找好友的过程本身就在滚列表，每滚到一个人就把当前视口的天数一起收了
                 harvest_sparks(page)
                 logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
-                message = build_message(message_template)
                 logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
                 try:
                     _send_chat_message(page, message, send_records)

@@ -1138,8 +1138,8 @@ body.spark-locked .spark-action {
   color: #fff;
 }
 .log-box {
-  height: min(52vh, 520px);
-  min-height: 240px;
+  height: min(72vh, 860px);
+  min-height: 360px;
   overflow: auto;
   white-space: pre-wrap;
   background: #070b12;
@@ -1369,7 +1369,7 @@ body.spark-locked .spark-action {
   .modal-actions { gap: 6px; }
   .toast-wrap { left: 12px; right: 12px; top: 12px; }
   .toast { min-width: 0; }
-  .log-box { height: 42vh; min-height: 200px; }
+  .log-box { height: 62vh; min-height: 280px; }
   .mine-save { width: 100%; }
 
   /* 侧栏改成底部标签栏 */

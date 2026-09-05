@@ -101,6 +101,11 @@ class HtmlStructureTests(unittest.TestCase):
         self.assertIn('name="viewport"', text)
         self.assertIn("viewport-fit=cover", text)
 
+    def test_boot_does_not_poll_github(self):
+        text = read(HTML)
+        self.assertNotIn("checkGithub(true)", text)
+        self.assertIn("/api/logs?lines=4000", text)
+
     def test_every_onclick_handler_is_defined(self):
         """onclick 里调用的函数必须真的在页面脚本里定义，否则手机上点了没反应。"""
         text = read(HTML)

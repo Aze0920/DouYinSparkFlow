@@ -39,8 +39,8 @@ def setup_logger(name="app", level="Info"):
         console_handler = logging.StreamHandler()
         file_handler = RotatingFileHandler(
             LOG_FILE,
-            maxBytes=5 * 1024 * 1024,
-            backupCount=3,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=8,
             encoding="utf-8",
         )
         logger.addHandler(console_handler)

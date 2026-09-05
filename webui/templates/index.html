@@ -511,7 +511,7 @@
               <button class="btn-ghost" onclick="clearLogs()">清空日志</button>
             </div>
           </div>
-          <pre class="log-box" id="logs">还没有日志。</pre>
+          <pre class="log-box" id="logs">还没有日志。页面会保留最近约 4000 行。</pre>
         </section>
       </section>
 
@@ -1192,7 +1192,7 @@
       window.__lastStatus = data;
       if (isAdmin()) {
         if ($("localVersion") && data.local_version) $("localVersion").textContent = "v" + data.local_version;
-        if ($("remoteVersion")) $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未获取到";
+        if ($("remoteVersion")) $("remoteVersion").textContent = data.remote_version ? "v" + data.remote_version : "未检测";
         if ($("versionPill") && data.local_version) $("versionPill").textContent = "v" + data.local_version;
       }
       if ($("accountCount")) {
@@ -1249,7 +1249,7 @@
         else if (data.update_available) toast(data.message);
       } catch (err) {
         if (!silent) {
-          if ($("remoteVersion")) $("remoteVersion").textContent = "未获取到";
+          if ($("remoteVersion")) $("remoteVersion").textContent = "未检测";
           toast(err.message, "err");
         }
       } finally {
@@ -2737,7 +2737,7 @@
       return el.contains(sel.anchorNode) || el.contains(sel.focusNode);
     }
     async function loadLogs(force = false) {
-      const data = await api("/api/logs");
+      const data = await api("/api/logs?lines=4000");
       const text = data.text || "暂无日志";
       const el = $("logs");
       if (!force) {
@@ -3121,7 +3121,6 @@
       }
     }
     async function refreshAll() {
-      await checkGithub();
       if (page === "logs") await loadLogs();
       if (page === "users") await loadUsers();
       if (page === "cards") await loadCards();
@@ -3711,9 +3710,6 @@
         } catch (e) {}
         pollBusy = false;
       }, 2000);
-      setInterval(() => {
-        if (isAdmin()) checkGithub(true);
-      }, 60000);
     }
     (async () => {
       try {
