@@ -43,8 +43,22 @@ def build_message_with_openai() -> str:
     return response.choices[0].message.content.strip()
 
 
+def _looks_like_first_line_only(message: str, default: str) -> bool:
+    """账号里只存了默认模板第一行时，补回完整模板，不然一言和底栏都丢了。"""
+    msg = (message or "").replace("\\n", "\n").strip()
+    dft = (default or "").replace("\\n", "\n").strip()
+    if not msg or not dft:
+        return not msg
+    if "\n" in msg or "[API]" in msg:
+        return False
+    return msg == dft.split("\n", 1)[0].strip()
+
+
 def build_message(template: str | None = None) -> str:
-    message = str(template or "").strip() or get_config().get("messageTemplate", "续火花")
+    default = get_config().get("messageTemplate", "续火花")
+    message = str(template or "").strip() or default
+    if _looks_like_first_line_only(message, default):
+        message = default
     if "[API]" in message:
         api_content = request_hitokoto()
         message = message.replace("[API]", api_content)

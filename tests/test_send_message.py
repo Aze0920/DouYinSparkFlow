@@ -35,6 +35,12 @@ class FakeEditor:
     def click(self):
         pass
 
+    def press(self, key):
+        if self.page is not None:
+            self.page.keyboard.press(key)
+        elif key == "Enter":
+            self.on_enter()
+
     def count(self):
         return 1
 
@@ -215,7 +221,7 @@ class SendChatMessageTests(unittest.TestCase):
         page.chat_texts = ["昨天的旧消息"]
         with self.assertRaises(RuntimeError) as ctx:
             tasks._send_chat_message(page, "你好")
-        self.assertIn("聊天区没有出现", str(ctx.exception))
+        self.assertIn("会话预览没有更新", str(ctx.exception))
 
     def test_snippet_skips_decoration_lines(self):
         snippet = tasks._message_snippet(
@@ -243,6 +249,72 @@ class SendChatMessageTests(unittest.TestCase):
 
     def test_emoji_codes_still_match_plain_preview(self):
         self.assertTrue(tasks._text_has_snippet("刚刚 今日火花", "[盖瑞]今日火花[加一]"))
+
+    def test_other_friends_same_preview_does_not_count(self):
+        """前面好友已经发出同一条文案时，不能拿别人的预览给当前好友凑成功。"""
+        editor = FakeEditor(shows_in_chat=False)
+        page = _patched(editor)
+        page.chat_texts = ["昨天的旧消息"]
+        page.previews = [
+            {"title": "静静", "preview": "[盖瑞]今日火花[加一]", "time": "刚刚", "current": False},
+            {"title": "凯凯", "preview": "昨天晚上见", "time": "02:40", "current": True},
+        ]
+        with self.assertRaises(RuntimeError) as ctx:
+            tasks._send_chat_message(page, "[盖瑞]今日火花[加一]", friend_name="凯凯")
+        self.assertIn("会话预览没有更新", str(ctx.exception))
+
+    def test_just_now_without_preview_change_is_not_success(self):
+        """点开会话也会变成「刚刚」，正文没变就不能算发出去。"""
+        editor = FakeEditor(shows_in_chat=False)
+        page = _patched(editor)
+        page.chat_texts = ["昨天的旧消息"]
+        page.previews = [
+            {"title": "超欣", "preview": "[盖瑞]今日火花[加一]", "time": "02:40", "current": True}
+        ]
+
+        def on_enter():
+            editor.sent.append(editor.text)
+            editor.text = ""
+            page.previews = [
+                {"title": "超欣", "preview": "[盖瑞]今日火花[加一]", "time": "刚刚", "current": True}
+            ]
+
+        editor.on_enter = on_enter
+        with self.assertRaises(RuntimeError) as ctx:
+            tasks._send_chat_message(page, "[盖瑞]今日火花[加一]", friend_name="超欣")
+        self.assertIn("会话预览没有更新", str(ctx.exception))
+
+    def test_current_friend_just_now_counts(self):
+        editor = FakeEditor(shows_in_chat=False)
+        page = _patched(editor)
+        page.chat_texts = ["昨天的旧消息"]
+        page.previews = [
+            {"title": "静静", "preview": "[盖瑞]今日火花[加一]", "time": "刚刚", "current": False},
+            {"title": "凯凯", "preview": "昨天晚上见", "time": "02:40", "current": True},
+        ]
+
+        def on_enter():
+            editor.sent.append(editor.text)
+            editor.text = ""
+            page.previews = [
+                {"title": "静静", "preview": "[盖瑞]今日火花[加一]", "time": "刚刚", "current": False},
+                {"title": "凯凯", "preview": "[盖瑞]今日火花[加一]", "time": "刚刚", "current": True},
+            ]
+
+        editor.on_enter = on_enter
+        tasks._send_chat_message(page, "[盖瑞]今日火花[加一]", friend_name="凯凯")
+        self.assertEqual(editor.sent, ["[盖瑞]今日火花[加一]"])
+
+
+class FinishSendResultTests(unittest.TestCase):
+    def test_partial_failure_is_not_success(self):
+        with self.assertRaises(RuntimeError) as ctx:
+            tasks._finish_send_result("王洁", ["儿子", "苗苗"], ["凯凯"])
+        self.assertIn("部分好友没发出去", str(ctx.exception))
+        self.assertIn("凯凯", str(ctx.exception))
+
+    def test_all_sent_is_silent(self):
+        tasks._finish_send_result("王洁", ["儿子", "凯凯"], [])
 
 
 class SendHandlerTests(unittest.TestCase):

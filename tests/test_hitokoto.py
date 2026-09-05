@@ -28,6 +28,16 @@ class HitokotoTests(unittest.TestCase):
         self.assertNotIn("[API]", text)
         self.assertIn("今日火花", text)
 
+    def test_first_line_only_template_expands_to_default(self):
+        default = "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n[API]"
+        with patch.object(hitokoto, "_fetch_hitokoto", return_value=""):
+            with patch.object(hitokoto, "_fetch_jinrishici", return_value=""):
+                with patch.object(hitokoto, "get_config", return_value={"hitokotoTypes": ["诗词"]}):
+                    with patch.object(msg_builder, "get_config", return_value={"messageTemplate": default}):
+                        text = msg_builder.build_message("[盖瑞]今日火花[加一]")
+        self.assertIn("每日一言", text)
+        self.assertNotIn("[API]", text)
+
     def test_caches_remote_success(self):
         with patch.object(hitokoto, "_fetch_hitokoto", return_value="远程一句 —— 测试 (作者)") as fetch:
             with patch.object(hitokoto, "get_config", return_value={"hitokotoTypes": ["文学"]}):

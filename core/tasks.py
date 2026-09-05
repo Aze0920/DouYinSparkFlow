@@ -517,6 +517,15 @@ def _type_message(page, editor, lines):
             page.keyboard.press("Shift+Enter")
 
 
+def _press_enter(page, editor):
+    try:
+        editor.press("Enter")
+        return
+    except Exception:
+        pass
+    page.keyboard.press("Enter")
+
+
 def _looks_blocked(exc) -> bool:
     text = str(exc)
     return "抖音拒绝" in text or "抖音提示" in text
@@ -595,32 +604,47 @@ def _list_previews(page) -> list[dict]:
     return out
 
 
-def _delivery_texts(page) -> list[str]:
-    texts = list(_chat_texts(page))
-    for row in _list_previews(page):
-        blob = " ".join(part for part in (row["title"], row["preview"], row["time"]) if part)
-        if blob:
-            texts.append(blob)
-    return texts
-
-
 def _snippet_hits(texts, snippet: str) -> int:
     if not snippet:
         return 0
     return sum(1 for item in texts if _text_has_snippet(item, snippet))
 
 
-def _friend_preview_landed(rows: list[dict], friend_name: str, snippet: str) -> bool:
-    if not snippet:
-        return False
+def _row_for_friend(rows: list[dict], friend_name: str) -> dict | None:
+    if friend_name:
+        for row in rows:
+            if row.get("title") == friend_name:
+                return row
     for row in rows:
-        title = row.get("title") or ""
-        preview = row.get("preview") or ""
-        if friend_name and title and title != friend_name and not row.get("current"):
-            continue
-        if _text_has_snippet(preview, snippet):
-            return True
-    return False
+        if row.get("current"):
+            return row
+    return None
+
+
+def _preview_updated(before_row: dict | None, after_row: dict | None, snippet: str) -> bool:
+    """预览正文必须变。点开会话也会把时间改成「刚刚」，那不算发出去。"""
+    if not after_row:
+        return False
+    after_preview = after_row.get("preview") or ""
+    before_preview = (before_row or {}).get("preview") or ""
+    if not after_preview or after_preview == before_preview:
+        return False
+    return _text_has_snippet(after_preview, snippet)
+
+
+def _finish_send_result(username: str, sent: list, failed: list, blocked: str = ""):
+    if blocked:
+        raise RuntimeError(
+            f"账号 {username} 被抖音限制，成功 {len(sent)} 个后中断：{blocked}"
+        )
+    if not sent:
+        raise RuntimeError(
+            f"账号 {username} 一条消息都没发出去，聊天输入框可能已经改版，已保存截图到 logs/chat-debug-*.png"
+        )
+    if failed:
+        raise RuntimeError(
+            f"账号 {username} 部分好友没发出去：成功 {len(sent)}，失败 {len(failed)}（{'、'.join(failed)}）"
+        )
 
 
 def _click_send_button(page) -> bool:
@@ -643,7 +667,8 @@ def _send_chat_message(page, message: str, send_records=None, friend_name=""):
     editor = _editor_target(page, chat_input)
     lines = [part for part in message.replace("\\n", "\n").split("\n")]
     snippet = _message_snippet(message)
-    before_hits = _snippet_hits(_delivery_texts(page), snippet)
+    before_row = _row_for_friend(_list_previews(page), friend_name)
+    before_chat = _chat_texts(page)
 
     # 回车之前可以重试：还没发出去，重来一次不会造成重复
     typed = False
@@ -659,32 +684,42 @@ def _send_chat_message(page, message: str, send_records=None, friend_name=""):
         raise RuntimeError("消息没能发出去：文字没有进入输入框")
 
     # 回车之后一律不再重发。此刻消息可能已经送达，重试就会让好友收到两条
-    page.keyboard.press("Enter")
+    _press_enter(page, editor)
     cleared = False
     landed = False
     clicked_send = False
+    after_row = before_row
+    after_chat = before_chat
     for _ in range(24):
         time.sleep(0.15)
         if not _editor_text(editor):
             cleared = True
-        after_rows = _list_previews(page)
-        if _snippet_hits(_delivery_texts(page), snippet) > before_hits:
+        after_row = _row_for_friend(_list_previews(page), friend_name)
+        after_chat = _chat_texts(page)
+        if _preview_updated(before_row, after_row, snippet):
             landed = True
             break
-        if _friend_preview_landed(after_rows, friend_name, snippet):
+        if _snippet_hits(after_chat, snippet) > _snippet_hits(before_chat, snippet):
             landed = True
             break
         if not cleared and not clicked_send:
             clicked_send = _click_send_button(page)
 
-    # 输入框清空只说明前端收下了；会话列表预览出现「刚刚 + 文案」才算送达
     time.sleep(0.6)
-    after_texts = _delivery_texts(page)
-    after_rows = _list_previews(page)
-    if _snippet_hits(after_texts, snippet) > before_hits:
+    after_row = _row_for_friend(_list_previews(page), friend_name)
+    after_chat = _chat_texts(page)
+    if _preview_updated(before_row, after_row, snippet):
         landed = True
-    if _friend_preview_landed(after_rows, friend_name, snippet):
+    if _snippet_hits(after_chat, snippet) > _snippet_hits(before_chat, snippet):
         landed = True
+    logger.info(
+        "发送核对 %s 预览「%s」→「%s」 气泡 %s→%s",
+        friend_name or "?",
+        ((before_row or {}).get("preview") or "")[:40],
+        ((after_row or {}).get("preview") or "")[:40],
+        _snippet_hits(before_chat, snippet),
+        _snippet_hits(after_chat, snippet),
+    )
     api_error = _send_failure_from_api(list(send_records or []))
     if api_error:
         raise RuntimeError(f"抖音拒绝了这条消息：{api_error}")
@@ -693,10 +728,16 @@ def _send_chat_message(page, message: str, send_records=None, friend_name=""):
         raise RuntimeError(f"抖音提示：{toast}")
     if landed:
         return
-    if after_texts:
-        raise RuntimeError("消息可能没发出去：回车后聊天区没有出现这条内容")
     if not cleared:
         raise RuntimeError("消息可能没发出去：回车后输入框内容没有被清空")
+    logger.warning(
+        "发送核对失败 friend=%s before=%s after=%s",
+        friend_name or "?",
+        (before_row or {}).get("preview") or "",
+        (after_row or {}).get("preview") or "",
+    )
+    if after_row or after_chat:
+        raise RuntimeError("消息可能没发出去：这个好友的会话预览没有更新")
     logger.warning("聊天区没抓到气泡，只能按输入框已清空判断，核对片段=%s", snippet)
 
 
@@ -928,16 +969,9 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
             logger.info("账号 %s 发送结果 成功=%s 失败=%s", username, len(sent), len(failed))
             if failed:
                 logger.warning("账号 %s 以下好友没发出去: %s", username, failed)
-            if blocked:
+            if blocked or not sent:
                 _dump_chat_debug(page, username)
-                raise RuntimeError(
-                    f"账号 {username} 被抖音限制，成功 {len(sent)} 个后中断：{blocked}"
-                )
-            if not sent:
-                _dump_chat_debug(page, username)
-                raise RuntimeError(
-                    f"账号 {username} 一条消息都没发出去，聊天输入框可能已经改版，已保存截图到 logs/chat-debug-*.png"
-                )
+            _finish_send_result(username, sent, failed, blocked)
         finally:
             try:
                 context.close()

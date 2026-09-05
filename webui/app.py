@@ -2184,6 +2184,17 @@ def _scheduler_loop():
             logger.exception("定时调度失败")
 
 
+def _spark_run_summary(output: str, code: int) -> tuple[str, str]:
+    """从任务输出里抽出人话结论，避免「成功=9 失败=1」还推送续火花完成。"""
+    for line in reversed((output or "").splitlines()):
+        text = line.strip()
+        if "部分好友没发出去" in text:
+            return text[-180:], "续火花部分失败"
+        if "一条消息都没发出去" in text or "打不开会话列表" in text or "被抖音限制" in text:
+            return text[-180:], "续火花失败"
+    return f"执行失败，退出码 {code}", "续火花失败"
+
+
 def _run_task(unique_ids=None):
     env = os.environ.copy()
     env["HEADLESS"] = "true"
@@ -2226,15 +2237,17 @@ def _run_task(unique_ids=None):
         with LOG_FILE.open("a", encoding="utf-8") as fh:
             fh.write(f"\n----- 手动执行 exit={proc.returncode} -----\n")
             fh.write(extra[-8000:])
-        _run_state["message"] = "执行完成" if proc.returncode == 0 else f"执行失败，退出码 {proc.returncode}"
         if proc.returncode == 0:
+            _run_state["message"] = "执行完成"
             logger.info("续火花任务执行完成")
             _record_spark_run(ids or None, True)
             _notify_account_owners("task_done", "续火花完成", ids or None)
         else:
-            logger.error("续火花任务失败 exit=%s", proc.returncode)
+            detail, title = _spark_run_summary(extra, proc.returncode)
+            _run_state["message"] = detail
+            logger.error("续火花任务失败 exit=%s %s", proc.returncode, detail)
             _record_spark_run(ids or None, False)
-            _notify_account_owners("task_fail", "续火花失败", ids or None, extra=f"退出码 {proc.returncode}")
+            _notify_account_owners("task_fail", title, ids or None, extra=detail)
     except Exception as exc:
         _run_state["message"] = f"执行异常：{exc}"
         logger.exception("续火花任务异常")
