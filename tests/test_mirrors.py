@@ -37,6 +37,22 @@ class MirrorListTests(unittest.TestCase):
         )
         self.assertIn("_version_via_git", ast.get_source_segment(self.source, fn) or "")
 
+    def test_github_update_can_borrow_residential_proxy(self):
+        """抖音代理开关关掉，GitHub 更新仍应能借提取密钥当跳板。"""
+        self.assertIn("def _lease_github_proxy", self.source)
+        self.assertIn("def fetch_github_proxy", (ROOT / "webui" / "proxy.py").read_text(encoding="utf-8"))
+        self.assertIn("http.proxy", self.source)
+        self.assertIn("https.proxy", self.source)
+        tree = ast.parse(self.source)
+        fn = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "pull_via_mirrors"
+        )
+        text = ast.get_source_segment(self.source, fn) or ""
+        self.assertIn("_lease_github_proxy", text)
+        self.assertIn("github.com/", text)
+
     def test_stuck_origin_is_not_tried_first(self):
         tree = ast.parse(self.source)
         fn = next(

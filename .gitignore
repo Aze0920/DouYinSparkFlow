@@ -20,3 +20,4 @@ config/auth_secret
 config/spark_stats.json
 data/sessions/
 .scratch/
+.deploy-target.json

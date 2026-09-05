@@ -31,6 +31,12 @@ class ProxyEnabledTests(unittest.TestCase):
         with patch.object(proxy_mod, "load_proxy", return_value=cfg(True, phone="")):
             self.assertFalse(proxy_mod.proxy_enabled(), "没配账号也不算启用")
 
+    def test_github_jump_uses_key_even_when_douyin_switch_is_off(self):
+        with patch.object(proxy_mod, "load_proxy", return_value=cfg(False)):
+            self.assertTrue(proxy_mod.github_credentials_ready())
+        with patch.object(proxy_mod, "load_proxy", return_value=cfg(False, key="")):
+            self.assertFalse(proxy_mod.github_credentials_ready())
+
 
 class SwitchOffMeansDirectTests(unittest.TestCase):
     """开关关掉：哪怕账号设了地区，也全部当直连处理。"""

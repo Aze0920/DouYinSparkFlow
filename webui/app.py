@@ -17,7 +17,16 @@ from fastapi.templating import Jinja2Templates
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui import keepalive, safe_io
 from webui.origin import public_origin, split_host_port
-from webui.proxy import fetch_proxy, load_proxy, proxy_enabled, public_proxy, save_proxy
+from webui.proxy import (
+    fetch_github_proxy,
+    fetch_proxy,
+    github_credentials_ready,
+    load_proxy,
+    proxy_enabled,
+    public_proxy,
+    save_proxy,
+    ProxyLease,
+)
 from webui.proxy import list_accounts as list_proxy_accounts_api
 from webui.announcement import (
     admin_announcement,
@@ -548,19 +557,39 @@ def _assert_account_quota(user: dict | None, count: int) -> None:
         raise HTTPException(status_code=403, detail=f"当前卡密最多添加 {limit} 个抖音账号")
 
 
-def _httpx_client(timeout: float = 8.0, **kwargs) -> httpx.Client:
+def _httpx_client(timeout: float = 8.0, proxy: str | None = None, **kwargs) -> httpx.Client:
     """国内 VPS 常常没有 IPv6。DNS 给了 AAAA 就会立刻 Errno 101（Network is unreachable），
-    看起来像镜像挂了，其实是本机出不去。绑到 0.0.0.0 强制走 IPv4。"""
+    看起来像镜像挂了，其实是本机出不去。绑到 0.0.0.0 强制走 IPv4。
+    走住宅代理时不要再绑 local_address，交给代理自己出网。"""
     kwargs.setdefault("follow_redirects", True)
     kwargs.setdefault("verify", False)
-    kwargs.setdefault(
-        "transport",
-        httpx.HTTPTransport(local_address="0.0.0.0", verify=kwargs.get("verify", False)),
-    )
+    if proxy:
+        kwargs["proxy"] = proxy if str(proxy).startswith("http") else f"http://{proxy}"
+    else:
+        kwargs.setdefault(
+            "transport",
+            httpx.HTTPTransport(local_address="0.0.0.0", verify=kwargs.get("verify", False)),
+        )
     return httpx.Client(timeout=timeout, **kwargs)
 
 
-def run_git(*args: str, timeout: int = 20, ssl_verify: bool = True) -> subprocess.CompletedProcess:
+def _lease_github_proxy() -> ProxyLease | None:
+    if not github_credentials_ready():
+        return None
+    try:
+        server = fetch_github_proxy()
+    except Exception:
+        logger.exception("给 GitHub 提取住宅代理失败")
+        return None
+    if not server:
+        logger.warning("给 GitHub 没提到住宅 IP，更新通道还是直连")
+        return None
+    lease = ProxyLease(server)
+    logger.info("GitHub 更新走住宅代理 %s，%.0f 秒内必须收手", server.split("@")[-1], lease.remaining())
+    return lease
+
+
+def run_git(*args: str, timeout: int = 20, ssl_verify: bool = True, http_proxy: str | None = None) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["GIT_TERMINAL_PROMPT"] = "0"
     # 走 ssh:// 镜像时别卡在「是否信任主机指纹」的交互上，也别为死链路等满默认超时
@@ -572,6 +601,9 @@ def run_git(*args: str, timeout: int = 20, ssl_verify: bool = True) -> subproces
     if not ssl_verify:
         env["GIT_SSL_NO_VERIFY"] = "1"
         cmd.extend(["-c", "http.sslVerify=false"])
+    if http_proxy:
+        proxy = http_proxy if str(http_proxy).startswith("http") else f"http://{http_proxy}"
+        cmd.extend(["-c", f"http.proxy={proxy}", "-c", f"https.proxy={proxy}"])
     cmd.extend(args)
     return subprocess.run(
         cmd,
@@ -627,11 +659,8 @@ def parse_version_text(text: str) -> str:
     return ""
 
 
-def fetch_remote_version() -> tuple[str, str]:
-    """只走镜像 HTTP 读 VERSION，不 git fetch，避免把控制台卡住。"""
+def _version_http_urls(stamp: int) -> list[str]:
     repo = repo_name()
-    stamp = int(time.time())
-    headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
     urls = []
     custom = configured_mirror()
     if custom and custom.startswith("http") and "github.com/" in custom:
@@ -640,10 +669,15 @@ def fetch_remote_version() -> tuple[str, str]:
         if path:
             urls.append(f"{prefix}raw.githubusercontent.com/{path}/main/VERSION?t={stamp}")
     urls.extend(template.format(repo=repo) + f"?t={stamp}" for template in VERSION_MIRROR_TEMPLATES)
+    return urls
+
+
+def _try_version_urls(urls: list[str], headers: dict, proxy: str | None = None) -> tuple[str, str]:
+    timeout = 12.0 if proxy else 5.0
     for url in urls:
         try:
-            logger.info("检测版本镜像: %s", url.split("?")[0])
-            with _httpx_client(timeout=6.0, headers=headers) as client:
+            logger.info("检测版本镜像%s: %s", "（住宅代理）" if proxy else "", url.split("?")[0])
+            with _httpx_client(timeout=timeout, headers=headers, proxy=proxy) as client:
                 resp = client.get(url)
             version = parse_version_text(resp.text if resp.status_code == 200 else "")
             if version:
@@ -652,6 +686,36 @@ def fetch_remote_version() -> tuple[str, str]:
             logger.warning("版本镜像无效 HTTP %s %s", resp.status_code, url.split("?")[0])
         except Exception as exc:
             logger.warning("版本镜像失败 %s: %s", url.split("?")[0], exc)
+    return "", ""
+
+
+def fetch_remote_version() -> tuple[str, str]:
+    """有住宅代理密钥时先借跳板拉 GitHub 官方；否则再扫一圈直连镜像。"""
+    stamp = int(time.time())
+    headers = {"Cache-Control": "no-cache", "Pragma": "no-cache"}
+    urls = _version_http_urls(stamp)
+
+    lease = _lease_github_proxy()
+    if lease:
+        try:
+            version, source = _version_via_git(http_proxy=lease.server)
+            if version:
+                logger.info("住宅代理 git 读到远端版本 %s（%s）", version, source)
+                return version, source
+            repo = repo_name()
+            gh_urls = [
+                f"https://raw.githubusercontent.com/{repo}/main/VERSION?t={stamp}",
+                f"https://github.com/{repo}/raw/main/VERSION?t={stamp}",
+            ]
+            version, source = _try_version_urls(gh_urls, headers, proxy=lease.server)
+            if version:
+                return version, source
+        finally:
+            lease.release("GitHub 版本检测")
+
+    version, source = _try_version_urls(urls, headers)
+    if version:
+        return version, source
     version, source = _version_via_git()
     if version:
         logger.info("HTTP 镜像全挂，改用 git 读到远端版本 %s（%s）", version, source)
@@ -659,18 +723,17 @@ def fetch_remote_version() -> tuple[str, str]:
     return "", ""
 
 
-def _version_via_git() -> tuple[str, str]:
-    """HTTP 镜像全军覆没时的兜底：用 git 拉一次浅历史，直接读远端的 VERSION 文件。
-
-    只要 git 能通（SSH over 443、配了 http.proxy、或某个镜像还活着），
-    版本检测就跟着能通，不必再依赖那一串随时会死的 raw/CDN 域名。
-    fetch 下来的 FETCH_HEAD 正好给后面的更新直接 reset 用，不算白拉。
-    """
+def _version_via_git(http_proxy: str | None = None) -> tuple[str, str]:
+    """HTTP 镜像全军覆没时的兜底：用 git 拉一次浅历史，直接读远端的 VERSION 文件。"""
     if not (ROOT / ".git").exists():
         return "", ""
-    for url in git_mirror_urls():
+    urls = [f"https://github.com/{repo_name()}.git"] if http_proxy else git_mirror_urls()
+    for url in urls:
         try:
-            fetch = run_git("fetch", "--depth=1", url, "main", timeout=30, ssl_verify=False)
+            fetch = run_git(
+                "fetch", "--depth=1", url, "main",
+                timeout=30, ssl_verify=False, http_proxy=http_proxy,
+            )
         except subprocess.TimeoutExpired:
             logger.debug("git 读版本超时 %s", url)
             continue
@@ -722,36 +785,64 @@ def remote_version_fast() -> str:
     return _remote_cache["version"]
 
 
+def _git_fetch_reset(url: str, errors: list[str], http_proxy: str | None = None) -> str:
+    """fetch + reset。成功返回 reset 输出，失败返回空串并往 errors 里记一笔。"""
+    try:
+        fetch = run_git(
+            "fetch", "--depth=1", url, "main",
+            timeout=45, ssl_verify=False, http_proxy=http_proxy,
+        )
+        if fetch.returncode != 0:
+            fetch = run_git("fetch", url, "main", timeout=45, ssl_verify=False, http_proxy=http_proxy)
+    except subprocess.TimeoutExpired:
+        logger.warning("git 镜像超时: %s", url)
+        errors.append(f"{url} 超时")
+        return ""
+    if fetch.returncode != 0:
+        detail = (fetch.stderr or fetch.stdout or "fetch 失败").strip().replace("\n", " ")[:240]
+        logger.warning("git 镜像失败 %s: %s", url, detail)
+        errors.append(f"{url}: {detail}")
+        return ""
+    reset = run_git("reset", "--hard", "FETCH_HEAD", timeout=15)
+    if reset.returncode != 0:
+        detail = (reset.stderr or reset.stdout or "reset 失败").strip().replace("\n", " ")[:240]
+        logger.error("git reset 失败: %s", detail)
+        errors.append(f"{url} reset: {detail}")
+        return ""
+    return (reset.stdout or "").strip()
+
+
 def pull_via_mirrors() -> tuple[str, str]:
-    """用镜像 git fetch，成功后把 origin 改成这个镜像。"""
-    errors = []
+    """优先借住宅代理拉 GitHub 官方仓库；没有跳板再挨个试镜像。"""
+    errors: list[str] = []
+    official = f"https://github.com/{repo_name()}.git"
+    lease = _lease_github_proxy()
+    if lease:
+        try:
+            logger.info("尝试住宅代理拉取 GitHub: %s", official)
+            log = _git_fetch_reset(official, errors, http_proxy=lease.server)
+            if log:
+                run_git("remote", "set-url", "origin", official, timeout=5)
+                logger.info("已用住宅代理从 GitHub 更新成功")
+                return official, log
+        finally:
+            lease.release("GitHub 更新")
+    elif github_credentials_ready():
+        errors.append("住宅代理提取失败，回退直连镜像")
+    else:
+        errors.append("未配置住宅代理密钥，只能直连镜像")
+
     for url in git_mirror_urls():
         logger.info("尝试 git 镜像拉取: %s", url)
-        try:
-            fetch = run_git("fetch", "--depth=1", url, "main", timeout=45, ssl_verify=False)
-            if fetch.returncode != 0:
-                fetch = run_git("fetch", url, "main", timeout=45, ssl_verify=False)
-        except subprocess.TimeoutExpired:
-            logger.warning("git 镜像超时: %s", url)
-            errors.append(f"{url} 超时")
-            continue
-        if fetch.returncode != 0:
-            detail = (fetch.stderr or fetch.stdout or "fetch 失败").strip().replace("\n", " ")[:240]
-            logger.warning("git 镜像失败 %s: %s", url, detail)
-            errors.append(f"{url}: {detail}")
-            continue
-        reset = run_git("reset", "--hard", "FETCH_HEAD", timeout=15)
-        if reset.returncode != 0:
-            detail = (reset.stderr or reset.stdout or "reset 失败").strip().replace("\n", " ")[:240]
-            logger.error("git reset 失败: %s", detail)
-            errors.append(f"{url} reset: {detail}")
+        log = _git_fetch_reset(url, errors)
+        if not log:
             continue
         run_git("remote", "set-url", "origin", url, timeout=5)
         logger.info("已用镜像更新成功，origin 改为 %s", url)
-        return url, (reset.stdout or "").strip()
+        return url, log
     raise HTTPException(
         status_code=500,
-        detail="所有 Git 镜像都拉取失败。请看运行日志。 " + " | ".join(errors[:3]),
+        detail="所有 Git 通道都拉取失败。请看运行日志。 " + " | ".join(errors[:3]),
     )
 
 

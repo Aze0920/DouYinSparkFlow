@@ -406,6 +406,13 @@ class LiveProbeTests(unittest.TestCase):
             self.assertFalse(proxy_mod._reachable("http://1.2.3.4"))
         get.assert_not_called()
 
+    def test_github_proxy_ignores_douyin_switch(self):
+        cfg = {"enabled": False, "api_key": "k", "phone": "123", "base_url": DEFAULT_BASE_URL}
+        with patch.object(proxy_mod, "fetch_proxy", return_value="http://1.2.3.4:20000") as fetch:
+            self.assertEqual(proxy_mod.fetch_github_proxy(cfg), "http://1.2.3.4:20000")
+        self.assertTrue(fetch.call_args.args[1]["enabled"])
+        self.assertEqual(fetch.call_args.args[0], "110000")
+
 
 if __name__ == "__main__":
     unittest.main()

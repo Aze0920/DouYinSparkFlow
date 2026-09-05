@@ -159,6 +159,26 @@ def load_proxy() -> dict:
     return data
 
 
+def github_credentials_ready(cfg: dict | None = None) -> bool:
+    """GitHub 更新能不能借住宅 IP 当跳板：只看密钥和手机号，不看抖音代理总开关。
+
+    这台机器直连 GitHub 整片超时，但提取接口（ba.cd）在国内，密钥配过就能出一条
+    住宅 IP 去拉代码。抖音续火花关代理，不该把这条更新通道一起关掉。
+    """
+    cfg = cfg or load_proxy()
+    return bool(str(cfg.get("api_key") or "").strip() and str(cfg.get("phone") or "").strip())
+
+
+def fetch_github_proxy(cfg: dict | None = None) -> str | None:
+    """给 GitHub 检测/更新单独提一条 IP。不改抖音代理开关。"""
+    cfg = dict(cfg or load_proxy())
+    if not github_credentials_ready(cfg):
+        return None
+    cfg["enabled"] = True
+    # 更新跟账号上网地区无关，固定走北京提取，失败就当没有跳板。
+    return fetch_proxy("110000", cfg)
+
+
 def proxy_enabled(cfg: dict | None = None) -> bool:
     """住宅代理总开关。关掉、或没配 API 密钥/账号，就当整套 IP 功能都不存在。
 
