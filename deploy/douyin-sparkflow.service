@@ -1,0 +1,25 @@
+[Unit]
+Description=DouYinSparkFlow web console
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=__APP_DIR__
+User=__APP_USER__
+Group=__APP_GROUP__
+Environment=HEADLESS=true
+Environment=WEB_PORT=8787
+Environment=PYTHONUNBUFFERED=1
+ExecStart=__APP_DIR__/.venv/bin/python -m webui.app
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=8
+TimeoutStopSec=30
+KillMode=mixed
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
