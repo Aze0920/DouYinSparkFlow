@@ -16,7 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui import keepalive, safe_io
-from webui.http_log import filter_probe_lines, is_app_path
+from webui.http_log import filter_probe_lines, is_known_request
 from webui import run_preview
 from webui.origin import public_origin, split_host_port
 from webui.proxy import (
@@ -185,8 +185,8 @@ _sched_boot = time.time()
 @app.middleware("http")
 async def log_api_calls(request: Request, call_next):
     path = request.url.path
-    # 扫目录的机器人不写进运行日志，否则「刷新日志」里全是 /wp-admin
-    if not is_app_path(path):
+    # 没注册过的路径一律当扫目录，/api/v1 这种假接口也算
+    if not is_known_request(request.app, request.method, path):
         response = await call_next(request)
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
