@@ -65,6 +65,7 @@ class MirrorListTests(unittest.TestCase):
         self.assertNotIn("Thread", text)
         self.assertNotIn("_refresh_remote_version", text)
         self.assertIn("_remote_cache", text)
+        self.assertNotIn("def _refresh_remote_version", self.source)
 
     def test_stuck_origin_is_not_tried_first(self):
         tree = ast.parse(self.source)

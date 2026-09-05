@@ -48,5 +48,5 @@ def build_message(template: str | None = None) -> str:
     if "[API]" in message:
         api_content = request_hitokoto()
         message = message.replace("[API]", api_content)
-
+    message = message.replace("\\n", "\n")
     return message.strip()

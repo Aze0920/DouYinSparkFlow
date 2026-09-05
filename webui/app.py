@@ -758,26 +758,6 @@ def local_git_sha() -> str:
         return ""
 
 
-def _refresh_remote_version():
-    if _remote_cache["busy"]:
-        return
-    _remote_cache["busy"] = True
-    try:
-        version, source = fetch_remote_version()
-        if version:
-            if version != _remote_cache.get("version"):
-                logger.info("远程版本=%s source=%s", version, source)
-            _remote_cache["version"] = version
-            _remote_cache["source"] = source
-        else:
-            logger.warning("所有版本镜像都没有拿到 VERSION")
-        _remote_cache["ts"] = time.time()
-    except Exception:
-        logger.exception("刷新远程版本失败")
-    finally:
-        _remote_cache["busy"] = False
-
-
 def remote_version_fast() -> str:
     """只读上次手动检测留下的缓存，绝不在后台再抽住宅 IP。"""
     return str(_remote_cache.get("version") or "")

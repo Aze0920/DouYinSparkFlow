@@ -1445,7 +1445,7 @@
       const cron = formatCron(data.cron_hour, data.cron_minute);
       const operate = canSpark();
       const ck = cookieStatusMeta(data);
-      const tpl = data.message_template || window.__defaultTemplate || "";
+      const tpl = String(data.message_template || window.__defaultTemplate || "").replace(/\\n/g, "\n");
       const key = accountKey(data, index);
       const open = window.__openAccounts.has(key);
       const brief = `${cron} · ${(data.targets || []).length} 个好友`;

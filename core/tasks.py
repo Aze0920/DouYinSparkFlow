@@ -1,4 +1,5 @@
 import random
+import re
 import traceback
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -72,6 +73,22 @@ CHAT_BUBBLE_JS = """() => {
     '[class*="essage"],[class*="ubble"],[class*="MessageItem"],[class*="messageItem"],[class*="imMessage"]'
   )];
   return nodes.slice(-24).map(el => (el.innerText || '').replace(/\\s+/g, ' ').trim()).filter(Boolean);
+}"""
+LIST_PREVIEW_JS = """() => {
+  const items = [...document.querySelectorAll(
+    '[data-e2e="conversation-item"], .conversationConversationItemwrapper, [class*="ConversationItemwrapper"]'
+  )];
+  return items.map((el) => {
+    const title = el.querySelector('[class*="ConversationItemtitle"], [class*="Itemtitle"], [class*="nickName"]');
+    const hint = el.querySelector('[class*="HinttextBox"], [class*="Deschint"], [class*="ItemHint"], [class*="Descleft"]');
+    const time = el.querySelector('[class*="timeStr"], [class*="Titletime"]');
+    return {
+      title: ((title && title.innerText) || '').replace(/\\s+/g, ' ').trim(),
+      preview: ((hint && hint.innerText) || '').replace(/\\s+/g, ' ').trim(),
+      time: ((time && time.innerText) || '').replace(/\\s+/g, ' ').trim(),
+      current: /curConversation|isActive|selected/i.test(el.className || ''),
+    };
+  }).filter((row) => row.title || row.preview);
 }"""
 LOGIN_HINTS = ("扫码登录", "登录后免费畅享", "打开「抖音APP」", "验证码登录", "请使用抖音APP")
 CHALLENGE_HINTS = (
@@ -528,6 +545,20 @@ def _message_snippet(message: str) -> str:
     return " ".join(text.split())[:32]
 
 
+def _plain_snippet(snippet: str) -> str:
+    """[盖瑞][加一] 这类表情码发出去后会变成图标，对比时要去掉。"""
+    return re.sub(r"\[[^\[\]\n]{1,16}\]", "", snippet or "").strip()
+
+
+def _text_has_snippet(text: str, snippet: str) -> bool:
+    if not text or not snippet:
+        return False
+    if snippet in text:
+        return True
+    bare = _plain_snippet(snippet)
+    return bool(bare) and len(bare) >= 2 and bare in text
+
+
 def _chat_texts(page) -> list[str]:
     try:
         texts = page.evaluate(CHAT_BUBBLE_JS)
@@ -538,10 +569,58 @@ def _chat_texts(page) -> list[str]:
     return [str(item).strip() for item in texts if str(item).strip()]
 
 
+def _list_previews(page) -> list[dict]:
+    try:
+        rows = page.evaluate(LIST_PREVIEW_JS)
+    except Exception:
+        return []
+    if not isinstance(rows, list):
+        return []
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        preview = str(row.get("preview") or "").strip()
+        if not title and not preview:
+            continue
+        out.append(
+            {
+                "title": title,
+                "preview": preview,
+                "time": str(row.get("time") or "").strip(),
+                "current": bool(row.get("current")),
+            }
+        )
+    return out
+
+
+def _delivery_texts(page) -> list[str]:
+    texts = list(_chat_texts(page))
+    for row in _list_previews(page):
+        blob = " ".join(part for part in (row["title"], row["preview"], row["time"]) if part)
+        if blob:
+            texts.append(blob)
+    return texts
+
+
 def _snippet_hits(texts, snippet: str) -> int:
     if not snippet:
         return 0
-    return sum(1 for item in texts if snippet in item)
+    return sum(1 for item in texts if _text_has_snippet(item, snippet))
+
+
+def _friend_preview_landed(rows: list[dict], friend_name: str, snippet: str) -> bool:
+    if not snippet:
+        return False
+    for row in rows:
+        title = row.get("title") or ""
+        preview = row.get("preview") or ""
+        if friend_name and title and title != friend_name and not row.get("current"):
+            continue
+        if _text_has_snippet(preview, snippet):
+            return True
+    return False
 
 
 def _click_send_button(page) -> bool:
@@ -556,15 +635,15 @@ def _click_send_button(page) -> bool:
         return False
 
 
-def _send_chat_message(page, message: str, send_records=None):
+def _send_chat_message(page, message: str, send_records=None, friend_name=""):
     chat_input, _, selector = _wait_locator(page, CHAT_EDITOR_SELECTORS, timeout_ms=15000)
     if chat_input is None:
         raise RuntimeError("找不到聊天输入框，会话可能没打开")
     logger.debug("使用输入框 selector=%s", selector)
     editor = _editor_target(page, chat_input)
-    lines = message.split("\\n")
+    lines = [part for part in message.replace("\\n", "\n").split("\n")]
     snippet = _message_snippet(message)
-    before_hits = _snippet_hits(_chat_texts(page), snippet)
+    before_hits = _snippet_hits(_delivery_texts(page), snippet)
 
     # 回车之前可以重试：还没发出去，重来一次不会造成重复
     typed = False
@@ -588,16 +667,23 @@ def _send_chat_message(page, message: str, send_records=None):
         time.sleep(0.15)
         if not _editor_text(editor):
             cleared = True
-        if _snippet_hits(_chat_texts(page), snippet) > before_hits:
+        after_rows = _list_previews(page)
+        if _snippet_hits(_delivery_texts(page), snippet) > before_hits:
+            landed = True
+            break
+        if _friend_preview_landed(after_rows, friend_name, snippet):
             landed = True
             break
         if not cleared and not clicked_send:
             clicked_send = _click_send_button(page)
 
-    # 输入框清空只说明前端收下了，聊天区没出现这条就不能算成功
+    # 输入框清空只说明前端收下了；会话列表预览出现「刚刚 + 文案」才算送达
     time.sleep(0.6)
-    after = _chat_texts(page)
-    if _snippet_hits(after, snippet) > before_hits:
+    after_texts = _delivery_texts(page)
+    after_rows = _list_previews(page)
+    if _snippet_hits(after_texts, snippet) > before_hits:
+        landed = True
+    if _friend_preview_landed(after_rows, friend_name, snippet):
         landed = True
     api_error = _send_failure_from_api(list(send_records or []))
     if api_error:
@@ -607,7 +693,7 @@ def _send_chat_message(page, message: str, send_records=None):
         raise RuntimeError(f"抖音提示：{toast}")
     if landed:
         return
-    if after:
+    if after_texts:
         raise RuntimeError("消息可能没发出去：回车后聊天区没有出现这条内容")
     if not cleared:
         raise RuntimeError("消息可能没发出去：回车后输入框内容没有被清空")
@@ -825,7 +911,7 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                 logger.debug(f"账号 {username} 已选中好友 {friend_name} 发送消息")
                 logger.debug(f"账号 {username} 准备发送消息给好友 {friend_name}：\n\t{message}")
                 try:
-                    _send_chat_message(page, message, send_records)
+                    _send_chat_message(page, message, send_records, friend_name=friend_name)
                 except Exception as exc:
                     failed.append(friend_name)
                     logger.error(f"账号 {username} 给好友 {friend_name} 发送失败：{exc}")

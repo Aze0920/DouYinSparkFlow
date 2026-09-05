@@ -77,13 +77,17 @@ class FakePage:
         self.editor = editor
         self.keyboard = FakeKeyboard(editor)
         self.chat_texts = []
+        self.previews = []
         self.frames = []
         editor.page = self
 
     def locator(self, _selector):
         return FakeEmpty()
 
-    def evaluate(self, _script):
+    def evaluate(self, script):
+        text = str(script or "")
+        if "ConversationItemwrapper" in text or "conversation-item" in text:
+            return list(self.previews)
         return list(self.chat_texts)
 
 
@@ -218,6 +222,27 @@ class SendChatMessageTests(unittest.TestCase):
             "[盖瑞]今日火花[加一]\\n—— [右边] 每日一言 [左边] ——\\n海内存知己"
         )
         self.assertEqual(snippet, "[盖瑞]今日火花[加一]")
+
+    def test_list_preview_counts_as_delivered(self):
+        """抖音聊天气泡会把 [盖瑞] 收成表情，但左侧会话预览仍留原文。"""
+        editor = FakeEditor(shows_in_chat=False)
+        page = _patched(editor)
+        page.chat_texts = ["昨天的旧消息"]
+        page.previews = [{"title": "王洁", "preview": "昨天聊的", "time": "02:40", "current": True}]
+
+        def on_enter():
+            editor.sent.append(editor.text)
+            editor.text = ""
+            page.previews = [
+                {"title": "王洁", "preview": "[盖瑞]今日火花[加一]", "time": "刚刚", "current": True}
+            ]
+
+        editor.on_enter = on_enter
+        tasks._send_chat_message(page, "[盖瑞]今日火花[加一]", friend_name="王洁")
+        self.assertEqual(editor.sent, ["[盖瑞]今日火花[加一]"])
+
+    def test_emoji_codes_still_match_plain_preview(self):
+        self.assertTrue(tasks._text_has_snippet("刚刚 今日火花", "[盖瑞]今日火花[加一]"))
 
 
 class SendHandlerTests(unittest.TestCase):
