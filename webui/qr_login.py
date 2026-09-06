@@ -536,7 +536,10 @@ def _page_signals(page) -> dict[str, Any]:
     any_ok = False
     for scope in _iter_scopes(page):
         try:
-            flags = scope.evaluate(PAGE_SIGNALS_JS) or {}
+            try:
+                flags = scope.evaluate(PAGE_SIGNALS_JS, timeout=4000) or {}
+            except TypeError:
+                flags = scope.evaluate(PAGE_SIGNALS_JS) or {}
         except Exception as exc:
             logger.debug("读取页面登录信号失败（%s）", type(exc).__name__)
             continue

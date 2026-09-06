@@ -86,6 +86,7 @@ class FakePage:
         self.previews = []
         self.revealed_previews = None
         self.clicked_titles = []
+        self.fail_hint = ""
         self.frames = []
         editor.page = self
 
@@ -99,6 +100,8 @@ class FakePage:
             if self.revealed_previews is not None:
                 self.previews = list(self.revealed_previews)
             return True
+        if "relogin-hint" in text:
+            return self.fail_hint
         if "ConversationItemwrapper" in text or "conversation-item" in text:
             return list(self.previews)
         return list(self.chat_texts)
@@ -387,6 +390,18 @@ class SendChatMessageTests(unittest.TestCase):
         self.assertIn("会话预览没有更新", str(ctx.exception))
         self.assertEqual(page.clicked_titles, [])
 
+    def test_relogin_hint_under_bubble_is_account_abnormal(self):
+        """气泡都出来了，下面那行灰字才是真失败。"""
+        editor = FakeEditor()
+        page = _patched(editor)
+        page.fail_hint = "系统繁忙，重新登录后可以正常使用私信功能"
+        with self.assertRaises(RuntimeError) as ctx:
+            tasks._send_chat_message(page, "你好")
+        self.assertIn("需要重新登录", str(ctx.exception))
+        self.assertIn("系统繁忙", str(ctx.exception))
+        self.assertTrue(tasks._looks_need_relogin(ctx.exception))
+        self.assertTrue(tasks._looks_blocked(ctx.exception))
+
 
 class FinishSendResultTests(unittest.TestCase):
     def test_partial_failure_is_not_success(self):
@@ -448,7 +463,10 @@ class BlockedDetectionTests(unittest.TestCase):
     def test_only_douyin_refusals_count_as_blocked(self):
         self.assertTrue(tasks._looks_blocked(RuntimeError("抖音拒绝了这条消息：接口返回 status_code=3")))
         self.assertTrue(tasks._looks_blocked(RuntimeError("抖音提示：操作频繁")))
+        self.assertTrue(tasks._looks_blocked(RuntimeError("账号异常，需要重新登录：系统繁忙")))
         self.assertFalse(tasks._looks_blocked(RuntimeError("消息没能发出去：文字没有进入输入框")))
+        self.assertTrue(tasks._looks_need_relogin(RuntimeError("账号异常，需要重新登录：系统繁忙，重新登录后可以正常使用私信功能")))
+        self.assertFalse(tasks._looks_need_relogin(RuntimeError("抖音提示：操作频繁")))
 
 
 if __name__ == "__main__":

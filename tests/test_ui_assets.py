@@ -93,7 +93,7 @@ class HtmlStructureTests(unittest.TestCase):
 
     def test_no_dead_component_markup(self):
         text = read(HTML)
-        for dead in ("menu-btn", "sidebarBackdrop", "closeMobileSidebar", "sidebar-open"):
+        for dead in ("menu-btn", "sidebarBackdrop", "closeMobileSidebar", "sidebar-open", "runPreviewDock"):
             self.assertNotIn(dead, text, f"index.html 里还引用着已删除的 {dead}")
 
     def test_mobile_viewport_meta_present(self):

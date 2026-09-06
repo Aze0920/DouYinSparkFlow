@@ -36,6 +36,13 @@ class PageSignalsTests(unittest.TestCase):
         page = FakePage(raises=boom)
         self.assertEqual(qr_login._page_signals(page), {})
 
+    def test_evaluate_uses_timeout(self):
+        """页面卡死时 evaluate 不设超时，保活会把扫码锁死几十分钟。"""
+        source = (ROOT / "webui" / "qr_login.py").read_text(encoding="utf-8")
+        start = source.index("def _page_signals")
+        chunk = source[start:source.index("def _classify_chat_signals")]
+        self.assertIn("timeout=4000", chunk)
+
     def test_js_reads_localstorage_defensively(self):
         """真正的修法是在 JS 里逐个 try 兜住 localStorage，从源头不抛 SecurityError。"""
         source = (ROOT / "webui" / "qr_login.py").read_text(encoding="utf-8")

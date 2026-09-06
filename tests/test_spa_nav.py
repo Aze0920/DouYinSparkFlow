@@ -96,13 +96,25 @@ class SpaNavTests(unittest.TestCase):
 
     def test_run_preview_is_wired(self):
         self.assertIn('id="runPreviewPanel"', INDEX)
+        self.assertIn('id="runPreviewToggle"', INDEX)
+        self.assertIn("function onRunPreviewToggle", INDEX)
+        self.assertIn("function runPreviewEnabled", INDEX)
+        self.assertIn("dsf_run_preview", INDEX)
         self.assertIn("run-preview-panel admin-only hidden", INDEX)
+        self.assertIn('id="page-logs"', INDEX)
+        logs = INDEX[INDEX.find('id="page-logs"'):INDEX.find('id="page-users"')]
+        self.assertIn("runPreviewPanel", logs)
+        accounts = INDEX[INDEX.find('id="page-accounts"'):INDEX.find('id="page-logs"')]
+        self.assertNotIn("runPreviewPanel", accounts)
+        self.assertNotIn("runPreviewDock", INDEX)
+        self.assertNotIn("hideRunPreviewDock", INDEX)
         self.assertIn("function refreshRunPreview", INDEX)
-        self.assertIn("if (!isAdmin()) return;", INDEX)
+        self.assertIn("if (!isAdmin() || !runPreviewEnabled()) return;", INDEX)
         self.assertIn("/api/run/preview", INDEX)
         self.assertIn("/api/run/preview", APP_PY)
         self.assertIn("/api/run/preview.jpg", APP_PY)
         self.assertIn(".run-preview-frame", CSS)
+        self.assertNotIn(".run-preview-dock", CSS)
         start = APP_PY.find('@app.get("/api/run/preview")')
         self.assertGreaterEqual(start, 0)
         nxt = APP_PY.find("@app.get(", start + 10)

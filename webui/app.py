@@ -16,6 +16,7 @@ from fastapi.templating import Jinja2Templates
 
 from utils.logger import LOG_FILE as APP_LOG_PATH, setup_logger
 from webui import keepalive, safe_io
+from webui.keepalive_slot import KeepaliveSlot
 from webui.http_log import filter_probe_lines, is_known_request
 from webui import run_preview
 from webui.origin import public_origin, split_host_port
@@ -387,53 +388,67 @@ def _notify_account_owners(kind: str, title: str, unique_ids=None, extra: str = 
         notify_event(kind, title, body, usernames=[owner], rows=rows)
 
 
-_keepalive_busy = threading.Lock()
+_keepalive_slot = KeepaliveSlot()
+
+
+def _preempt_keepalive(reason: str) -> None:
+    if not _keepalive_slot.preempt(reason):
+        raise HTTPException(status_code=409, detail="后台登录态检测卡住了，请再点一次")
 
 
 def _run_keepalive(uid: str) -> None:
     """带着现有 Cookie 轻量访问一次，让抖音重新签发 sessionid 并存回快照。"""
-    acc = None
-    for item in parse_accounts(load_env()):
-        if str(item.get("unique_id") or "").strip() == uid:
-            acc = item
-            break
-    if acc is None:
-        keepalive.forget(uid)
-        return
-    if not acc.get("cookies_set"):
-        keepalive.mark_checked(uid, False, "账号没有 Cookie")
-        return
-    env = load_env()
     try:
-        cookies = json.loads(env.get(cookie_key(uid), "") or "[]")
-    except json.JSONDecodeError:
-        keepalive.mark_checked(uid, False, "Cookie 解析失败")
-        return
-    if not cookies:
-        keepalive.mark_checked(uid, False, "账号没有 Cookie")
-        return
+        acc = None
+        for item in parse_accounts(load_env()):
+            if str(item.get("unique_id") or "").strip() == uid:
+                acc = item
+                break
+        if acc is None:
+            keepalive.forget(uid)
+            return
+        if not acc.get("cookies_set"):
+            keepalive.mark_checked(uid, False, "账号没有 Cookie")
+            return
+        env = load_env()
+        try:
+            cookies = json.loads(env.get(cookie_key(uid), "") or "[]")
+        except json.JSONDecodeError:
+            keepalive.mark_checked(uid, False, "Cookie 解析失败")
+            return
+        if not cookies:
+            keepalive.mark_checked(uid, False, "账号没有 Cookie")
+            return
 
-    name = str(acc.get("username") or uid)
-    region = str(acc.get("region") or "").strip()
-    logger.info("开始保活账号 %s unique_id=%s 地区=%s", name, uid, area_label(region) or "未设置（直连）")
-    result = probe_cookies(cookies, uid, region)
-    if not result.get("ok") and "正在检测" in str(result.get("message") or ""):
-        logger.info("保活让位给正在进行的检测，稍后重试 unique_id=%s", uid)
-        return
-    ok = bool(result.get("valid"))
-    message = str(result.get("message") or "")
-    keepalive.mark_checked(uid, ok, message)
-    if ok:
-        logger.info("保活成功 账号=%s", name)
-        return
-    logger.warning("保活发现登录态失效 账号=%s %s", name, message)
-    _notify_account_owners("cookie_offline", "抖音登录已失效", [uid], extra="请重新扫码登录，否则续火花会停")
+        name = str(acc.get("username") or uid)
+        region = str(acc.get("region") or "").strip()
+        logger.info("开始保活账号 %s unique_id=%s 地区=%s", name, uid, area_label(region) or "未设置（直连）")
+        result = probe_cookies(cookies, uid, region)
+        if _keepalive_slot.abort.is_set():
+            logger.info("保活被打断，不作掉线处理 unique_id=%s", uid)
+            keepalive.mark_checked(uid, True, "保活未完成（超时或被前台打断）")
+            return
+        if not result.get("ok") and "正在检测" in str(result.get("message") or ""):
+            logger.info("保活让位给正在进行的检测，稍后重试 unique_id=%s", uid)
+            return
+        ok = bool(result.get("valid"))
+        message = str(result.get("message") or "")
+        keepalive.mark_checked(uid, ok, message)
+        if ok:
+            logger.info("保活成功 账号=%s", name)
+            return
+        logger.warning("保活发现登录态失效 账号=%s %s", name, message)
+        _notify_account_owners("cookie_offline", "抖音登录已失效", [uid], extra="请重新扫码登录，否则续火花会停")
+    except Exception:
+        logger.exception("保活执行失败 unique_id=%s", uid)
+        if not _keepalive_slot.abort.is_set():
+            keepalive.mark_checked(uid, False, "保活执行异常")
 
 
 def _tick_keepalive() -> None:
     # 扫码窗口开着时也不能动：那边正开着浏览器等用户扫，
     # 再起一个不但抢资源，碰上同一个号还会两边一起写同一份快照。
-    if _run_state["running"] or _keepalive_busy.locked() or qr_busy():
+    if _run_state["running"] or _keepalive_slot.busy() or qr_busy():
         return
     live = [
         str(acc.get("unique_id") or "").strip()
@@ -445,17 +460,8 @@ def _tick_keepalive() -> None:
     due = [uid for uid in keepalive.due_ids() if uid in alive]
     if not due:
         return
-
-    def worker():
-        # 一轮只做一个，保活要开浏览器，不能把定时循环拖住
-        with _keepalive_busy:
-            try:
-                _run_keepalive(due[0])
-            except Exception:
-                logger.exception("保活执行失败 unique_id=%s", due[0])
-                keepalive.mark_checked(due[0], False, "保活执行异常")
-
-    threading.Thread(target=worker, daemon=True, name="spark-keepalive").start()
+    # 立刻返回，工作线程跑探测，看门狗线程盯超时
+    _keepalive_slot.try_start(due[0], _run_keepalive)
 
 
 def _filter_accounts(user: dict | None, accounts: list) -> list:
@@ -1982,8 +1988,7 @@ def _deny_if_browser_busy():
         raise HTTPException(status_code=409, detail="续火花任务正在跑，请等它结束")
     if qr_busy():
         raise HTTPException(status_code=409, detail="正在扫码登录，请先关掉扫码窗口")
-    if _keepalive_busy.locked():
-        raise HTTPException(status_code=409, detail="正在做登录态保活，十几秒后再试")
+    _preempt_keepalive("打开浏览器")
 
 
 @app.post("/api/account/check")
@@ -2341,9 +2346,7 @@ def douyin_login_start(request: Request, payload: dict | None = None):
     if _run_state["running"]:
         logger.warning("扫码登录被拒绝：任务正在运行")
         raise HTTPException(status_code=409, detail="续火花任务正在跑，请等它结束后再扫码")
-    if _keepalive_busy.locked():
-        logger.warning("扫码登录被拒绝：保活正在跑")
-        raise HTTPException(status_code=409, detail="正在做登录态保活，十几秒后再点一次")
+    _preempt_keepalive("扫码登录")
     payload = payload or {}
     try:
         replace_index = int(payload.get("replace_index", -1))
@@ -2406,8 +2409,7 @@ def run_now(request: Request, payload: dict | None = None):
     if _run_state["running"]:
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
     # 保活也开着浏览器。碰上同一个号，两边会同时往同一份快照里写，登录态直接写坏
-    if _keepalive_busy.locked():
-        raise HTTPException(status_code=409, detail="正在做登录态保活，十几秒后再点一次")
+    _preempt_keepalive("续火花")
     if not _run_lock.acquire(blocking=False):
         raise HTTPException(status_code=409, detail="已有任务在跑，请等它结束")
     payload = payload or {}

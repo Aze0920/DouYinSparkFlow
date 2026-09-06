@@ -109,6 +109,19 @@ LIST_PREVIEW_JS = """() => {
     };
   }).filter((row) => row.title || row.preview);
 }"""
+CHAT_FAIL_HINT_JS = """() => {
+  /* relogin-hint */
+  const raw = ((document.body && document.body.innerText) || '').replace(/\\s+/g, '');
+  const hints = [
+    '系统繁忙，重新登录后可以正常使用私信功能',
+    '重新登录后可以正常使用私信功能',
+    '重新登录后可以正常使用私信',
+  ];
+  for (const hint of hints) {
+    if (raw.includes(hint.replace(/\\s+/g, ''))) return hint;
+  }
+  return '';
+}"""
 CLICK_CONVERSATION_JS = """(title) => {
   /* click-conversation */
   const items = [...document.querySelectorAll(
@@ -226,6 +239,19 @@ def _send_failure_from_api(records: list) -> str:
             return f"接口返回 status_code={code} {record.get('msg') or ''}".strip()
         if not 200 <= int(record.get("http") or 0) < 400:
             return f"接口 HTTP {record.get('http')} {record.get('msg') or ''}".strip()
+    return ""
+
+
+def _chat_fail_hint(page) -> str:
+    """气泡旁边那行灰字：看起来发出去了，其实要重新登录。"""
+    for scope in _iter_scopes(page):
+        try:
+            text = scope.evaluate(CHAT_FAIL_HINT_JS)
+        except Exception:
+            continue
+        text = str(text or "").strip()
+        if text:
+            return text
     return ""
 
 
@@ -558,9 +584,39 @@ def _press_enter(page, editor):
     page.keyboard.press("Enter")
 
 
+def _looks_need_relogin(exc) -> bool:
+    text = str(exc)
+    return "需要重新登录" in text or "重新登录后可以正常使用私信" in text
+
+
 def _looks_blocked(exc) -> bool:
     text = str(exc)
-    return "抖音拒绝" in text or "抖音提示" in text
+    return "抖音拒绝" in text or "抖音提示" in text or _looks_need_relogin(exc)
+
+
+def _mark_need_relogin(unique_id: str) -> None:
+    uid = str(unique_id or "").strip()
+    if not uid:
+        return
+    try:
+        from webui.envfile import env_lock, load_env, read_tasks, write_env
+
+        with env_lock:
+            items = read_tasks(load_env())
+            changed = False
+            for index, item in enumerate(items):
+                if str(item.get("unique_id") or "").strip() != uid:
+                    continue
+                if str(item.get("cookie_status") or "") != "bad":
+                    item["cookie_status"] = "bad"
+                    items[index] = item
+                    changed = True
+                break
+            if changed:
+                write_env({"TASKS": items})
+                logger.warning("账号 %s 私信要求重新登录，已标为异常", uid)
+    except Exception:
+        logger.debug("标记重新登录失败 unique_id=%s", uid, exc_info=True)
 
 
 def _send_gap() -> float:
@@ -839,6 +895,19 @@ def _send_chat_message(page, message: str, send_records=None, friend_name=""):
             force=True,
         )
         raise RuntimeError(f"抖音提示：{toast}")
+    hint = _chat_fail_hint(page)
+    if hint:
+        _live(
+            page,
+            friend=friend_name,
+            phase="fail",
+            result="fail",
+            caption=f"{friend_name or '好友'} 气泡下提示重新登录",
+            before=before_txt,
+            after=after_txt,
+            force=True,
+        )
+        raise RuntimeError(f"账号异常，需要重新登录：{hint}")
     if landed:
         _live(
             page,
@@ -1126,6 +1195,8 @@ def do_user_task(username, cookies, targets, message_template="", unique_id="", 
                     failed.append(friend_name)
                     logger.error(f"账号 {username} 给好友 {friend_name} 发送失败：{exc}")
                     if _looks_blocked(exc):
+                        if _looks_need_relogin(exc):
+                            _mark_need_relogin(unique_id)
                         blocked = str(exc)
                         logger.error("账号 %s 疑似被抖音限制，停止本次发送：%s", username, blocked)
                         break
